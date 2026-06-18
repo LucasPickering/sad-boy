@@ -109,6 +109,9 @@ struct FlagsRegister {
     carry: bool,
 }
 
+/// CPU instruction
+enum Instruction {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
