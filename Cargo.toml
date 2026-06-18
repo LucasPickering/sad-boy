@@ -1,0 +1,47 @@
+[package]
+authors = ["Lucas Pickering <lucas@lucaspickering.me>"]
+description = "Gameboy emulator"
+edition = "2024"
+homepage = "https://github.com/LucasPickering/sad-boy"
+keywords = []
+license = "MIT"
+name = "sad-boy"
+repository = "https://github.com/LucasPickering/sad-boy"
+version = "0.1.0"
+# Keep in sync w/ rust-toolchain.toml
+rust-version = "1.95.0"
+
+[dependencies]
+winit = {version = "0.30.13", default-features = false, features = ["x11"]}
+
+[lints.rust]
+async_fn_in_trait = "allow"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = {level = "deny", priority = -1}
+pedantic = {level = "warn", priority = -1}
+
+allow_attributes = "deny"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+dbg_macro = "warn"
+default_trait_access = "allow"
+doc_markdown = "allow"
+explicit_deref_methods = "allow"
+large_enum_variant = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+mod_module_files = "deny"
+module_inception = "allow"
+must_use_candidate = "allow"
+needless_pass_by_value = "allow"
+similar_names = "allow"
+single_match = "allow"
+too_many_lines = "allow"
+unused_self = "allow"
+used_underscore_binding = "allow"
