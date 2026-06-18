@@ -1,9 +1,27 @@
+mod rom;
+
+use crate::rom::Rom;
+use std::path::Path;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
+
+const ROM_PATH: &str = "./roms/pokemon_yellow.gb";
+
+fn main() {
+    let rom = Rom::load(Path::new(ROM_PATH));
+
+    let event_loop = EventLoop::new().unwrap();
+
+    // Run the event loop continuously
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    let mut app = App::default();
+    event_loop.run_app(&mut app).unwrap();
+}
 
 #[derive(Default)]
 struct App {
@@ -33,21 +51,4 @@ impl ApplicationHandler for App {
             _ => (),
         }
     }
-}
-
-fn main() {
-    let event_loop = EventLoop::new().unwrap();
-
-    // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
-    // dispatched any events. This is ideal for games and similar applications.
-    event_loop.set_control_flow(ControlFlow::Poll);
-
-    // ControlFlow::Wait pauses the event loop if no events are available to
-    // process. This is ideal for non-game applications that only update in
-    // response to user input, and uses significantly less power/CPU time
-    // than ControlFlow::Poll.
-    event_loop.set_control_flow(ControlFlow::Wait);
-
-    let mut app = App::default();
-    event_loop.run_app(&mut app).unwrap();
 }

@@ -12,6 +12,7 @@ version = "0.1.0"
 rust-version = "1.95.0"
 
 [dependencies]
+log = "0.4.32"
 winit = {version = "0.30.13", default-features = false, features = ["x11"]}
 
 [lints.rust]
