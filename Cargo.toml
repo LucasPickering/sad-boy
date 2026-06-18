@@ -1,6 +1,6 @@
 [package]
 authors = ["Lucas Pickering <lucas@lucaspickering.me>"]
-description = "Gameboy emulator"
+description = "Nintendo Game Boy emulator"
 edition = "2024"
 homepage = "https://github.com/LucasPickering/sad-boy"
 keywords = []
@@ -15,6 +15,9 @@ rust-version = "1.95.0"
 base64 = "0.22.1"
 crossterm = {version = "0.29.0", default-features = false}
 log = "0.4.32"
+
+[dev-dependencies]
+rstest = { version = "0.26.1", default-features = false }
 
 [lints.rust]
 async_fn_in_trait = "allow"

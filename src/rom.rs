@@ -1,7 +1,7 @@
 //! Utilities for ROM management
 
 use log::info;
-use std::{fs, path::Path};
+use std::{fs, io, path::Path};
 
 /// A GameBoy ROM
 pub struct Rom {
@@ -9,9 +9,9 @@ pub struct Rom {
 }
 
 impl Rom {
-    pub fn load(path: &Path) -> Self {
-        let data = fs::read(path).unwrap();
+    pub fn load(path: &Path) -> io::Result<Self> {
+        let data = fs::read(path)?;
         info!("Loaded ROM from {}", path.display());
-        Self { data }
+        Ok(Self { data })
     }
 }
