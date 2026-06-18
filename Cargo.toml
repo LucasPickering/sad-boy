@@ -12,12 +12,12 @@ version = "0.1.0"
 rust-version = "1.95.0"
 
 [dependencies]
+base64 = "0.22.1"
+crossterm = {version = "0.29.0", default-features = false}
 log = "0.4.32"
-winit = {version = "0.30.13", default-features = false, features = ["x11"]}
 
 [lints.rust]
 async_fn_in_trait = "allow"
-unsafe_code = "forbid"
 
 [lints.clippy]
 all = {level = "deny", priority = -1}
