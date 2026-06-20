@@ -2,8 +2,10 @@
 //!
 //! https://rylev.github.io/DMG-01/public/book/introduction.html
 
+#![expect(unused)] // TODO remove this
+
 use crate::rom::Rom;
-use std::{io, marker::PhantomData, path::Path};
+use std::{io, path::Path};
 
 /// Game Boy emulator
 #[derive(Debug, Default)]
@@ -21,6 +23,42 @@ impl GameBoy {
     pub fn load_rom(&mut self, path: &Path) -> io::Result<()> {
         let _rom = Rom::load(path)?;
         Ok(())
+    }
+
+    /// Update the emulator state based on an instruction
+    fn execute(&mut self, instruction: Instruction) {
+        match instruction {
+            Instruction::Add(source) => self.add(self.get_value(source)),
+        }
+    }
+
+    /// TODO
+    fn get_value(&self, source: ValueSource) -> u8 {
+        match source {
+            ValueSource::A => self.registers.a,
+            ValueSource::B => self.registers.b,
+            ValueSource::C => self.registers.c,
+            ValueSource::D => self.registers.d,
+            ValueSource::E => self.registers.e,
+            ValueSource::F => self.registers.f,
+            ValueSource::H => self.registers.h,
+            ValueSource::L => self.registers.l,
+        }
+    }
+
+    /// Add a value to register `a`, setting flags as needed
+    fn add(&mut self, value: u8) {
+        let (sum, overflow) = self.registers.a.overflowing_add(value);
+        let original = self.registers.a;
+        self.registers.a = sum;
+        self.registers.set_flags(Flags {
+            zero: sum == 0,
+            subtract: false,
+            // Check if the bottom 4 bits overflowed into the top 4
+            // TODO is this correct? write some prop tests
+            half_carry: (sum & 0b1111) < (original & 0b1111),
+            carry: overflow,
+        });
     }
 }
 
@@ -80,14 +118,13 @@ impl Registers {
     register_pair!(hl, hl_mut, h);
 
     /// Read bit flags from the `f` register
-    fn flags(&self) -> FlagsRegister {
-        let bit = |bit: u8| (self.f >> bit) & 0b1 != 0;
-        FlagsRegister {
-            zero: bit(7),
-            subtract: bit(6),
-            half_carry: bit(5),
-            carry: bit(4),
-        }
+    fn flags(&self) -> Flags {
+        Flags::from_bits(self.f)
+    }
+
+    /// Set the `f` register to the given flags
+    fn set_flags(&mut self, flags: Flags) {
+        self.f = flags.into_bits();
     }
 }
 
@@ -97,8 +134,9 @@ impl Registers {
 /// Use [Registers::flags] to get this value.
 ///
 /// https://rylev.github.io/DMG-01/public/book/cpu/registers.html#flags-register
+#[derive(Copy, Clone)]
 #[expect(clippy::struct_excessive_bools)]
-struct FlagsRegister {
+struct Flags {
     /// TODO
     zero: bool,
     /// TODO
@@ -109,27 +147,73 @@ struct FlagsRegister {
     carry: bool,
 }
 
+impl Flags {
+    /// Last operation resulted in a `0`
+    const ZERO: u8 = 0b1 << 7;
+    /// Last operation was a subtraction
+    const SUBTRACT: u8 = 0b1 << 6;
+    /// The bottom 4 bits overflowed into the top 4 in the last operation
+    const HALF_CARRY: u8 = 0b1 << 5;
+    /// Last operation overflowed (wrapped)
+    const CARRY: u8 = 0b1 << 4;
+
+    /// Read individual flags from the top 4 bits of the byte
+    fn from_bits(bits: u8) -> Self {
+        let flag = |bit: u8| bits & bit != 0;
+        Flags {
+            zero: flag(Flags::ZERO),
+            subtract: flag(Flags::SUBTRACT),
+            half_carry: flag(Flags::HALF_CARRY),
+            carry: flag(Flags::CARRY),
+        }
+    }
+
+    /// Convert individual flags into bitflags
+    fn into_bits(self) -> u8 {
+        let bit = |flag: bool, bit: u8| if flag { bit } else { 0 };
+        bit(self.zero, Self::ZERO)
+            | bit(self.subtract, Self::SUBTRACT)
+            | bit(self.half_carry, Self::HALF_CARRY)
+            | bit(self.carry, Self::CARRY)
+    }
+}
+
 /// CPU instruction
-enum Instruction {}
+enum Instruction {
+    /// Add a constant/register value to register `a`
+    Add(ValueSource),
+}
+
+/// TODO
+enum ValueSource {
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    H,
+    L,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rstest::rstest;
 
-    fn zero(register: FlagsRegister) -> bool {
+    fn zero(register: Flags) -> bool {
         register.zero
     }
 
-    fn subtract(register: FlagsRegister) -> bool {
+    fn subtract(register: Flags) -> bool {
         register.subtract
     }
 
-    fn half_carry(register: FlagsRegister) -> bool {
+    fn half_carry(register: Flags) -> bool {
         register.half_carry
     }
 
-    fn carry(register: FlagsRegister) -> bool {
+    fn carry(register: Flags) -> bool {
         register.carry
     }
 
@@ -144,7 +228,7 @@ mod tests {
     #[case::carry_false(carry, 0b1110_0000, false)]
     #[case::carry_true(carry, 0b0001_0000, true)]
     fn flags(
-        #[case] getter: impl FnOnce(FlagsRegister) -> bool,
+        #[case] getter: impl FnOnce(Flags) -> bool,
         #[case] register_value: u8,
         #[case] expected: bool,
     ) {
