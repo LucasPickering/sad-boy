@@ -5,6 +5,7 @@
 #![expect(unused)] // TODO remove this
 
 use crate::rom::Rom;
+use log::debug;
 use std::{io, path::Path};
 
 /// Game Boy emulator
@@ -29,6 +30,34 @@ impl GameBoy {
     fn execute(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::Add(source) => self.add(self.get_value(source)),
+            Instruction::Adc(_) => debug!("unimplemented instruction: Adc"),
+            Instruction::Addhl(_) => debug!("unimplemented instruction: Addhl"),
+            Instruction::Sub(_) => debug!("unimplemented instruction: Sub"),
+            Instruction::Sbc(_) => debug!("unimplemented instruction: Sbc"),
+            Instruction::And(_) => debug!("unimplemented instruction: And"),
+            Instruction::Or(_) => debug!("unimplemented instruction: Or"),
+            Instruction::Xor(_) => debug!("unimplemented instruction: Xor"),
+            Instruction::Cp(_) => debug!("unimplemented instruction: Cp"),
+            Instruction::Inc(_) => debug!("unimplemented instruction: Inc"),
+            Instruction::Dec(_) => debug!("unimplemented instruction: Dec"),
+            Instruction::Ccf(_) => debug!("unimplemented instruction: Ccf"),
+            Instruction::Scf(_) => debug!("unimplemented instruction: Scf"),
+            Instruction::Rra(_) => debug!("unimplemented instruction: Rra"),
+            Instruction::Rla(_) => debug!("unimplemented instruction: Rla"),
+            Instruction::Rrca(_) => debug!("unimplemented instruction: Rrca"),
+            Instruction::Rrla(_) => debug!("unimplemented instruction: Rrla"),
+            Instruction::Cpl(_) => debug!("unimplemented instruction: Cpl"),
+            Instruction::Bit(_) => debug!("unimplemented instruction: Bit"),
+            Instruction::Reset(_) => debug!("unimplemented instruction: Reset"),
+            Instruction::Set(_) => debug!("unimplemented instruction: Set"),
+            Instruction::Srl(_) => debug!("unimplemented instruction: Srl"),
+            Instruction::Rr(_) => debug!("unimplemented instruction: Rr"),
+            Instruction::Rl(_) => debug!("unimplemented instruction: Rl"),
+            Instruction::Rrc(_) => debug!("unimplemented instruction: Rrc"),
+            Instruction::Rlc(_) => debug!("unimplemented instruction: Rlc"),
+            Instruction::Sra(_) => debug!("unimplemented instruction: Sra"),
+            Instruction::Sla(_) => debug!("unimplemented instruction: Sla"),
+            Instruction::Swap(_) => debug!("unimplemented instruction: Swap"),
         }
     }
 
@@ -80,6 +109,11 @@ struct Registers {
     // hl
     h: u8,
     l: u8,
+
+    /// Stack pointer
+    sp: u16,
+    /// Program counter
+    pc: u16,
 }
 
 /// Generate methods on [Registers] to access two registers as a 16-bit value
@@ -179,21 +213,113 @@ impl Flags {
 }
 
 /// CPU instruction
+///
+/// https://gbdev.io/pandocs/CPU_Instruction_Set.html
 enum Instruction {
-    /// Add a constant/register value to register `a`
+    /// No op
+    Nop,
+    /// Add a constant/register value to register `a` (8 bits)
     Add(ValueSource),
+    /// TODO
+    Adc(ValueSource),
+    /// Add a constant/register value to register `hl` (16 bits)
+    Addhl(ValueSource),
+    /// TODO
+    Sub(ValueSource),
+    /// TODO
+    Sbc(ValueSource),
+    /// TODO
+    And(ValueSource),
+    /// TODO
+    Or(ValueSource),
+    /// TODO
+    Xor(ValueSource),
+    /// TODO
+    Cp(ValueSource),
+    /// TODO
+    Inc(ValueSource),
+    /// TODO
+    Dec(ValueSource),
+    /// TODO
+    Ccf(ValueSource),
+    /// TODO
+    Scf(ValueSource),
+    /// TODO
+    Rra(ValueSource),
+    /// TODO
+    Rla(ValueSource),
+    /// TODO
+    Rrca(ValueSource),
+    /// TODO
+    Rrla(ValueSource),
+    /// TODO
+    Cpl(ValueSource),
+    /// TODO
+    Bit(ValueSource),
+    /// TODO
+    Reset(ValueSource),
+    /// TODO
+    Set(ValueSource),
+    /// TODO
+    Srl(ValueSource),
+    /// TODO
+    Rr(ValueSource),
+    /// TODO
+    Rl(ValueSource),
+    /// TODO
+    Rrc(ValueSource),
+    /// TODO
+    Rlc(ValueSource),
+    /// TODO
+    Sra(ValueSource),
+    /// TODO
+    Sla(ValueSource),
+    /// TODO
+    Swap(ValueSource),
 }
 
 /// TODO
-enum ValueSource {
+enum TargetR8 {
     A,
     B,
     C,
     D,
     E,
-    F,
     H,
     L,
+    Hl,
+}
+
+/// TODO
+enum TargetR16 {
+    Bc,
+    De,
+    Hl,
+    Sp,
+}
+
+/// TODO
+enum TargetR16Stk {
+    Bc,
+    De,
+    Hl,
+    Af,
+}
+
+/// TODO
+enum TargetR16Mem {
+    Bc,
+    De,
+    Hli,
+    Hld,
+}
+
+/// TODO
+enum TargetCond {
+    Nz,
+    Z,
+    Nc,
+    C,
 }
 
 #[cfg(test)]
