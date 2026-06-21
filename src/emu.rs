@@ -29,65 +29,95 @@ impl GameBoy {
     /// Update the emulator state based on an instruction
     fn execute(&mut self, instruction: Instruction) {
         match instruction {
-            Instruction::Add(source) => self.add(self.get_value(source)),
-            Instruction::Adc(_) => debug!("unimplemented instruction: Adc"),
-            Instruction::Addhl(_) => debug!("unimplemented instruction: Addhl"),
-            Instruction::Sub(_) => debug!("unimplemented instruction: Sub"),
-            Instruction::Sbc(_) => debug!("unimplemented instruction: Sbc"),
-            Instruction::And(_) => debug!("unimplemented instruction: And"),
-            Instruction::Or(_) => debug!("unimplemented instruction: Or"),
-            Instruction::Xor(_) => debug!("unimplemented instruction: Xor"),
-            Instruction::Cp(_) => debug!("unimplemented instruction: Cp"),
-            Instruction::Inc(_) => debug!("unimplemented instruction: Inc"),
-            Instruction::Dec(_) => debug!("unimplemented instruction: Dec"),
-            Instruction::Ccf(_) => debug!("unimplemented instruction: Ccf"),
-            Instruction::Scf(_) => debug!("unimplemented instruction: Scf"),
-            Instruction::Rra(_) => debug!("unimplemented instruction: Rra"),
-            Instruction::Rla(_) => debug!("unimplemented instruction: Rla"),
-            Instruction::Rrca(_) => debug!("unimplemented instruction: Rrca"),
-            Instruction::Rrla(_) => debug!("unimplemented instruction: Rrla"),
-            Instruction::Cpl(_) => debug!("unimplemented instruction: Cpl"),
-            Instruction::Bit(_) => debug!("unimplemented instruction: Bit"),
-            Instruction::Reset(_) => debug!("unimplemented instruction: Reset"),
-            Instruction::Set(_) => debug!("unimplemented instruction: Set"),
-            Instruction::Srl(_) => debug!("unimplemented instruction: Srl"),
-            Instruction::Rr(_) => debug!("unimplemented instruction: Rr"),
-            Instruction::Rl(_) => debug!("unimplemented instruction: Rl"),
-            Instruction::Rrc(_) => debug!("unimplemented instruction: Rrc"),
-            Instruction::Rlc(_) => debug!("unimplemented instruction: Rlc"),
-            Instruction::Sra(_) => debug!("unimplemented instruction: Sra"),
-            Instruction::Sla(_) => debug!("unimplemented instruction: Sla"),
-            Instruction::Swap(_) => debug!("unimplemented instruction: Swap"),
+            Instruction::Add(add) => self.add(add),
+            Instruction::AddCarry(value) => todo!(),
+            Instruction::Nop => {}
         }
     }
 
-    /// TODO
-    fn get_value(&self, source: ValueSource) -> u8 {
-        match source {
-            ValueSource::A => self.registers.a,
-            ValueSource::B => self.registers.b,
-            ValueSource::C => self.registers.c,
-            ValueSource::D => self.registers.d,
-            ValueSource::E => self.registers.e,
-            ValueSource::F => self.registers.f,
-            ValueSource::H => self.registers.h,
-            ValueSource::L => self.registers.l,
+    /// Resolve an 8-bit value
+    fn get_value8(&self, value: Value8) -> u8 {
+        match value {
+            Value8::Register(Register8::A) => self.registers.a,
+            Value8::Register(Register8::B) => self.registers.b,
+            Value8::Register(Register8::C) => self.registers.c,
+            Value8::Register(Register8::D) => self.registers.d,
+            Value8::Register(Register8::E) => self.registers.e,
+            Value8::Register(Register8::H) => self.registers.h,
+            Value8::Register(Register8::L) => self.registers.l,
+            Value8::Hl => {
+                let pointer = self.registers.hl();
+                todo!("resolve pointer")
+            }
+            Value8::Const(value) => value,
         }
     }
 
-    /// Add a value to register `a`, setting flags as needed
-    fn add(&mut self, value: u8) {
-        let (sum, overflow) = self.registers.a.overflowing_add(value);
-        let original = self.registers.a;
-        self.registers.a = sum;
-        self.registers.set_flags(Flags {
-            zero: sum == 0,
-            subtract: false,
-            // Check if the bottom 4 bits overflowed into the top 4
-            // TODO is this correct? write some prop tests
-            half_carry: (sum & 0b1111) < (original & 0b1111),
-            carry: overflow,
-        });
+    /// Resolve a 16-bit value
+    fn get_value16(&self, value: Register16) -> u16 {
+        match value {
+            Register16::Bc => self.registers.bc(),
+            Register16::De => self.registers.de(),
+            Register16::Hl => self.registers.hl(),
+        }
+    }
+
+    /// Execute an `ADD` instruction, setting flags as needed
+    fn add(&mut self, instruction: InstructionAdd) {
+        let flags = match instruction {
+            InstructionAdd::A(value) => {
+                const HALF_CARRY_MASK: u8 = 0b1111;
+
+                let value = self.get_value8(value);
+                let (sum, overflow) = self.registers.a.overflowing_add(value);
+                let original = self.registers.a;
+                self.registers.a = sum;
+                Flags {
+                    zero: sum == 0,
+                    subtract: false,
+                    // Check if the bottom 4 bits overflowed into the top 4
+                    // TODO is this correct? write some prop tests
+                    half_carry: (sum & HALF_CARRY_MASK) < (original & 0b1111),
+                    carry: overflow,
+                }
+            }
+            InstructionAdd::Hl(value) => {
+                const HALF_CARRY_MASK: u16 = 0b1111_1111_1111;
+
+                let value = self.get_value16(value);
+                let (sum, overflow) =
+                    self.registers.hl().overflowing_add(value);
+                let original = self.registers.hl();
+                *self.registers.hl_mut() = sum;
+                Flags {
+                    // TODO docs impl this shouldn't be modified?
+                    // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#ADD_HL,r16
+                    zero: false,
+                    subtract: false,
+                    half_carry: (sum & HALF_CARRY_MASK)
+                        < (original & HALF_CARRY_MASK),
+                    carry: overflow,
+                }
+            }
+            InstructionAdd::Sp(offset) => {
+                const HALF_CARRY_MASK: u16 = 0b1111;
+
+                let (sum, overflow) =
+                    self.registers.sp.overflowing_add(todo!());
+                let original = self.registers.sp;
+                self.registers.sp = sum;
+                Flags {
+                    zero: sum == 0,
+                    subtract: false,
+                    // Check if the bottom 4 bits overflowed into the top 4
+                    // TODO is this correct? write some prop tests
+                    half_carry: (sum & HALF_CARRY_MASK) < (original & 0b1111),
+                    carry: overflow,
+                }
+            }
+            InstructionAdd::HlSp => todo!(),
+        };
+        self.registers.set_flags(flags);
     }
 }
 
@@ -111,8 +141,10 @@ struct Registers {
     l: u8,
 
     /// Stack pointer
+    // TODO should be Address?
     sp: u16,
     /// Program counter
+    // TODO should be Address?
     pc: u16,
 }
 
@@ -216,70 +248,104 @@ impl Flags {
 ///
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html
 enum Instruction {
+    /// Add a value to a register
+    /// TODO flatten this?
+    Add(InstructionAdd),
+    /// Add a value plus the flag to register `a`
+    AddCarry(Value8),
+    /// Bitwise AND between `a` and another value (modifies `a`)
+    And(Value8),
+    /// Get a single bit from a register (output to the `zero` flag)
+    Bit(Bit, Register8),
+    /// Get a single bit from the byte pointed to by `hl` (output to the `zero
+    /// flag`)
+    BitHl(Bit),
+    /// Push a new frame onto the stack, then set `pc` to that address
+    Call(Address),
+    /// Call if the condition is true
+    CallCc(ConditionCode, Address),
+    /// Complement (invert) carry flag
+    Ccf,
+    /// Compare register `a` with another value
+    Cp(Value8),
+    /// Complement (bitwise NOT) register `a`
+    Cpl,
+    /// Decimal Adjust Accumulator
+    Daa,
+    /// Decrement a value by 1
+    Dec(InstructionDec),
+    /// Disable interrupts
+    Di,
+    /// Enable interrupts
+    Ei,
+    /// Enter CPU low-power consumption mode until an interrupt occurs
+    Halt,
+    /// Increment a value by 1
+    Inc(InstructionInc),
     /// No op
     Nop,
-    /// Add a constant/register value to register `a` (8 bits)
-    Add(ValueSource),
-    /// TODO
-    Adc(ValueSource),
-    /// Add a constant/register value to register `hl` (16 bits)
-    Addhl(ValueSource),
-    /// TODO
-    Sub(ValueSource),
-    /// TODO
-    Sbc(ValueSource),
-    /// TODO
-    And(ValueSource),
-    /// TODO
-    Or(ValueSource),
-    /// TODO
-    Xor(ValueSource),
-    /// TODO
-    Cp(ValueSource),
-    /// TODO
-    Inc(ValueSource),
-    /// TODO
-    Dec(ValueSource),
-    /// TODO
-    Ccf(ValueSource),
-    /// TODO
-    Scf(ValueSource),
-    /// TODO
-    Rra(ValueSource),
-    /// TODO
-    Rla(ValueSource),
-    /// TODO
-    Rrca(ValueSource),
-    /// TODO
-    Rrla(ValueSource),
-    /// TODO
-    Cpl(ValueSource),
-    /// TODO
-    Bit(ValueSource),
-    /// TODO
-    Reset(ValueSource),
-    /// TODO
-    Set(ValueSource),
-    /// TODO
-    Srl(ValueSource),
-    /// TODO
-    Rr(ValueSource),
-    /// TODO
-    Rl(ValueSource),
-    /// TODO
-    Rrc(ValueSource),
-    /// TODO
-    Rlc(ValueSource),
-    /// TODO
-    Sra(ValueSource),
-    /// TODO
-    Sla(ValueSource),
-    /// TODO
-    Swap(ValueSource),
 }
 
-/// TODO
-enum TargetR8 {
+/// Variations of the `ADD` instruction
+enum InstructionAdd {
+    /// Add an 8-bit value to `a`
+    A(Value8),
+    /// Add a 16-bit value to `hl`
+    Hl(Register16),
+    /// Add `sp` to `hl`
+    HlSp,
+    /// Add an 8-bit signed offset to `sp`
+    Sp(i8),
+}
+
+/// Variations of the `DEC` (decrement) instruction
+enum InstructionDec {
+    /// Decrement an 8-bit register
+    R8(Register8),
+    /// Decrement a 16-bit register
+    R16(Register16),
+    /// Decrement the byte pointed to by `hl`
+    Hl,
+    /// Decrement `sp`
+    Sp,
+}
+
+/// Variations of the `INC` (increment) instruction
+enum InstructionInc {
+    /// Increment an 8-bit register
+    R8(Register8),
+    /// Increment a 16-bit register
+    R16(Register16),
+    /// Increment the byte pointed to by `hl`
+    Hl,
+    /// Increment `sp`
+    Sp,
+}
+
+/// Variations of the `JP` (jump) instruction
+enum InstructionJp {
+    /// Jump to the address in a 16-bit register
+    R16(Register16),
+    /// Jump to the address in a 16-bit register if the condition is true
+    R16Cc(ConditionCode, Register16),
+    /// Jump to the address pointed to by `hl`
+    Hl,
+}
+
+/// Source of an 8-bit value
+enum Value8 {
+    /// Value from a register
+    Register(Register8),
+    /// Value pointed to by the address in `hl`
+    Hl,
+    /// Constant value
+    Const(u8),
+}
+
+/// Name of an 8-bit register (excluding `f`)
+///
+/// `r8` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
+enum Register8 {
     A,
     B,
     C,
@@ -287,40 +353,41 @@ enum TargetR8 {
     E,
     H,
     L,
+}
+
+/// Name of an 16-bit register
+///
+/// `r16` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
+enum Register16 {
+    /// Value in register `bc`
+    Bc,
+    /// Value in register `de`
+    De,
+    /// Value in register `hl`
     Hl,
 }
 
-/// TODO
-enum TargetR16 {
-    Bc,
-    De,
-    Hl,
-    Sp,
-}
-
-/// TODO
-enum TargetR16Stk {
-    Bc,
-    De,
-    Hl,
-    Af,
-}
-
-/// TODO
-enum TargetR16Mem {
-    Bc,
-    De,
-    Hli,
-    Hld,
-}
-
-/// TODO
-enum TargetCond {
-    Nz,
+/// Condition for a conditional jump or call
+enum ConditionCode {
+    /// Execute if `zero` flag is set
     Z,
-    Nc,
+    /// Execute if `zero` flag is not set
+    Nz,
+    /// Execute if `carry` flag is set
     C,
+    /// Execute if `carry` flag is not set
+    Nc,
 }
+
+/// Index of a single bit in a byte
+///
+/// Value can be `0-7`
+#[derive(Copy, Clone, Debug)]
+struct Bit(u8);
+
+/// Address into memory
+#[derive(Copy, Clone, Debug)]
+struct Address(u16);
 
 #[cfg(test)]
 mod tests {
