@@ -5,6 +5,7 @@
 #![expect(unused)] // TODO remove this
 
 use crate::rom::Rom;
+use color_eyre::eyre;
 use log::debug;
 use std::{io, path::Path};
 
@@ -21,7 +22,7 @@ impl GameBoy {
     }
 
     /// Load a ROM from a file and begin running it
-    pub fn load_rom(&mut self, path: &Path) -> io::Result<()> {
+    pub fn load_rom(&mut self, path: &Path) -> eyre::Result<()> {
         let _rom = Rom::load(path)?;
         Ok(())
     }
@@ -32,6 +33,7 @@ impl GameBoy {
             Instruction::Add(add) => self.add(add),
             Instruction::AddCarry(value) => todo!(),
             Instruction::Nop => {}
+            _ => todo!(),
         }
     }
 
@@ -247,7 +249,8 @@ impl Flags {
 /// CPU instruction
 ///
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html
-enum Instruction {
+#[derive(Copy, Clone, Debug)]
+pub enum Instruction {
     /// Add a value to a register
     /// TODO flatten this?
     Add(InstructionAdd),
@@ -282,12 +285,35 @@ enum Instruction {
     Halt,
     /// Increment a value by 1
     Inc(InstructionInc),
+    /// Jump somewhere else in the code
+    Jp(InstructionJp),
+    /// Move a value
+    Ld(InstructionLd),
     /// No op
     Nop,
+    /// Return from subroutine
+    ///
+    /// If the condition is defined, only return if it's true
+    Ret(Option<ConditionCode>),
+    /// Return from subroutine and enable interrupts
+    Reti,
+    /// Rotate register `a` left, through the carry flag
+    Rla,
+    /// Rotate register `a` left
+    Rlca,
+    /// Rotate register `a` right, through the carry flag
+    Rra,
+    /// Rotate register `a` right
+    Rrca,
+    /// Set carry flag
+    Scf,
+    /// Enter CPU low power mode
+    Stop,
 }
 
 /// Variations of the `ADD` instruction
-enum InstructionAdd {
+#[derive(Copy, Clone, Debug)]
+pub enum InstructionAdd {
     /// Add an 8-bit value to `a`
     A(Value8),
     /// Add a 16-bit value to `hl`
@@ -299,31 +325,30 @@ enum InstructionAdd {
 }
 
 /// Variations of the `DEC` (decrement) instruction
-enum InstructionDec {
+#[derive(Copy, Clone, Debug)]
+pub enum InstructionDec {
     /// Decrement an 8-bit register
     R8(Register8),
     /// Decrement a 16-bit register
     R16(Register16),
     /// Decrement the byte pointed to by `hl`
     Hl,
-    /// Decrement `sp`
-    Sp,
 }
 
 /// Variations of the `INC` (increment) instruction
-enum InstructionInc {
+#[derive(Copy, Clone, Debug)]
+pub enum InstructionInc {
     /// Increment an 8-bit register
     R8(Register8),
     /// Increment a 16-bit register
     R16(Register16),
     /// Increment the byte pointed to by `hl`
     Hl,
-    /// Increment `sp`
-    Sp,
 }
 
 /// Variations of the `JP` (jump) instruction
-enum InstructionJp {
+#[derive(Copy, Clone, Debug)]
+pub enum InstructionJp {
     /// Jump to the address in a 16-bit register
     R16(Register16),
     /// Jump to the address in a 16-bit register if the condition is true
@@ -332,8 +357,16 @@ enum InstructionJp {
     Hl,
 }
 
+/// Variations of the `LD` (load) instruction
+#[derive(Copy, Clone, Debug)]
+pub enum InstructionLd {
+    /// Load from `sp` to a memory address
+    Imm16Sp { dest: Address },
+}
+
 /// Source of an 8-bit value
-enum Value8 {
+#[derive(Copy, Clone, Debug)]
+pub enum Value8 {
     /// Value from a register
     Register(Register8),
     /// Value pointed to by the address in `hl`
@@ -345,7 +378,8 @@ enum Value8 {
 /// Name of an 8-bit register (excluding `f`)
 ///
 /// `r8` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
-enum Register8 {
+#[derive(Copy, Clone, Debug)]
+pub enum Register8 {
     A,
     B,
     C,
@@ -358,17 +392,21 @@ enum Register8 {
 /// Name of an 16-bit register
 ///
 /// `r16` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
-enum Register16 {
+#[derive(Copy, Clone, Debug)]
+pub enum Register16 {
     /// Value in register `bc`
     Bc,
     /// Value in register `de`
     De,
     /// Value in register `hl`
     Hl,
+    /// Value in register `sp`
+    Sp,
 }
 
 /// Condition for a conditional jump or call
-enum ConditionCode {
+#[derive(Copy, Clone, Debug)]
+pub enum ConditionCode {
     /// Execute if `zero` flag is set
     Z,
     /// Execute if `zero` flag is not set
@@ -383,11 +421,11 @@ enum ConditionCode {
 ///
 /// Value can be `0-7`
 #[derive(Copy, Clone, Debug)]
-struct Bit(u8);
+pub struct Bit(u8);
 
-/// Address into memory
+/// Address of a byte of RAM
 #[derive(Copy, Clone, Debug)]
-struct Address(u16);
+pub struct Address(pub u16);
 
 #[cfg(test)]
 mod tests {
