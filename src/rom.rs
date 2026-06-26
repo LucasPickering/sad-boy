@@ -1,8 +1,8 @@
 //! Utilities for ROM management
 
 use crate::emu::{
-    Add, Address, ConditionCode, Dec, Inc, Instruction, InstructionLd, Jump,
-    Math, MathTarget, Register8, Register16,
+    Add, Address, Bit, ConditionCode, Dec, Inc, Instruction, Jump, Load, Math,
+    MathTarget, Register8, Register16, Register16Stack,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
@@ -99,7 +99,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         op1(0b0000_0010, MASK_54, Ok).map(|_dest| todo!("ld [r16mem], a")),
         op1(0b0000_1010, MASK_54, Ok).map(|_source| todo!("ld a, [r16mem]")),
         preceded(0b0000_1000, address)
-            .map(|dest| Instruction::Ld(InstructionLd::AddressSp { dest })),
+            .map(|dest| Instruction::Ld(Load::AddressSp { dest })),
         //
         op1(0b0000_0011, MASK_54, r16)
             .map(|operand| Instruction::Inc(Inc::R16(operand))),
@@ -179,29 +179,29 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             address,
             condition: None
         }),
-        op1(0b1100_0111, MASK_543, Ok).map(|_target| todo!("rst tgt3")),
+        op1(0b1100_0111, MASK_543, tgt3).map(Instruction::Rst),
         //
-        op1(0b1100_0001, MASK_54, Ok).map(|_| todo!("pop r16stk")),
-        op1(0b1100_0101, MASK_54, Ok).map(|_| todo!("push r16stk")),
+        op1(0b1100_0001, MASK_54, r16stk).map(Instruction::Pop),
+        op1(0b1100_0101, MASK_54, r16stk).map(Instruction::Push),
         //
         // The byte 0xCB prefixes a set of nested instructions
         preceded(
             0b1100_1011,
             alt!(
-                op1(0b0000_0000, MASK_210, Ok).map(|_| todo!("rlc r8")),
-                op1(0b0000_0001, MASK_210, Ok).map(|_| todo!("rrc r8")),
-                op1(0b0000_0010, MASK_210, Ok).map(|_| todo!("rl r8")),
-                op1(0b0000_0011, MASK_210, Ok).map(|_| todo!("rr r8")),
-                op1(0b0000_0100, MASK_210, Ok).map(|_| todo!("sla r8")),
-                op1(0b0000_0101, MASK_210, Ok).map(|_| todo!("sra r8")),
-                op1(0b0000_0110, MASK_210, Ok).map(|_| todo!("swap r8")),
-                op1(0b0000_0111, MASK_210, Ok).map(|_| todo!("srl r8")),
-                op2(0b0100_0000, (MASK_543, Ok), (MASK_210, Ok))
-                    .map(|(_, _)| { todo!("bit b3, r8") }),
-                op2(0b1000_0000, (MASK_543, Ok), (MASK_210, Ok))
-                    .map(|(_, _)| { todo!("res b3, r8") }),
-                op2(0b1100_0000, (MASK_543, Ok), (MASK_210, Ok))
-                    .map(|(_, _)| { todo!("set b3, r8") }),
+                op1(0b0000_0000, MASK_210, r8).map(Instruction::Rlc),
+                op1(0b0000_0001, MASK_210, r8).map(Instruction::Rrc),
+                op1(0b0000_0010, MASK_210, r8).map(Instruction::Rl),
+                op1(0b0000_0011, MASK_210, r8).map(Instruction::Rr),
+                op1(0b0000_0100, MASK_210, r8).map(Instruction::Sla),
+                op1(0b0000_0101, MASK_210, r8).map(Instruction::Sra),
+                op1(0b0000_0110, MASK_210, r8).map(Instruction::Swap),
+                op1(0b0000_0111, MASK_210, r8).map(Instruction::Srl),
+                op2(0b0100_0000, (MASK_543, bit), (MASK_210, r8))
+                    .map(|(bit, register)| Instruction::Bit(bit, register)),
+                op2(0b1000_0000, (MASK_543, bit), (MASK_210, r8))
+                    .map(|(bit, register)| Instruction::Res(bit, register)),
+                op2(0b1100_0000, (MASK_543, bit), (MASK_210, r8))
+                    .map(|(bit, register)| Instruction::Set(bit, register)),
             )
         ),
         //
@@ -288,6 +288,50 @@ fn address(input: &mut &[u8]) -> ModalResult<Address> {
     u16(Endianness::Little).map(Address).parse_next(input)
 }
 
+/// Parse a condition code from a 2-bit opcode parameter
+///
+/// The parameter should be shifted down to the bottom two bits (which [op1]
+/// does automatically). Any value greater than `0b11` is invalid.
+fn cond(input: u8) -> ModalResult<ConditionCode> {
+    match input {
+        0b00 => Ok(ConditionCode::Nz),
+        0b01 => Ok(ConditionCode::Z),
+        0b10 => Ok(ConditionCode::Nc),
+        0b11 => Ok(ConditionCode::C),
+        _ => todo!("error"),
+    }
+}
+
+/// Parse a bit index from a 3-bit opcode parameter
+///
+/// The parameter should be shifted down to the bottom three bits (which [op1]
+/// does automatically). Any value greater than `0b111` is invalid.
+fn bit(input: u8) -> ModalResult<Bit> {
+    if input <= 0b111 {
+        Ok(Bit(input))
+    } else {
+        todo!("error")
+    }
+}
+
+/// Parse an 8-bit register reference from a 3-bit opcode parameter
+///
+/// The parameter should be shifted down to the bottom three bits (which [op1]
+/// does automatically). Any value greater than `0b111` is invalid.
+fn r8(input: u8) -> ModalResult<Register8> {
+    match input {
+        0b000 => Ok(Register8::B),
+        0b001 => Ok(Register8::C),
+        0b010 => Ok(Register8::D),
+        0b011 => Ok(Register8::E),
+        0b100 => Ok(Register8::H),
+        0b101 => Ok(Register8::L),
+        0b110 => Ok(Register8::Hl),
+        0b111 => Ok(Register8::A),
+        _ => todo!("error"),
+    }
+}
+
 /// Parse an 8-bit math operation ([Instruction::Math]) where the operand is the
 /// byte value following the opcode
 fn math_imm8<'a>(
@@ -312,38 +356,6 @@ fn math_r8<'a>(
     })
 }
 
-/// Parse a condition code from a 2-bit opcode parameter
-///
-/// The parameter should be shifted down to the bottom two bits (which [op1]
-/// does automatically). Any value greater than `0b11` is invalid.
-fn cond(input: u8) -> ModalResult<ConditionCode> {
-    match input {
-        0b00 => Ok(ConditionCode::Nz),
-        0b01 => Ok(ConditionCode::Z),
-        0b10 => Ok(ConditionCode::Nc),
-        0b11 => Ok(ConditionCode::C),
-        _ => todo!("error"),
-    }
-}
-
-/// Parse an 8-bit register reference from a 3-bit opcode parameter
-///
-/// The parameter should be shifted down to the bottom three bits (which [op1]
-/// does automatically). Any value greater than `0b111` is invalid.
-fn r8(input: u8) -> ModalResult<Register8> {
-    match input {
-        0b000 => Ok(Register8::B),
-        0b001 => Ok(Register8::C),
-        0b010 => Ok(Register8::D),
-        0b011 => Ok(Register8::E),
-        0b100 => Ok(Register8::H),
-        0b101 => Ok(Register8::L),
-        0b110 => Ok(Register8::Hl),
-        0b111 => Ok(Register8::A),
-        _ => todo!("error"),
-    }
-}
-
 /// Parse a 16-bit register reference from a 2-bit opcode parameter
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op1]
@@ -355,6 +367,30 @@ fn r16(input: u8) -> ModalResult<Register16> {
         0b10 => Ok(Register16::Hl),
         0b11 => Ok(Register16::Sp),
         _ => todo!("error"),
+    }
+}
+
+/// Parse a 16-bit register reference from a 2-bit opcode parameter (for
+/// push/pop only!!)
+///
+/// The parameter should be shifted down to the bottom two bits (which [op1]
+/// does automatically). Any value greater than `0b11` is invalid.
+fn r16stk(input: u8) -> ModalResult<Register16Stack> {
+    match input {
+        0b00 => Ok(Register16Stack::Bc),
+        0b01 => Ok(Register16Stack::De),
+        0b10 => Ok(Register16Stack::Hl),
+        0b11 => Ok(Register16Stack::Af),
+        _ => todo!("error"),
+    }
+}
+
+/// TODO
+fn tgt3(input: u8) -> ModalResult<Address> {
+    if input <= 0b111 {
+        Ok(Address((input * 8) as u16))
+    } else {
+        todo!()
     }
 }
 

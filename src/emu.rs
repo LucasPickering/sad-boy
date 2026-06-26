@@ -203,9 +203,6 @@ pub enum Instruction {
     And(Value8),
     /// Get a single bit from a register (output to the `zero` flag)
     Bit(Bit, Register8),
-    /// Get a single bit from the byte pointed to by `hl` (output to the `zero
-    /// flag`)
-    BitHl(Bit),
     /// Push a new frame onto the stack, then set `pc` to that address
     Call {
         address: Address,
@@ -239,27 +236,58 @@ pub enum Instruction {
         condition: Option<ConditionCode>,
     },
     /// Move a value
-    Ld(InstructionLd),
+    Ld(Load),
     /// TODO
     Math { operation: Math, target: MathTarget },
     /// No op
     Nop,
+    /// Push a 16-bit register value onto the stack
+    Pop(Register16Stack),
+    /// Pop a 16-bit value from the stack into a register
+    Push(Register16Stack),
+    /// Set a specific bit in a register to 0
+    Res(Bit, Register8),
     /// Return from subroutine
     ///
     /// If the condition is defined, only return if it's true
     Ret(Option<ConditionCode>),
     /// Return from subroutine and enable interrupts
     Reti,
+    /// Rotate a register left, through the carry flag
+    Rl(Register8),
     /// Rotate register `a` left, through the carry flag
     Rla,
+    /// Rotate a register left
+    Rlc(Register8),
     /// Rotate register `a` left
     Rlca,
+    /// Rotate a register right, through the carry flag
+    Rr(Register8),
     /// Rotate register `a` right, through the carry flag
     Rra,
+    /// Rotate a register right
+    Rrc(Register8),
     /// Rotate register `a` right
     Rrca,
+    /// Call a function at an address
+    ///
+    /// This is a faster alternative to `CALL` for addresses that can be packed
+    /// into 3 bits. The translation to an address happens at parse time. This
+    /// *could* be combined into [Self::Call], but keeping it separate makes
+    /// debugging easier.
+    Rst(Address),
     /// Set carry flag
     Scf,
+    /// Set a specific bit in a register to 1
+    Set(Bit, Register8),
+    /// Shift left arithmetically a register
+    Sla(Register8),
+    /// Shift right arithmetically a register
+    Sra(Register8),
+    /// Shift right logically a register
+    Srl(Register8),
+    /// Swap the upper 4 bits of a register with the lower 4
+    Swap(Register8),
     /// Enter CPU low power mode
     Stop,
 }
@@ -340,7 +368,7 @@ pub enum Jump {
 
 /// Variations of the `LD` (load) instruction
 #[derive(Copy, Clone, Debug)]
-pub enum InstructionLd {
+pub enum Load {
     /// Load from `sp` to a memory address
     AddressSp { dest: Address },
 }
@@ -368,7 +396,7 @@ impl From<Register8> for Value8 {
 
 /// 8-bit register value (excluding `f`)
 ///
-/// `r8` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
+/// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
 #[derive(Copy, Clone, Debug)]
 pub enum Register8 {
     A,
@@ -382,9 +410,9 @@ pub enum Register8 {
     L,
 }
 
-/// Name of an 16-bit register
+/// Name of a 16-bit register
 ///
-/// `r16` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
+/// `r16` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
 #[derive(Copy, Clone, Debug)]
 pub enum Register16 {
     /// Value in register `bc`
@@ -395,6 +423,24 @@ pub enum Register16 {
     Hl,
     /// Value in register `sp`
     Sp,
+}
+
+/// Name of a general purpose 16-bit register for stack operations
+///
+/// Most instructions use [Register16], but `PUSH`/`POP` use `af` instead of
+/// `sp`
+///
+/// `r16stk` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
+#[derive(Copy, Clone, Debug)]
+pub enum Register16Stack {
+    /// Value in register `af`
+    Af,
+    /// Value in register `bc`
+    Bc,
+    /// Value in register `de`
+    De,
+    /// Value in register `hl`
+    Hl,
 }
 
 /// Condition for a conditional jump or call
@@ -414,7 +460,7 @@ pub enum ConditionCode {
 ///
 /// Value can be `0-7`
 #[derive(Copy, Clone, Debug)]
-pub struct Bit(u8);
+pub struct Bit(pub u8);
 
 /// Address of a byte of RAM
 #[derive(Copy, Clone, Debug)]
