@@ -61,6 +61,7 @@ impl GameBoy {
             Register16::Bc => self.registers.bc(),
             Register16::De => self.registers.de(),
             Register16::Hl => self.registers.hl(),
+            Register16::Sp => self.registers.sp,
         }
     }
 

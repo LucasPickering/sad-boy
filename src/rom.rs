@@ -1,17 +1,12 @@
 //! Utilities for ROM management
 
 use crate::emu::{
-    Address, Instruction, InstructionDec, InstructionInc, InstructionLd,
-    Register16,
+    Address, Instruction, InstructionAdd, InstructionDec, InstructionInc,
+    InstructionLd, Register16,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
-use std::{
-    convert::Infallible,
-    fs,
-    ops::{BitAnd, Not},
-    path::Path,
-};
+use std::{fs, path::Path};
 use winnow::{
     ModalResult, Parser,
     combinator::{preceded, repeat},
@@ -95,26 +90,23 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop),
         //
-        op(0b0000_0001, [MASK_54]).map(|[_dest]| todo!("ld r16, imm16")),
-        op(0b0000_0010, [MASK_54]).map(|[_dest]| todo!("ld [r16mem], a")),
-        op(0b0000_1010, [MASK_54]).map(|[_source]| todo!("ld a, [r16mem]")),
-        (0b0000_1000, address)
-            .map(|(_, dest)| Instruction::Ld(InstructionLd::Imm16Sp { dest })),
+        op1(0b0000_0001, MASK_54, Ok).map(|_dest| todo!("ld r16, imm16")),
+        op1(0b0000_0010, MASK_54, Ok).map(|_dest| todo!("ld [r16mem], a")),
+        op1(0b0000_1010, MASK_54, Ok).map(|_source| todo!("ld a, [r16mem]")),
+        preceded(0b0000_1000, address)
+            .map(|dest| Instruction::Ld(InstructionLd::Imm16Sp { dest })),
         //
-        op(0b0000_0011, [MASK_54])
-            .try_map(r16)
+        op1(0b0000_0011, MASK_54, r16)
             .map(|operand| Instruction::Inc(InstructionInc::R16(operand))),
-        op(0b0000_1011, [MASK_54])
-            .try_map(r16)
+        op1(0b0000_1011, MASK_54, r16)
             .map(|operand| Instruction::Dec(InstructionDec::R16(operand))),
-        op(0b0000_1001, [MASK_54])
-            .try_map(r16)
+        op1(0b0000_1001, MASK_54, r16)
             .map(|operand| Instruction::Add(InstructionAdd::Hl(operand))),
         //
-        op(0b0000_0100, [MASK_543]).map(|[_]| todo!("inc r8")),
-        op(0b0000_0101, [MASK_543]).map(|[_]| todo!("dec r8")),
+        op1(0b0000_0100, MASK_543, Ok).map(|_| todo!("inc r8")),
+        op1(0b0000_0101, MASK_543, Ok).map(|_| todo!("dec r8")),
         //
-        op(0b0000_0110, [MASK_543]).map(|[_]| todo!("ld r8, imm8")),
+        op1(0b0000_0110, MASK_543, Ok).map(|_| todo!("ld r8, imm8")),
         0b0000_0111.value(Instruction::Rlca),
         0b0000_1111.value(Instruction::Rrca),
         0b0001_0111.value(Instruction::Rla),
@@ -125,23 +117,23 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b0011_1111.value(Instruction::Ccf),
         //
         0b0001_1000.value(Instruction::Nop), // todo!("jr imm8")
-        op(0b0010_0000, [0b0001_1000]).map(|[_]| todo!("jr cond, imm8")),
+        op1(0b0010_0000, 0b0001_1000, Ok).map(|_| todo!("jr cond, imm8")),
         //
         0b0001_0000.value(Instruction::Stop),
         // ===== BLOCK 1 =====
         // Halt has to come first because it's a subset of the following opcode
         0b0111_0110.value(Instruction::Halt),
-        op(0b0100_0000, [0b0011_1000, 0b0000_0111])
-            .map(|[_dest, _source]| { todo!("ld r8, r8") }),
+        op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+            .map(|(_dest, _source)| { todo!("ld r8, r8") }),
         // ===== BLOCK 2 =====
-        op(0b1000_0000, [0b0000_0111]).map(|[_operand]| todo!("add a, r8")),
-        op(0b1000_1000, [0b0000_0111]).map(|[_operand]| todo!("adc a, r8")),
-        op(0b1001_0000, [0b0000_0111]).map(|[_operand]| todo!("sub a, r8")),
-        op(0b1001_1000, [0b0000_0111]).map(|[_operand]| todo!("sbc a, r8")),
-        op(0b1010_0000, [0b0000_0111]).map(|[_operand]| todo!("and a, r8")),
-        op(0b1010_1000, [0b0000_0111]).map(|[_operand]| todo!("xor a, r8")),
-        op(0b1011_0000, [0b0000_0111]).map(|[_operand]| todo!("or a, r8")),
-        op(0b1011_1000, [0b0000_0111]).map(|[_operand]| todo!("cp a, r8")),
+        op1(0b1000_0000, 0b0000_0111, Ok).map(|_operand| todo!("add a, r8")),
+        op1(0b1000_1000, 0b0000_0111, Ok).map(|_operand| todo!("adc a, r8")),
+        op1(0b1001_0000, 0b0000_0111, Ok).map(|_operand| todo!("sub a, r8")),
+        op1(0b1001_1000, 0b0000_0111, Ok).map(|_operand| todo!("sbc a, r8")),
+        op1(0b1010_0000, 0b0000_0111, Ok).map(|_operand| todo!("and a, r8")),
+        op1(0b1010_1000, 0b0000_0111, Ok).map(|_operand| todo!("xor a, r8")),
+        op1(0b1011_0000, 0b0000_0111, Ok).map(|_operand| todo!("or a, r8")),
+        op1(0b1011_1000, 0b0000_0111, Ok).map(|_operand| todo!("cp a, r8")),
         // ===== BLOCK 3 =====
         0b1000_0110.value(Instruction::Nop), // todo!("add a, imm8")
         0b1000_1110.value(Instruction::Nop), // todo!("adc a, imm8")
@@ -152,37 +144,37 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b1011_0110.value(Instruction::Nop), // todo!("or a, imm8")
         0b1011_1110.value(Instruction::Nop), // todo!("cp a, imm8")
         //
-        op(0b1100_0000, [0b0001_1000]).map(|[_cond]| todo!("ret cond")),
+        op1(0b1100_0000, 0b0001_1000, Ok).map(|_cond| todo!("ret cond")),
         0b1100_1001.value(Instruction::Ret(None)),
         0b1101_1001.value(Instruction::Reti),
-        op(0b1100_0010, [0b0001_1000]).map(|[_con]| todo!("jp cond, imm16")),
+        op1(0b1100_0010, 0b0001_1000, Ok).map(|_con| todo!("jp cond, imm16")),
         0b1100_0011.value(Instruction::Nop), // todo!("jp imm16")
         0b1110_1001.value(Instruction::Nop), // todo!("jp hl")
-        op(0b1100_0100, [0b0001_1000]).map(|[_con]| todo!("call cond, imm16")),
+        op1(0b1100_0100, 0b0001_1000, Ok).map(|_con| todo!("call cond, imm16")),
         0b1100_1101.value(Instruction::Nop), // todo!("call imm16")
-        op(0b1100_0111, [MASK_543]).map(|[_target]| todo!("rst tgt3")),
+        op1(0b1100_0111, MASK_543, Ok).map(|_target| todo!("rst tgt3")),
         //
-        op(0b1100_0001, [MASK_54]).map(|[_]| todo!("pop r16stk")),
-        op(0b1100_0101, [MASK_54]).map(|[_]| todo!("push r16stk")),
+        op1(0b1100_0001, MASK_54, Ok).map(|_| todo!("pop r16stk")),
+        op1(0b1100_0101, MASK_54, Ok).map(|_| todo!("push r16stk")),
         //
         // The byte 0xCB prefixes a set of nested instructions
         preceded(
             0b1100_1011,
             alt!(
-                op(0b0000_0000, [0b0000_0111]).map(|[_]| todo!("rlc r8")),
-                op(0b0000_0001, [0b0000_0111]).map(|[_]| todo!("rrc r8")),
-                op(0b0000_0010, [0b0000_0111]).map(|[_]| todo!("rl r8")),
-                op(0b0000_0011, [0b0000_0111]).map(|[_]| todo!("rr r8")),
-                op(0b0000_0100, [0b0000_0111]).map(|[_]| todo!("sla r8")),
-                op(0b0000_0101, [0b0000_0111]).map(|[_]| todo!("sra r8")),
-                op(0b0000_0110, [0b0000_0111]).map(|[_]| todo!("swap r8")),
-                op(0b0000_0111, [0b0000_0111]).map(|[_]| todo!("srl r8")),
-                op(0b0100_0000, [0b0011_1000, 0b0000_0111])
-                    .map(|[_, _]| { todo!("bit b3, r8") }),
-                op(0b1000_0000, [0b0011_1000, 0b0000_0111])
-                    .map(|[_, _]| { todo!("res b3, r8") }),
-                op(0b1100_0000, [0b0011_1000, 0b0000_0111])
-                    .map(|[_, _]| { todo!("set b3, r8") }),
+                op1(0b0000_0000, 0b0000_0111, Ok).map(|_| todo!("rlc r8")),
+                op1(0b0000_0001, 0b0000_0111, Ok).map(|_| todo!("rrc r8")),
+                op1(0b0000_0010, 0b0000_0111, Ok).map(|_| todo!("rl r8")),
+                op1(0b0000_0011, 0b0000_0111, Ok).map(|_| todo!("rr r8")),
+                op1(0b0000_0100, 0b0000_0111, Ok).map(|_| todo!("sla r8")),
+                op1(0b0000_0101, 0b0000_0111, Ok).map(|_| todo!("sra r8")),
+                op1(0b0000_0110, 0b0000_0111, Ok).map(|_| todo!("swap r8")),
+                op1(0b0000_0111, 0b0000_0111, Ok).map(|_| todo!("srl r8")),
+                op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                    .map(|(_, _)| { todo!("bit b3, r8") }),
+                op2(0b1000_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                    .map(|(_, _)| { todo!("res b3, r8") }),
+                op2(0b1100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                    .map(|(_, _)| { todo!("set b3, r8") }),
             )
         ),
         //
@@ -203,8 +195,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     .parse_next(input)
 }
 
-/// Create a parser that looks for an opcode with a fixed number of embedded
-/// bit parameters
+/// Create a parser for an opcode with a single embedded bit parameter
 ///
 /// Some opcodes are not a static bit pattern; they have one or two parameters
 /// embedded with in the 8-bit opcode. For example:
@@ -217,35 +208,52 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
 /// - `opcode` is the static part of the code to look for. Parameterized bytes
 ///   should be encoded as `0` (the above example would be given as
 ///   `0b0000_0001`).
-/// - `masks` is the set of bitmasks denoting each parameter. In the above
-///   example, this would be `[0b00110000]`.
-///
-/// ## Returns
-///
-/// Return an array of values, each one corresponding to the dynamic bits from
-/// its mask. In the `ld r16, imm16` example, if the parsed byte is `00100001`,
-/// the returned value will be `[00100000]`. The masked bits (bits 4 and 5) will
-/// correspond to the actual value from the input, and the rest will be `0`.
-fn op<'a, const N: usize, E: ParserError<&'a [u8]>>(
+/// - `mask` is the bitmask defining which bits form the parameter. In the above
+///   example, this would be `0b00110000`.
+/// - `map_param` is a fallible mapping function to apply to the bit parameter
+///   value. **The value will be shifted down to the least significant bits), so
+///   that the same function can be used for all opcodes with the same parameter
+///   type, regardless of which bits store the param.
+fn op1<'a, O, E: ParserError<&'a [u8]>>(
     opcode: u8,
-    masks: [u8; N],
-) -> impl Parser<&'a [u8], [u8; N], E> {
-    debug_assert!(
-        masks.iter().all(|mask| opcode & mask == 0),
-        "Masked bits should all be 0 in static opcodes: opcode={opcode:b}, masks={masks:?}"
-    );
-
+    mask: u8,
+    map_param: impl Fn(u8) -> Result<O, E>,
+) -> impl Parser<&'a [u8], O, E> {
     move |input: &mut &'a [u8]| {
         let byte = any.parse_next(input)?;
-        // Mask out all the parameters to check if the static bits all match
-        if masks.into_iter().map(u8::not).fold(byte, u8::bitand) == opcode {
-            // Map each mask to the corresponding dynamic bits, then shift those
-            // bits down to be in the least-significant places
-            Ok(masks.map(|mask| (byte & mask) >> mask.trailing_zeros()))
+        if byte & !mask == opcode {
+            // TODO explain
+            map_param(get_param(byte, mask))
         } else {
             todo!()
         }
     }
+}
+
+/// Create a parser for an opcode with two embedded bit parameters
+///
+/// See [op1] for more info.
+fn op2<'a, O1, O2, E: ParserError<&'a [u8]>>(
+    opcode: u8,
+    (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, E>),
+    (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, E>),
+) -> impl Parser<&'a [u8], (O1, O2), E> {
+    move |input: &mut &'a [u8]| {
+        let byte = any.parse_next(input)?;
+        if byte & !mask1 & !mask2 == opcode {
+            let param1 = map_param1(get_param(byte, mask1))?;
+            let param2 = map_param2(get_param(byte, mask2))?;
+            Ok((param1, param2))
+        } else {
+            todo!()
+        }
+    }
+}
+
+/// Extract a bit param value from a parsed opcode byte; the param will be
+/// shifted down to the rightmost bits
+fn get_param(opcode: u8, mask: u8) -> u8 {
+    (opcode & mask) >> mask.trailing_zeros()
 }
 
 /// Parse a 2-byte little-endian address from the input
@@ -258,16 +266,13 @@ fn address(input: &mut &[u8]) -> ModalResult<Address> {
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op] does
 /// automatically). Any value greater than `0b11` is invalid.
-///
-///
-/// TODO explain params
-fn r16([input]: [u8; 1]) -> Result<Register16, Infallible> {
+fn r16(input: u8) -> ModalResult<Register16> {
     match input {
         0b00 => Ok(Register16::Bc),
         0b01 => Ok(Register16::De),
         0b10 => Ok(Register16::Hl),
         0b11 => Ok(Register16::Sp),
-        _ => todo!("error unknown r16 code"),
+        _ => todo!("error"),
     }
 }
 
@@ -277,23 +282,32 @@ mod tests {
     use rstest::rstest;
     use winnow::error::ContextError;
 
-    /// Test success cases of the `op` parser, with masks and stuff
+    /// Test success cases of the `op1` parser
     #[rstest]
-    #[case::none(0b0101_0101, [], [])]
     // Masked bits get shifted down to the right
-    #[case::one(0b0100_0101, [0b0011_0000], [0b0000_0001])]
-    #[case::two(
+    #[case::middle_bits(0b0100_0101, 0b0011_0000, 0b0000_0001)]
+    fn op1_ok(#[case] opcode: u8, #[case] mask: u8, #[case] expected: u8) {
+        let input = &[0b0101_0101];
+        let mut parser = op1::<u8, ContextError>(opcode, mask, Ok);
+        assert_eq!(parser.parse(input).unwrap(), expected);
+    }
+
+    /// Test success cases of the `op2` parser
+    #[rstest]
+    // Masked bits get shifted down to the right
+    #[case::middle_bits(
         0b0100_0000,
-        [0b0011_1000, 0b0000_0111],
-        [0b0000_0010, 0b0000_0101],
+        (0b0011_1000, 0b0000_0111),
+        (0b0000_0010, 0b0000_0101),
     )]
-    fn op_ok<const N: usize>(
+    fn op2_ok(
         #[case] opcode: u8,
-        #[case] masks: [u8; N],
-        #[case] expected: [u8; N],
+        #[case] masks: (u8, u8),
+        #[case] expected: (u8, u8),
     ) {
         let input = &[0b0101_0101];
-        let mut parser = op::<N, ContextError>(opcode, masks);
+        let mut parser =
+            op2::<u8, u8, ContextError>(opcode, (masks.0, Ok), (masks.1, Ok));
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 }
