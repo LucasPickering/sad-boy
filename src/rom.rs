@@ -2,7 +2,7 @@
 
 use crate::emu::{
     Add, Address, ConditionCode, Dec, Inc, Instruction, InstructionLd, Jump,
-    Register8, Register16,
+    Math, MathTarget, Register8, Register16,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
@@ -11,7 +11,7 @@ use winnow::{
     ModalResult, Parser,
     binary::{Endianness, i8, u8, u16},
     combinator::{preceded, repeat},
-    error::ParserError,
+    error::{ContextError, ErrMode, ParserError},
     token::take,
 };
 
@@ -42,6 +42,8 @@ impl Rom {
 }
 
 struct RomHeader {}
+
+type ParseError = ErrMode<ContextError>;
 
 /// Parse all data from the ROM
 fn parse_rom(input: &mut &[u8]) -> ModalResult<Rom> {
@@ -139,25 +141,23 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
             .map(|(_dest, _source)| todo!("ld r8, r8")),
         // ===== BLOCK 2 =====
-        op1(0b1000_0000, 0b0000_0111, r8)
-            .map(|operand| Instruction::Add(Add::A(operand.into()))),
-        op1(0b1000_1000, 0b0000_0111, r8).map(|_operand| todo!("adc a, r8")),
-        op1(0b1001_0000, 0b0000_0111, r8).map(|_operand| todo!("sub a, r8")),
-        op1(0b1001_1000, 0b0000_0111, r8).map(|_operand| todo!("sbc a, r8")),
-        op1(0b1010_0000, 0b0000_0111, r8).map(|_operand| todo!("and a, r8")),
-        op1(0b1010_1000, 0b0000_0111, r8).map(|_operand| todo!("xor a, r8")),
-        op1(0b1011_0000, 0b0000_0111, r8).map(|_operand| todo!("or a, r8")),
-        op1(0b1011_1000, 0b0000_0111, r8).map(|_operand| todo!("cp a, r8")),
+        math_r8(0b1000_0000, Math::Add),
+        math_r8(0b1000_1000, Math::Adc),
+        math_r8(0b1001_0000, Math::Sub),
+        math_r8(0b1001_1000, Math::Sbc),
+        math_r8(0b1010_0000, Math::And),
+        math_r8(0b1010_1000, Math::Xor),
+        math_r8(0b1011_0000, Math::Or),
+        math_r8(0b1011_1000, Math::Cp),
         // ===== BLOCK 3 =====
-        preceded(0b1000_0110, u8)
-            .map(|value| Instruction::Add(Add::A(value.into()))),
-        preceded(0b1000_1110, u8).map(|_value| todo!("adc a, imm8")),
-        preceded(0b1001_0110, u8).map(|_value| todo!("sub a, imm8")),
-        preceded(0b1001_1110, u8).map(|_value| todo!("sbc a, imm8")),
-        preceded(0b1010_0110, u8).map(|_value| todo!("and a, imm8")),
-        preceded(0b1010_1110, u8).map(|_value| todo!("xor a, imm8")),
-        preceded(0b1011_0110, u8).map(|_value| todo!("or a, imm8")),
-        preceded(0b1011_1110, u8).map(|_value| todo!("cp a, imm8")),
+        math_imm8(0b1000_0110, Math::Add),
+        math_imm8(0b1000_1110, Math::Adc),
+        math_imm8(0b1001_0110, Math::Sub),
+        math_imm8(0b1001_1110, Math::Sbc),
+        math_imm8(0b1010_0110, Math::And),
+        math_imm8(0b1010_1110, Math::Xor),
+        math_imm8(0b1011_0110, Math::Or),
+        math_imm8(0b1011_1110, Math::Cp),
         //
         op1(0b1100_0000, 0b0001_1000, cond)
             .map(|cond| Instruction::Ret(Some(cond))),
@@ -241,11 +241,11 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
 ///   value. **The value will be shifted down to the least significant bits), so
 ///   that the same function can be used for all opcodes with the same parameter
 ///   type, regardless of which bits store the param.
-fn op1<'a, O, E: ParserError<&'a [u8]>>(
+fn op1<'a, O>(
     opcode: u8,
     mask: u8,
-    map_param: impl Fn(u8) -> Result<O, E>,
-) -> impl Parser<&'a [u8], O, E> {
+    map_param: impl Fn(u8) -> Result<O, ParseError>,
+) -> impl Parser<&'a [u8], O, ParseError> {
     move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask == opcode {
@@ -260,11 +260,11 @@ fn op1<'a, O, E: ParserError<&'a [u8]>>(
 /// Create a parser for an opcode with two embedded bit parameters
 ///
 /// See [op1] for more info.
-fn op2<'a, O1, O2, E: ParserError<&'a [u8]>>(
+fn op2<'a, O1, O2>(
     opcode: u8,
-    (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, E>),
-    (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, E>),
-) -> impl Parser<&'a [u8], (O1, O2), E> {
+    (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, ParseError>),
+    (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, ParseError>),
+) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
     move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask1 & !mask2 == opcode {
@@ -286,6 +286,30 @@ fn get_param(opcode: u8, mask: u8) -> u8 {
 /// Parse a 2-byte little-endian address from the input
 fn address(input: &mut &[u8]) -> ModalResult<Address> {
     u16(Endianness::Little).map(Address).parse_next(input)
+}
+
+/// Parse an 8-bit math operation ([Instruction::Math]) where the operand is the
+/// byte value following the opcode
+fn math_imm8<'a>(
+    opcode: u8,
+    operation: Math,
+) -> impl Parser<&'a [u8], Instruction, ParseError> {
+    preceded(opcode, u8).map(move |operand| Instruction::Math {
+        operation,
+        target: MathTarget::Const(operand),
+    })
+}
+
+/// Parse an 8-bit math operation ([Instruction::Math]) where the operand is an
+/// 8-bit register encoded in bits 0-2 of the opcode.
+fn math_r8<'a>(
+    opcode: u8,
+    operation: Math,
+) -> impl Parser<&'a [u8], Instruction, ParseError> {
+    op1(opcode, 0b0000_0111, r8).map(move |operand| Instruction::Math {
+        operation,
+        target: MathTarget::Register(operand),
+    })
 }
 
 /// Parse a condition code from a 2-bit opcode parameter
@@ -338,7 +362,6 @@ fn r16(input: u8) -> ModalResult<Register16> {
 mod tests {
     use super::*;
     use rstest::rstest;
-    use winnow::error::ContextError;
 
     /// Test success cases of the `op1` parser
     #[rstest]
@@ -346,7 +369,7 @@ mod tests {
     #[case::middle_bits(0b0100_0101, 0b0011_0000, 0b0000_0001)]
     fn op1_ok(#[case] opcode: u8, #[case] mask: u8, #[case] expected: u8) {
         let input = &[0b0101_0101];
-        let mut parser = op1::<u8, ContextError>(opcode, mask, Ok);
+        let mut parser = op1(opcode, mask, Ok);
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 
@@ -364,8 +387,7 @@ mod tests {
         #[case] expected: (u8, u8),
     ) {
         let input = &[0b0101_0101];
-        let mut parser =
-            op2::<u8, u8, ContextError>(opcode, (masks.0, Ok), (masks.1, Ok));
+        let mut parser = op2(opcode, (masks.0, Ok), (masks.1, Ok));
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 }

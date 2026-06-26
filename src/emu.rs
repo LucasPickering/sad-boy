@@ -30,8 +30,6 @@ impl GameBoy {
     /// Update the emulator state based on an instruction
     fn execute(&mut self, instruction: Instruction) {
         match instruction {
-            Instruction::Add(add) => self.add(add),
-            Instruction::AddCarry(value) => todo!(),
             Instruction::Nop => {}
             _ => todo!(),
         }
@@ -63,48 +61,6 @@ impl GameBoy {
             Register16::Hl => self.registers.hl(),
             Register16::Sp => self.registers.sp,
         }
-    }
-
-    /// Execute an `ADD` instruction, setting flags as needed
-    fn add(&mut self, instruction: Add) {
-        let flags = match instruction {
-            Add::A(value) => {
-                const HALF_CARRY_MASK: u8 = 0b1111;
-
-                let value = self.get_value8(value);
-                let (sum, overflow) = self.registers.a.overflowing_add(value);
-                let original = self.registers.a;
-                self.registers.a = sum;
-                Flags {
-                    zero: sum == 0,
-                    subtract: false,
-                    // Check if the bottom 4 bits overflowed into the top 4
-                    // TODO is this correct? write some prop tests
-                    half_carry: (sum & HALF_CARRY_MASK) < (original & 0b1111),
-                    carry: overflow,
-                }
-            }
-            Add::Hl(value) => {
-                const HALF_CARRY_MASK: u16 = 0b1111_1111_1111;
-
-                let value = self.get_value16(value);
-                let (sum, overflow) =
-                    self.registers.hl().overflowing_add(value);
-                let original = self.registers.hl();
-                *self.registers.hl_mut() = sum;
-                Flags {
-                    // TODO docs impl this shouldn't be modified?
-                    // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#ADD_HL,r16
-                    zero: false,
-                    subtract: false,
-                    half_carry: (sum & HALF_CARRY_MASK)
-                        < (original & HALF_CARRY_MASK),
-                    carry: overflow,
-                }
-            }
-            Add::HlSp => todo!(),
-        };
-        self.registers.set_flags(flags);
     }
 }
 
@@ -284,6 +240,8 @@ pub enum Instruction {
     },
     /// Move a value
     Ld(InstructionLd),
+    /// TODO
+    Math { operation: Math, target: MathTarget },
     /// No op
     Nop,
     /// Return from subroutine
@@ -306,11 +264,41 @@ pub enum Instruction {
     Stop,
 }
 
+/// TODO
+#[derive(Copy, Clone, Debug)]
+pub enum Math {
+    /// TODO
+    Adc,
+    /// TODO
+    Add,
+    /// TODO
+    And,
+    /// TODO
+    Cp,
+    /// TODO
+    Or,
+    /// TODO
+    Sbc,
+    /// TODO
+    Sub,
+    /// TODO
+    Xor,
+}
+
+/// TODO
+#[derive(Copy, Clone, Debug)]
+pub enum MathTarget {
+    /// Byte in a register
+    Register(Register8),
+    /// Byte pointed to by register `hl`
+    Hl,
+    /// Constant value
+    Const(u8),
+}
+
 /// Variations of the `ADD` instruction
 #[derive(Copy, Clone, Debug)]
 pub enum Add {
-    /// Add an 8-bit value to `a`
-    A(Value8),
     /// Add a 16-bit value to `hl`
     Hl(Register16),
     /// Add `sp` to `hl`
