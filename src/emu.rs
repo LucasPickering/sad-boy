@@ -47,7 +47,7 @@ impl GameBoy {
             Value8::Register(Register8::E) => self.registers.e,
             Value8::Register(Register8::H) => self.registers.h,
             Value8::Register(Register8::L) => self.registers.l,
-            Value8::Hl => {
+            Value8::Register(Register8::Hl) => {
                 let pointer = self.registers.hl();
                 todo!("resolve pointer")
             }
@@ -66,9 +66,9 @@ impl GameBoy {
     }
 
     /// Execute an `ADD` instruction, setting flags as needed
-    fn add(&mut self, instruction: InstructionAdd) {
+    fn add(&mut self, instruction: Add) {
         let flags = match instruction {
-            InstructionAdd::A(value) => {
+            Add::A(value) => {
                 const HALF_CARRY_MASK: u8 = 0b1111;
 
                 let value = self.get_value8(value);
@@ -84,7 +84,7 @@ impl GameBoy {
                     carry: overflow,
                 }
             }
-            InstructionAdd::Hl(value) => {
+            Add::Hl(value) => {
                 const HALF_CARRY_MASK: u16 = 0b1111_1111_1111;
 
                 let value = self.get_value16(value);
@@ -102,23 +102,7 @@ impl GameBoy {
                     carry: overflow,
                 }
             }
-            InstructionAdd::Sp(offset) => {
-                const HALF_CARRY_MASK: u16 = 0b1111;
-
-                let (sum, overflow) =
-                    self.registers.sp.overflowing_add(todo!());
-                let original = self.registers.sp;
-                self.registers.sp = sum;
-                Flags {
-                    zero: sum == 0,
-                    subtract: false,
-                    // Check if the bottom 4 bits overflowed into the top 4
-                    // TODO is this correct? write some prop tests
-                    half_carry: (sum & HALF_CARRY_MASK) < (original & 0b1111),
-                    carry: overflow,
-                }
-            }
-            InstructionAdd::HlSp => todo!(),
+            Add::HlSp => todo!(),
         };
         self.registers.set_flags(flags);
     }
@@ -254,7 +238,9 @@ impl Flags {
 pub enum Instruction {
     /// Add a value to a register
     /// TODO flatten this?
-    Add(InstructionAdd),
+    Add(Add),
+    /// Add an offset to register `sp`
+    AddSp(i8),
     /// Add a value plus the flag to register `a`
     AddCarry(Value8),
     /// Bitwise AND between `a` and another value (modifies `a`)
@@ -265,9 +251,11 @@ pub enum Instruction {
     /// flag`)
     BitHl(Bit),
     /// Push a new frame onto the stack, then set `pc` to that address
-    Call(Address),
-    /// Call if the condition is true
-    CallCc(ConditionCode, Address),
+    Call {
+        address: Address,
+        /// If defined, only call if true
+        condition: Option<ConditionCode>,
+    },
     /// Complement (invert) carry flag
     Ccf,
     /// Compare register `a` with another value
@@ -277,7 +265,7 @@ pub enum Instruction {
     /// Decimal Adjust Accumulator
     Daa,
     /// Decrement a value by 1
-    Dec(InstructionDec),
+    Dec(Dec),
     /// Disable interrupts
     Di,
     /// Enable interrupts
@@ -285,9 +273,15 @@ pub enum Instruction {
     /// Enter CPU low-power consumption mode until an interrupt occurs
     Halt,
     /// Increment a value by 1
-    Inc(InstructionInc),
-    /// Jump somewhere else in the code
-    Jp(InstructionJp),
+    Inc(Inc),
+    /// Jump to another address in the code
+    Jp(Jump),
+    /// Jump a relative number of instructions in the code
+    Jr {
+        offset: i8,
+        /// If defined, only jump when true
+        condition: Option<ConditionCode>,
+    },
     /// Move a value
     Ld(InstructionLd),
     /// No op
@@ -314,20 +308,18 @@ pub enum Instruction {
 
 /// Variations of the `ADD` instruction
 #[derive(Copy, Clone, Debug)]
-pub enum InstructionAdd {
+pub enum Add {
     /// Add an 8-bit value to `a`
     A(Value8),
     /// Add a 16-bit value to `hl`
     Hl(Register16),
     /// Add `sp` to `hl`
     HlSp,
-    /// Add an 8-bit signed offset to `sp`
-    Sp(i8),
 }
 
 /// Variations of the `DEC` (decrement) instruction
 #[derive(Copy, Clone, Debug)]
-pub enum InstructionDec {
+pub enum Dec {
     /// Decrement an 8-bit register
     R8(Register8),
     /// Decrement a 16-bit register
@@ -338,7 +330,7 @@ pub enum InstructionDec {
 
 /// Variations of the `INC` (increment) instruction
 #[derive(Copy, Clone, Debug)]
-pub enum InstructionInc {
+pub enum Inc {
     /// Increment an 8-bit register
     R8(Register8),
     /// Increment a 16-bit register
@@ -349,11 +341,11 @@ pub enum InstructionInc {
 
 /// Variations of the `JP` (jump) instruction
 #[derive(Copy, Clone, Debug)]
-pub enum InstructionJp {
-    /// Jump to the address in a 16-bit register
-    R16(Register16),
-    /// Jump to the address in a 16-bit register if the condition is true
-    R16Cc(ConditionCode, Register16),
+pub enum Jump {
+    /// Jump to a specific memory address
+    Address(Address),
+    /// Jump to a specific memory address if the condition is true
+    AddressCc(ConditionCode, Address),
     /// Jump to the address pointed to by `hl`
     Hl,
 }
@@ -362,7 +354,7 @@ pub enum InstructionJp {
 #[derive(Copy, Clone, Debug)]
 pub enum InstructionLd {
     /// Load from `sp` to a memory address
-    Imm16Sp { dest: Address },
+    AddressSp { dest: Address },
 }
 
 /// Source of an 8-bit value
@@ -370,13 +362,23 @@ pub enum InstructionLd {
 pub enum Value8 {
     /// Value from a register
     Register(Register8),
-    /// Value pointed to by the address in `hl`
-    Hl,
     /// Constant value
     Const(u8),
 }
 
-/// Name of an 8-bit register (excluding `f`)
+impl From<u8> for Value8 {
+    fn from(value: u8) -> Self {
+        Self::Const(value)
+    }
+}
+
+impl From<Register8> for Value8 {
+    fn from(register: Register8) -> Self {
+        Self::Register(register)
+    }
+}
+
+/// 8-bit register value (excluding `f`)
 ///
 /// `r8` on https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7
 #[derive(Copy, Clone, Debug)]
@@ -387,6 +389,8 @@ pub enum Register8 {
     D,
     E,
     H,
+    /// Byte pointed to by the address in register `hl`
+    Hl,
     L,
 }
 

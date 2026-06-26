@@ -1,17 +1,18 @@
 //! Utilities for ROM management
 
 use crate::emu::{
-    Address, Instruction, InstructionAdd, InstructionDec, InstructionInc,
-    InstructionLd, Register16,
+    Add, Address, ConditionCode, Dec, Inc, Instruction, InstructionLd, Jump,
+    Register8, Register16,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
 use std::{fs, path::Path};
 use winnow::{
     ModalResult, Parser,
+    binary::{Endianness, i8, u8, u16},
     combinator::{preceded, repeat},
     error::ParserError,
-    token::{any, take},
+    token::take,
 };
 
 /// A GameBoy ROM (cartridge)
@@ -29,6 +30,7 @@ pub struct Rom {
 }
 
 impl Rom {
+    /// Load and parse a ROM from a file
     pub fn load(path: &Path) -> eyre::Result<Self> {
         // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
@@ -80,6 +82,7 @@ macro_rules! alt {
 /// Parse the next CPU instruction
 #[expect(clippy::precedence)] // TODO fix this
 fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
+    const MASK_210: u8 = 0b0000_0111;
     const MASK_54: u8 = 0b0011_0000;
     const MASK_543: u8 = 0b0011_1000;
 
@@ -94,17 +97,19 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         op1(0b0000_0010, MASK_54, Ok).map(|_dest| todo!("ld [r16mem], a")),
         op1(0b0000_1010, MASK_54, Ok).map(|_source| todo!("ld a, [r16mem]")),
         preceded(0b0000_1000, address)
-            .map(|dest| Instruction::Ld(InstructionLd::Imm16Sp { dest })),
+            .map(|dest| Instruction::Ld(InstructionLd::AddressSp { dest })),
         //
         op1(0b0000_0011, MASK_54, r16)
-            .map(|operand| Instruction::Inc(InstructionInc::R16(operand))),
+            .map(|operand| Instruction::Inc(Inc::R16(operand))),
         op1(0b0000_1011, MASK_54, r16)
-            .map(|operand| Instruction::Dec(InstructionDec::R16(operand))),
+            .map(|operand| Instruction::Dec(Dec::R16(operand))),
         op1(0b0000_1001, MASK_54, r16)
-            .map(|operand| Instruction::Add(InstructionAdd::Hl(operand))),
+            .map(|operand| Instruction::Add(Add::Hl(operand))),
         //
-        op1(0b0000_0100, MASK_543, Ok).map(|_| todo!("inc r8")),
-        op1(0b0000_0101, MASK_543, Ok).map(|_| todo!("dec r8")),
+        op1(0b0000_0100, MASK_543, r8)
+            .map(|operand| Instruction::Inc(Inc::R8(operand))),
+        op1(0b0000_0101, MASK_543, r8)
+            .map(|operand| Instruction::Dec(Dec::R8(operand))),
         //
         op1(0b0000_0110, MASK_543, Ok).map(|_| todo!("ld r8, imm8")),
         0b0000_0111.value(Instruction::Rlca),
@@ -116,42 +121,64 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b0011_0111.value(Instruction::Scf),
         0b0011_1111.value(Instruction::Ccf),
         //
-        0b0001_1000.value(Instruction::Nop), // todo!("jr imm8")
-        op1(0b0010_0000, 0b0001_1000, Ok).map(|_| todo!("jr cond, imm8")),
+        preceded(0b0001_1000, i8).map(|offset| Instruction::Jr {
+            offset,
+            condition: None
+        }),
+        (op1(0b0010_0000, 0b0001_1000, cond), i8).map(|(cond, offset)| {
+            Instruction::Jr {
+                offset,
+                condition: Some(cond),
+            }
+        }),
         //
         0b0001_0000.value(Instruction::Stop),
         // ===== BLOCK 1 =====
         // Halt has to come first because it's a subset of the following opcode
         0b0111_0110.value(Instruction::Halt),
         op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
-            .map(|(_dest, _source)| { todo!("ld r8, r8") }),
+            .map(|(_dest, _source)| todo!("ld r8, r8")),
         // ===== BLOCK 2 =====
-        op1(0b1000_0000, 0b0000_0111, Ok).map(|_operand| todo!("add a, r8")),
-        op1(0b1000_1000, 0b0000_0111, Ok).map(|_operand| todo!("adc a, r8")),
-        op1(0b1001_0000, 0b0000_0111, Ok).map(|_operand| todo!("sub a, r8")),
-        op1(0b1001_1000, 0b0000_0111, Ok).map(|_operand| todo!("sbc a, r8")),
-        op1(0b1010_0000, 0b0000_0111, Ok).map(|_operand| todo!("and a, r8")),
-        op1(0b1010_1000, 0b0000_0111, Ok).map(|_operand| todo!("xor a, r8")),
-        op1(0b1011_0000, 0b0000_0111, Ok).map(|_operand| todo!("or a, r8")),
-        op1(0b1011_1000, 0b0000_0111, Ok).map(|_operand| todo!("cp a, r8")),
+        op1(0b1000_0000, 0b0000_0111, r8)
+            .map(|operand| Instruction::Add(Add::A(operand.into()))),
+        op1(0b1000_1000, 0b0000_0111, r8).map(|_operand| todo!("adc a, r8")),
+        op1(0b1001_0000, 0b0000_0111, r8).map(|_operand| todo!("sub a, r8")),
+        op1(0b1001_1000, 0b0000_0111, r8).map(|_operand| todo!("sbc a, r8")),
+        op1(0b1010_0000, 0b0000_0111, r8).map(|_operand| todo!("and a, r8")),
+        op1(0b1010_1000, 0b0000_0111, r8).map(|_operand| todo!("xor a, r8")),
+        op1(0b1011_0000, 0b0000_0111, r8).map(|_operand| todo!("or a, r8")),
+        op1(0b1011_1000, 0b0000_0111, r8).map(|_operand| todo!("cp a, r8")),
         // ===== BLOCK 3 =====
-        0b1000_0110.value(Instruction::Nop), // todo!("add a, imm8")
-        0b1000_1110.value(Instruction::Nop), // todo!("adc a, imm8")
-        0b1001_0110.value(Instruction::Nop), // todo!("sub a, imm8")
-        0b1001_1110.value(Instruction::Nop), // todo!("sbc a, imm8")
-        0b1010_0110.value(Instruction::Nop), // todo!("and a, imm8")
-        0b1010_1110.value(Instruction::Nop), // todo!("xor a, imm8")
-        0b1011_0110.value(Instruction::Nop), // todo!("or a, imm8")
-        0b1011_1110.value(Instruction::Nop), // todo!("cp a, imm8")
+        preceded(0b1000_0110, u8)
+            .map(|value| Instruction::Add(Add::A(value.into()))),
+        preceded(0b1000_1110, u8).map(|_value| todo!("adc a, imm8")),
+        preceded(0b1001_0110, u8).map(|_value| todo!("sub a, imm8")),
+        preceded(0b1001_1110, u8).map(|_value| todo!("sbc a, imm8")),
+        preceded(0b1010_0110, u8).map(|_value| todo!("and a, imm8")),
+        preceded(0b1010_1110, u8).map(|_value| todo!("xor a, imm8")),
+        preceded(0b1011_0110, u8).map(|_value| todo!("or a, imm8")),
+        preceded(0b1011_1110, u8).map(|_value| todo!("cp a, imm8")),
         //
-        op1(0b1100_0000, 0b0001_1000, Ok).map(|_cond| todo!("ret cond")),
+        op1(0b1100_0000, 0b0001_1000, cond)
+            .map(|cond| Instruction::Ret(Some(cond))),
         0b1100_1001.value(Instruction::Ret(None)),
         0b1101_1001.value(Instruction::Reti),
-        op1(0b1100_0010, 0b0001_1000, Ok).map(|_con| todo!("jp cond, imm16")),
-        0b1100_0011.value(Instruction::Nop), // todo!("jp imm16")
-        0b1110_1001.value(Instruction::Nop), // todo!("jp hl")
-        op1(0b1100_0100, 0b0001_1000, Ok).map(|_con| todo!("call cond, imm16")),
-        0b1100_1101.value(Instruction::Nop), // todo!("call imm16")
+        (op1(0b1100_0010, 0b0001_1000, cond), address).map(|(cond, dest)| {
+            Instruction::Jp(Jump::AddressCc(cond, dest))
+        }),
+        preceded(0b1100_0011, address)
+            .map(|dest| Instruction::Jp(Jump::Address(dest))),
+        0b1110_1001.value(Instruction::Jp(Jump::Hl)),
+        (op1(0b1100_0100, 0b0001_1000, cond), address).map(
+            |(cond, address)| Instruction::Call {
+                address,
+                condition: Some(cond)
+            }
+        ),
+        preceded(0b1100_1101, address).map(|address| Instruction::Call {
+            address,
+            condition: None
+        }),
         op1(0b1100_0111, MASK_543, Ok).map(|_target| todo!("rst tgt3")),
         //
         op1(0b1100_0001, MASK_54, Ok).map(|_| todo!("pop r16stk")),
@@ -161,19 +188,19 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         preceded(
             0b1100_1011,
             alt!(
-                op1(0b0000_0000, 0b0000_0111, Ok).map(|_| todo!("rlc r8")),
-                op1(0b0000_0001, 0b0000_0111, Ok).map(|_| todo!("rrc r8")),
-                op1(0b0000_0010, 0b0000_0111, Ok).map(|_| todo!("rl r8")),
-                op1(0b0000_0011, 0b0000_0111, Ok).map(|_| todo!("rr r8")),
-                op1(0b0000_0100, 0b0000_0111, Ok).map(|_| todo!("sla r8")),
-                op1(0b0000_0101, 0b0000_0111, Ok).map(|_| todo!("sra r8")),
-                op1(0b0000_0110, 0b0000_0111, Ok).map(|_| todo!("swap r8")),
-                op1(0b0000_0111, 0b0000_0111, Ok).map(|_| todo!("srl r8")),
-                op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                op1(0b0000_0000, MASK_210, Ok).map(|_| todo!("rlc r8")),
+                op1(0b0000_0001, MASK_210, Ok).map(|_| todo!("rrc r8")),
+                op1(0b0000_0010, MASK_210, Ok).map(|_| todo!("rl r8")),
+                op1(0b0000_0011, MASK_210, Ok).map(|_| todo!("rr r8")),
+                op1(0b0000_0100, MASK_210, Ok).map(|_| todo!("sla r8")),
+                op1(0b0000_0101, MASK_210, Ok).map(|_| todo!("sra r8")),
+                op1(0b0000_0110, MASK_210, Ok).map(|_| todo!("swap r8")),
+                op1(0b0000_0111, MASK_210, Ok).map(|_| todo!("srl r8")),
+                op2(0b0100_0000, (MASK_543, Ok), (MASK_210, Ok))
                     .map(|(_, _)| { todo!("bit b3, r8") }),
-                op2(0b1000_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                op2(0b1000_0000, (MASK_543, Ok), (MASK_210, Ok))
                     .map(|(_, _)| { todo!("res b3, r8") }),
-                op2(0b1100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
+                op2(0b1100_0000, (MASK_543, Ok), (MASK_210, Ok))
                     .map(|(_, _)| { todo!("set b3, r8") }),
             )
         ),
@@ -185,7 +212,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b1111_0000.value(Instruction::Nop), // todo!("ldh a), [imm8]"
         0b1111_1010.value(Instruction::Nop), // todo!("ld a), [imm16]"
         //
-        0b1110_1000.value(Instruction::Nop), // todo!("add sp), imm8"
+        preceded(0b1110_1000, i8).map(Instruction::AddSp),
         0b1111_1000.value(Instruction::Nop), // todo!("ld hl), sp + imm8"
         0b1111_1001.value(Instruction::Nop), // todo!("ld sp), hl"
         //
@@ -220,7 +247,7 @@ fn op1<'a, O, E: ParserError<&'a [u8]>>(
     map_param: impl Fn(u8) -> Result<O, E>,
 ) -> impl Parser<&'a [u8], O, E> {
     move |input: &mut &'a [u8]| {
-        let byte = any.parse_next(input)?;
+        let byte = u8.parse_next(input)?;
         if byte & !mask == opcode {
             // TODO explain
             map_param(get_param(byte, mask))
@@ -239,7 +266,7 @@ fn op2<'a, O1, O2, E: ParserError<&'a [u8]>>(
     (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, E>),
 ) -> impl Parser<&'a [u8], (O1, O2), E> {
     move |input: &mut &'a [u8]| {
-        let byte = any.parse_next(input)?;
+        let byte = u8.parse_next(input)?;
         if byte & !mask1 & !mask2 == opcode {
             let param1 = map_param1(get_param(byte, mask1))?;
             let param2 = map_param2(get_param(byte, mask2))?;
@@ -258,14 +285,45 @@ fn get_param(opcode: u8, mask: u8) -> u8 {
 
 /// Parse a 2-byte little-endian address from the input
 fn address(input: &mut &[u8]) -> ModalResult<Address> {
-    let (b0, b1) = (any, any).parse_next(input)?;
-    Ok(Address(u16::from_le_bytes([b0, b1])))
+    u16(Endianness::Little).map(Address).parse_next(input)
+}
+
+/// Parse a condition code from a 2-bit opcode parameter
+///
+/// The parameter should be shifted down to the bottom two bits (which [op1]
+/// does automatically). Any value greater than `0b11` is invalid.
+fn cond(input: u8) -> ModalResult<ConditionCode> {
+    match input {
+        0b00 => Ok(ConditionCode::Nz),
+        0b01 => Ok(ConditionCode::Z),
+        0b10 => Ok(ConditionCode::Nc),
+        0b11 => Ok(ConditionCode::C),
+        _ => todo!("error"),
+    }
+}
+
+/// Parse an 8-bit register reference from a 3-bit opcode parameter
+///
+/// The parameter should be shifted down to the bottom three bits (which [op1]
+/// does automatically). Any value greater than `0b111` is invalid.
+fn r8(input: u8) -> ModalResult<Register8> {
+    match input {
+        0b000 => Ok(Register8::B),
+        0b001 => Ok(Register8::C),
+        0b010 => Ok(Register8::D),
+        0b011 => Ok(Register8::E),
+        0b100 => Ok(Register8::H),
+        0b101 => Ok(Register8::L),
+        0b110 => Ok(Register8::Hl),
+        0b111 => Ok(Register8::A),
+        _ => todo!("error"),
+    }
 }
 
 /// Parse a 16-bit register reference from a 2-bit opcode parameter
 ///
-/// The parameter should be shifted down to the bottom two bits (which [op] does
-/// automatically). Any value greater than `0b11` is invalid.
+/// The parameter should be shifted down to the bottom two bits (which [op1]
+/// does automatically). Any value greater than `0b11` is invalid.
 fn r16(input: u8) -> ModalResult<Register16> {
     match input {
         0b00 => Ok(Register16::Bc),
