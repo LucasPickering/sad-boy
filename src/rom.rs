@@ -2,7 +2,7 @@
 
 use crate::emu::{
     Add, Address, Bit, ConditionCode, Dec, Inc, Instruction, Jump, Load, Math,
-    MathTarget, Register8, Register16, Register16Stack,
+    MathTarget, Register8, Register16, Register16Memory, Register16Stack,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
@@ -95,9 +95,13 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop),
         //
-        op1(0b0000_0001, MASK_54, Ok).map(|_dest| todo!("ld r16, imm16")),
-        op1(0b0000_0010, MASK_54, Ok).map(|_dest| todo!("ld [r16mem], a")),
-        op1(0b0000_1010, MASK_54, Ok).map(|_source| todo!("ld a, [r16mem]")),
+        (op1(0b0000_0001, MASK_54, r16), imm16).map(|(dest, source)| {
+            Instruction::Ld(Load::R16Const { source, dest })
+        }),
+        op1(0b0000_0010, MASK_54, r16mem)
+            .map(|dest| Instruction::Ld(Load::R16MemA { dest })),
+        op1(0b0000_1010, MASK_54, r16mem)
+            .map(|source| Instruction::Ld(Load::AR16Mem { source })),
         preceded(0b0000_1000, address)
             .map(|dest| Instruction::Ld(Load::AddressSp { dest })),
         //
@@ -113,7 +117,9 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         op1(0b0000_0101, MASK_543, r8)
             .map(|operand| Instruction::Dec(Dec::R8(operand))),
         //
-        op1(0b0000_0110, MASK_543, Ok).map(|_| todo!("ld r8, imm8")),
+        (op1(0b0000_0110, MASK_543, r8), imm8).map(|(dest, source)| {
+            Instruction::Ld(Load::R8Const { dest, source })
+        }),
         0b0000_0111.value(Instruction::Rlca),
         0b0000_1111.value(Instruction::Rrca),
         0b0001_0111.value(Instruction::Rla),
@@ -138,8 +144,8 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // ===== BLOCK 1 =====
         // Halt has to come first because it's a subset of the following opcode
         0b0111_0110.value(Instruction::Halt),
-        op2(0b0100_0000, (0b0011_1000, Ok), (0b0000_0111, Ok))
-            .map(|(_dest, _source)| todo!("ld r8, r8")),
+        op2(0b0100_0000, (0b0011_1000, r8), (0b0000_0111, r8))
+            .map(|(dest, source)| Instruction::Ld(Load::R8R8 { dest, source })),
         // ===== BLOCK 2 =====
         math_r8(0b1000_0000, Math::Add),
         math_r8(0b1000_1000, Math::Adc),
@@ -207,10 +213,12 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         //
         0b1110_0010.value(Instruction::Nop), // todo!("ldh [c]), a"
         0b1110_0000.value(Instruction::Nop), // todo!("ldh [imm8]), a"
-        0b1110_1010.value(Instruction::Nop), // todo!("ld [imm16]), a"
+        preceded(0b1110_1010, address)
+            .map(|dest| Instruction::Ld(Load::AddressA { dest })),
         0b1111_0010.value(Instruction::Nop), // todo!("ldh a), [c]"
         0b1111_0000.value(Instruction::Nop), // todo!("ldh a), [imm8]"
-        0b1111_1010.value(Instruction::Nop), // todo!("ld a), [imm16]"
+        preceded(0b1111_1010, address)
+            .map(|source| Instruction::Ld(Load::AAddress { source })),
         //
         preceded(0b1110_1000, i8).map(Instruction::AddSp),
         0b1111_1000.value(Instruction::Nop), // todo!("ld hl), sp + imm8"
@@ -285,7 +293,7 @@ fn get_param(opcode: u8, mask: u8) -> u8 {
 
 /// Parse a 2-byte little-endian address from the input
 fn address(input: &mut &[u8]) -> ModalResult<Address> {
-    u16(Endianness::Little).map(Address).parse_next(input)
+    imm16.map(Address).parse_next(input)
 }
 
 /// Parse a condition code from a 2-bit opcode parameter
@@ -312,6 +320,16 @@ fn bit(input: u8) -> ModalResult<Bit> {
     } else {
         todo!("error")
     }
+}
+
+/// Parse one byte as a constant value
+fn imm8(input: &mut &[u8]) -> ModalResult<u8> {
+    u8.parse_next(input)
+}
+
+/// Parse two bytes little-endian bytes as a constant value
+fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
+    u16(Endianness::Little).parse_next(input)
 }
 
 /// Parse an 8-bit register reference from a 3-bit opcode parameter
@@ -366,6 +384,21 @@ fn r16(input: u8) -> ModalResult<Register16> {
         0b01 => Ok(Register16::De),
         0b10 => Ok(Register16::Hl),
         0b11 => Ok(Register16::Sp),
+        _ => todo!("error"),
+    }
+}
+
+/// Parse a 16-bit register reference from a 2-bit opcode parameter (for
+/// `LD` only!!)
+///
+/// The parameter should be shifted down to the bottom two bits (which [op1]
+/// does automatically). Any value greater than `0b11` is invalid.
+fn r16mem(input: u8) -> ModalResult<Register16Memory> {
+    match input {
+        0b00 => Ok(Register16Memory::Bc),
+        0b01 => Ok(Register16Memory::De),
+        0b10 => Ok(Register16Memory::Hli),
+        0b11 => Ok(Register16Memory::Hld),
         _ => todo!("error"),
     }
 }

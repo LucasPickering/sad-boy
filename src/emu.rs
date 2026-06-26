@@ -369,8 +369,22 @@ pub enum Jump {
 /// Variations of the `LD` (load) instruction
 #[derive(Copy, Clone, Debug)]
 pub enum Load {
+    /// Load from `a` to a memory address
+    AddressA { dest: Address },
+    /// Load from a memory address to `a`
+    AAddress { source: Address },
     /// Load from `sp` to a memory address
     AddressSp { dest: Address },
+    /// Load a constant into an 8-bit register
+    R8Const { dest: Register8, source: u8 },
+    /// Load from one 8-bit register to another
+    R8R8 { dest: Register8, source: Register8 },
+    /// Load a constant into a 16-bit register
+    R16Const { dest: Register16, source: u16 },
+    /// Load from register `a` into [Register16Memory]
+    R16MemA { dest: Register16Memory },
+    /// Load from [Register16Memory] into register `a`
+    AR16Mem { source: Register16Memory },
 }
 
 /// Source of an 8-bit value
@@ -441,6 +455,22 @@ pub enum Register16Stack {
     De,
     /// Value in register `hl`
     Hl,
+}
+
+/// 16-bit register for load operations
+///
+/// Most instructions use [Register16], but `LD` uses `hli` and `hld` (AKA `hl+`
+/// and `hl-`). `r16mem` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
+#[derive(Copy, Clone, Debug)]
+pub enum Register16Memory {
+    /// Value in register `bc`
+    Bc,
+    /// Value in register `de`
+    De,
+    /// Read from/write to register `hl`, then increment it
+    Hli,
+    /// Read from/write to register `hl`, then decrement it
+    Hld,
 }
 
 /// Condition for a conditional jump or call
