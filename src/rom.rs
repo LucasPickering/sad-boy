@@ -1,17 +1,23 @@
 //! Utilities for ROM management
 
 use crate::emu::{
-    Add, Address, Bit, ConditionCode, Dec, Inc, Instruction, Jump, Load, Math,
-    MathTarget, Register8, Register16, Register16Memory, Register16Stack,
+    Add, Address, Bit, ConditionCode, Dec, Inc, Instruction, Jump, Load,
+    LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
+    Register16Stack,
 };
 use color_eyre::eyre::{self, Context, eyre};
 use log::info;
-use std::{fs, path::Path};
+use std::{
+    error::Error,
+    fmt::{self, Display},
+    fs,
+    path::Path,
+};
 use winnow::{
     ModalResult, Parser,
     binary::{Endianness, i8, u8, u16},
     combinator::{preceded, repeat},
-    error::{ContextError, ErrMode, ParserError},
+    error::{ContextError, ErrMode, FromExternalError, ParserError},
     token::take,
 };
 
@@ -211,18 +217,21 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             )
         ),
         //
-        0b1110_0010.value(Instruction::Nop), // todo!("ldh [c]), a"
-        0b1110_0000.value(Instruction::Nop), // todo!("ldh [imm8]), a"
+        0b1110_0010.value(Instruction::Ldh(LoadHigh::CA)),
+        preceded(0b1110_0000, imm8)
+            .map(|offset| Instruction::Ldh(LoadHigh::ConstA(offset))),
         preceded(0b1110_1010, address)
             .map(|dest| Instruction::Ld(Load::AddressA { dest })),
-        0b1111_0010.value(Instruction::Nop), // todo!("ldh a), [c]"
-        0b1111_0000.value(Instruction::Nop), // todo!("ldh a), [imm8]"
+        0b1111_0010.value(Instruction::Ldh(LoadHigh::AC)),
+        preceded(0b1111_0000, imm8)
+            .map(|offset| Instruction::Ldh(LoadHigh::AConst(offset))),
         preceded(0b1111_1010, address)
             .map(|source| Instruction::Ld(Load::AAddress { source })),
         //
         preceded(0b1110_1000, i8).map(Instruction::AddSp),
-        0b1111_1000.value(Instruction::Nop), // todo!("ld hl), sp + imm8"
-        0b1111_1001.value(Instruction::Nop), // todo!("ld sp), hl"
+        preceded(0b1111_1000, i8)
+            .map(|offset| Instruction::Ld(Load::HlSpOffset { offset })),
+        0b1111_1001.value(Instruction::Ld(Load::SpHl)),
         //
         0b1111_0011.value(Instruction::Di),
         0b1111_1011.value(Instruction::Ei),
@@ -252,13 +261,14 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
 fn op1<'a, O>(
     opcode: u8,
     mask: u8,
-    map_param: impl Fn(u8) -> Result<O, ParseError>,
+    map_param: impl Fn(u8) -> Result<O, BitParameterError>,
 ) -> impl Parser<&'a [u8], O, ParseError> {
     move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask == opcode {
             // TODO explain
             map_param(get_param(byte, mask))
+                .map_err(|error| ParseError::from_external_error(input, error))
         } else {
             todo!()
         }
@@ -270,14 +280,20 @@ fn op1<'a, O>(
 /// See [op1] for more info.
 fn op2<'a, O1, O2>(
     opcode: u8,
-    (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, ParseError>),
-    (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, ParseError>),
+    (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, BitParameterError>),
+    (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, BitParameterError>),
 ) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
     move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask1 & !mask2 == opcode {
-            let param1 = map_param1(get_param(byte, mask1))?;
-            let param2 = map_param2(get_param(byte, mask2))?;
+            let param1 =
+                map_param1(get_param(byte, mask1)).map_err(|error| {
+                    ParseError::from_external_error(input, error)
+                })?;
+            let param2 =
+                map_param2(get_param(byte, mask2)).map_err(|error| {
+                    ParseError::from_external_error(input, error)
+                })?;
             Ok((param1, param2))
         } else {
             todo!()
@@ -300,13 +316,16 @@ fn address(input: &mut &[u8]) -> ModalResult<Address> {
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op1]
 /// does automatically). Any value greater than `0b11` is invalid.
-fn cond(input: u8) -> ModalResult<ConditionCode> {
+fn cond(input: u8) -> Result<ConditionCode, BitParameterError> {
     match input {
         0b00 => Ok(ConditionCode::Nz),
         0b01 => Ok(ConditionCode::Z),
         0b10 => Ok(ConditionCode::Nc),
         0b11 => Ok(ConditionCode::C),
-        _ => todo!("error"),
+        _ => Err(BitParameterError {
+            bits: input,
+            expected: "0-3",
+        }),
     }
 }
 
@@ -314,11 +333,14 @@ fn cond(input: u8) -> ModalResult<ConditionCode> {
 ///
 /// The parameter should be shifted down to the bottom three bits (which [op1]
 /// does automatically). Any value greater than `0b111` is invalid.
-fn bit(input: u8) -> ModalResult<Bit> {
+fn bit(input: u8) -> Result<Bit, BitParameterError> {
     if input <= 0b111 {
         Ok(Bit(input))
     } else {
-        todo!("error")
+        Err(BitParameterError {
+            bits: input,
+            expected: "0-7",
+        })
     }
 }
 
@@ -336,7 +358,7 @@ fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
 ///
 /// The parameter should be shifted down to the bottom three bits (which [op1]
 /// does automatically). Any value greater than `0b111` is invalid.
-fn r8(input: u8) -> ModalResult<Register8> {
+fn r8(input: u8) -> Result<Register8, BitParameterError> {
     match input {
         0b000 => Ok(Register8::B),
         0b001 => Ok(Register8::C),
@@ -346,7 +368,10 @@ fn r8(input: u8) -> ModalResult<Register8> {
         0b101 => Ok(Register8::L),
         0b110 => Ok(Register8::Hl),
         0b111 => Ok(Register8::A),
-        _ => todo!("error"),
+        _ => Err(BitParameterError {
+            bits: input,
+            expected: "0-7",
+        }),
     }
 }
 
@@ -378,13 +403,16 @@ fn math_r8<'a>(
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op1]
 /// does automatically). Any value greater than `0b11` is invalid.
-fn r16(input: u8) -> ModalResult<Register16> {
+fn r16(input: u8) -> Result<Register16, BitParameterError> {
     match input {
         0b00 => Ok(Register16::Bc),
         0b01 => Ok(Register16::De),
         0b10 => Ok(Register16::Hl),
         0b11 => Ok(Register16::Sp),
-        _ => todo!("error"),
+        _ => Err(BitParameterError {
+            bits: input,
+            expected: "0-3",
+        }),
     }
 }
 
@@ -393,13 +421,16 @@ fn r16(input: u8) -> ModalResult<Register16> {
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op1]
 /// does automatically). Any value greater than `0b11` is invalid.
-fn r16mem(input: u8) -> ModalResult<Register16Memory> {
+fn r16mem(input: u8) -> Result<Register16Memory, BitParameterError> {
     match input {
         0b00 => Ok(Register16Memory::Bc),
         0b01 => Ok(Register16Memory::De),
         0b10 => Ok(Register16Memory::Hli),
         0b11 => Ok(Register16Memory::Hld),
-        _ => todo!("error"),
+        _ => Err(BitParameterError {
+            bits: input,
+            expected: "0-3",
+        }),
     }
 }
 
@@ -408,24 +439,49 @@ fn r16mem(input: u8) -> ModalResult<Register16Memory> {
 ///
 /// The parameter should be shifted down to the bottom two bits (which [op1]
 /// does automatically). Any value greater than `0b11` is invalid.
-fn r16stk(input: u8) -> ModalResult<Register16Stack> {
+fn r16stk(input: u8) -> Result<Register16Stack, BitParameterError> {
     match input {
         0b00 => Ok(Register16Stack::Bc),
         0b01 => Ok(Register16Stack::De),
         0b10 => Ok(Register16Stack::Hl),
         0b11 => Ok(Register16Stack::Af),
-        _ => todo!("error"),
+        _ => Err(BitParameterError {
+            bits: input,
+            expected: "0-3",
+        }),
     }
 }
 
 /// TODO
-fn tgt3(input: u8) -> ModalResult<Address> {
+fn tgt3(input: u8) -> Result<Address, BitParameterError> {
     if input <= 0b111 {
-        Ok(Address((input * 8) as u16))
+        Ok(Address((input * 8).into()))
     } else {
-        todo!()
+        Err(BitParameterError {
+            bits: input,
+            expected: "0-7",
+        })
     }
 }
+
+/// TODO
+#[derive(Debug)]
+struct BitParameterError {
+    bits: u8,
+    expected: &'static str,
+}
+
+impl Display for BitParameterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Invalid bit parameter {:b}; expected {}",
+            self.bits, self.expected,
+        )
+    }
+}
+
+impl Error for BitParameterError {}
 
 #[cfg(test)]
 mod tests {

@@ -237,6 +237,8 @@ pub enum Instruction {
     },
     /// Move a value
     Ld(Load),
+    /// Move a value, but different
+    Ldh(LoadHigh),
     /// TODO
     Math { operation: Math, target: MathTarget },
     /// No op
@@ -375,6 +377,10 @@ pub enum Load {
     AAddress { source: Address },
     /// Load from `sp` to a memory address
     AddressSp { dest: Address },
+    /// Add an offset to the value in `sp` and copy that into `hl`
+    HlSpOffset { offset: i8 },
+    /// Load from `sp` to `hl`
+    SpHl,
     /// Load a constant into an 8-bit register
     R8Const { dest: Register8, source: u8 },
     /// Load from one 8-bit register to another
@@ -385,6 +391,21 @@ pub enum Load {
     R16MemA { dest: Register16Memory },
     /// Load from [Register16Memory] into register `a`
     AR16Mem { source: Register16Memory },
+}
+
+/// Variations of the `LDH` (load high) instruction
+///
+/// This moves values in/out of the `$FF00-$FFFF` space of memory.
+#[derive(Copy, Clone, Debug)]
+pub enum LoadHigh {
+    /// Copy the byte at address `$FF00+c` into register `a`
+    AC,
+    /// Copy the byte at `$FF00+offset` into register `a`
+    AConst(u8),
+    /// Copy the value in register `a` into the byte at address `$FF00+c`
+    CA,
+    /// Copy the value in register `a` into the byte at address `$FF00+offset`
+    ConstA(u8),
 }
 
 /// Source of an 8-bit value
