@@ -10,21 +10,20 @@ use log::debug;
 use std::{io, path::Path};
 
 /// Game Boy emulator
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GameBoy {
     registers: Registers,
+    rom: Rom,
 }
 
 impl GameBoy {
-    /// Create a new emulator
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Load a ROM from a file and begin running it
-    pub fn load_rom(&mut self, path: &Path) -> eyre::Result<()> {
-        let _rom = Rom::load(path)?;
-        Ok(())
+    /// Boot the Game Boy by loading a ROM from a file
+    pub fn load(path: &Path) -> eyre::Result<Self> {
+        let rom = Rom::load(path)?;
+        Ok(Self {
+            registers: Registers::default(),
+            rom,
+        })
     }
 
     /// Update the emulator state based on an instruction

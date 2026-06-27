@@ -16,7 +16,7 @@ use std::{
 use winnow::{
     ModalResult, Parser,
     binary::{Endianness, i8, u8, u16},
-    combinator::{preceded, repeat},
+    combinator::{fail, preceded, repeat},
     error::{ContextError, ErrMode, FromExternalError, ParserError},
     token::take,
 };
@@ -28,6 +28,7 @@ use winnow::{
 /// - [Instructions](https://gbdev.io/pandocs/CPU_Instruction_Set.html)
 ///
 /// The header begins at `0x100`; instructions begin at
+#[derive(Debug)]
 pub struct Rom {
     /// Metadata from the range `[0x0100, 0x014F]`
     header: RomHeader,
@@ -47,6 +48,7 @@ impl Rom {
     }
 }
 
+#[derive(Debug)]
 struct RomHeader {}
 
 type ParseError = ErrMode<ContextError>;
@@ -270,7 +272,8 @@ fn op1<'a, O>(
             map_param(get_param(byte, mask))
                 .map_err(|error| ParseError::from_external_error(input, error))
         } else {
-            todo!()
+            // TODO do this betterly
+            fail.parse_next(input)
         }
     }
 }
@@ -296,7 +299,8 @@ fn op2<'a, O1, O2>(
                 })?;
             Ok((param1, param2))
         } else {
-            todo!()
+            // TODO do this betterly
+            fail.parse_next(input)
         }
     }
 }
