@@ -10,23 +10,23 @@ use log::debug;
 use std::{io, path::Path};
 
 /// Game Boy emulator
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GameBoy {
     registers: Registers,
-    rom: Rom,
 }
 
 impl GameBoy {
-    /// Boot the Game Boy by loading a ROM from a file
-    pub fn load(path: &Path) -> eyre::Result<Self> {
+    /// Boot the Game Boy, load a ROM from a file, and run it
+    pub fn run(path: &Path) -> eyre::Result<()> {
+        let mut game_boy = Self::default();
         let rom = Rom::load(path)?;
-        Ok(Self {
-            registers: Registers::default(),
-            rom,
-        })
+        for instruction in &rom.instructions {
+            game_boy.execute(*instruction);
+        }
+        Ok(())
     }
 
-    /// Update the emulator state based on an instruction
+    /// Execute a single instruction
     fn execute(&mut self, instruction: Instruction) {
         match instruction {
             Instruction::Nop => {}
@@ -189,7 +189,7 @@ impl Flags {
 /// CPU instruction
 ///
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Instruction {
     /// Add a value to a register
     /// TODO flatten this?
@@ -294,7 +294,7 @@ pub enum Instruction {
 }
 
 /// TODO
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Math {
     /// TODO
     Adc,
@@ -315,7 +315,7 @@ pub enum Math {
 }
 
 /// TODO
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MathTarget {
     /// Byte in a register
     Register(Register8),
@@ -326,7 +326,7 @@ pub enum MathTarget {
 }
 
 /// Variations of the `ADD` instruction
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Add {
     /// Add a 16-bit value to `hl`
     Hl(Register16),
@@ -335,7 +335,7 @@ pub enum Add {
 }
 
 /// Variations of the `DEC` (decrement) instruction
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Dec {
     /// Decrement an 8-bit register
     R8(Register8),
@@ -346,7 +346,7 @@ pub enum Dec {
 }
 
 /// Variations of the `INC` (increment) instruction
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Inc {
     /// Increment an 8-bit register
     R8(Register8),
@@ -357,7 +357,7 @@ pub enum Inc {
 }
 
 /// Variations of the `JP` (jump) instruction
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Jump {
     /// Jump to a specific memory address
     Address(Address),
@@ -368,7 +368,7 @@ pub enum Jump {
 }
 
 /// Variations of the `LD` (load) instruction
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Load {
     /// Load from `a` to a memory address
     AddressA { dest: Address },
@@ -395,7 +395,7 @@ pub enum Load {
 /// Variations of the `LDH` (load high) instruction
 ///
 /// This moves values in/out of the `$FF00-$FFFF` space of memory.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LoadHigh {
     /// Copy the byte at address `$FF00+c` into register `a`
     AC,
@@ -408,7 +408,7 @@ pub enum LoadHigh {
 }
 
 /// Source of an 8-bit value
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value8 {
     /// Value from a register
     Register(Register8),
@@ -431,7 +431,7 @@ impl From<Register8> for Value8 {
 /// 8-bit register value (excluding `f`)
 ///
 /// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register8 {
     A,
     B,
@@ -447,7 +447,7 @@ pub enum Register8 {
 /// Name of a 16-bit register
 ///
 /// `r16` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register16 {
     /// Value in register `bc`
     Bc,
@@ -465,7 +465,7 @@ pub enum Register16 {
 /// `sp`
 ///
 /// `r16stk` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register16Stack {
     /// Value in register `af`
     Af,
@@ -481,7 +481,7 @@ pub enum Register16Stack {
 ///
 /// Most instructions use [Register16], but `LD` uses `hli` and `hld` (AKA `hl+`
 /// and `hl-`). `r16mem` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register16Memory {
     /// Value in register `bc`
     Bc,
@@ -494,7 +494,7 @@ pub enum Register16Memory {
 }
 
 /// Condition for a conditional jump or call
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ConditionCode {
     /// Execute if `zero` flag is set
     Z,
@@ -509,11 +509,11 @@ pub enum ConditionCode {
 /// Index of a single bit in a byte
 ///
 /// Value can be `0-7`
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Bit(pub u8);
 
 /// Address of a byte of RAM
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Address(pub u16);
 
 #[cfg(test)]

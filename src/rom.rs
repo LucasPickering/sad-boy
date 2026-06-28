@@ -5,7 +5,7 @@ use crate::emu::{
     LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
     Register16Stack,
 };
-use color_eyre::eyre::{self, Context, eyre};
+use color_eyre::eyre::{self, Context};
 use log::info;
 use std::{
     error::Error,
@@ -16,8 +16,12 @@ use std::{
 use winnow::{
     ModalResult, Parser,
     binary::{Endianness, i8, u8, u16},
-    combinator::{fail, preceded, repeat},
-    error::{ContextError, ErrMode, FromExternalError, ParserError},
+    combinator::{cut_err, eof, fail, preceded, repeat, terminated, trace},
+    error::{
+        ContextError, ErrMode, FromExternalError, ParserError, StrContext,
+        StrContextValue,
+    },
+    stream::{Offset, Stream},
     token::take,
 };
 
@@ -31,9 +35,9 @@ use winnow::{
 #[derive(Debug)]
 pub struct Rom {
     /// Metadata from the range `[0x0100, 0x014F]`
-    header: RomHeader,
+    pub header: RomHeader,
     /// All instructions from the ROM body, loaded and parsed
-    instructions: Vec<Instruction>,
+    pub instructions: Vec<Instruction>,
 }
 
 impl Rom {
@@ -42,23 +46,110 @@ impl Rom {
         // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
             .context(format!("Error reading ROM from {}", path.display()))?;
-        let rom = parse_rom.parse(&data).map_err(|e| eyre!("{e}"))?;
+        // Don't use Parser::parse() because its error type doesn't print well
+        // for binary data
+        let mut input = data.as_slice();
+        let start = input.checkpoint();
+        let rom = parse_rom.parse_next(&mut input).map_err(|error| {
+            let error = error
+                .into_inner()
+                .expect("Complete parser should not return Incomplete");
+            RomParseError::new(input, input.offset_from(&start), error)
+        })?;
         info!("Loaded ROM from {}", path.display());
         Ok(rom)
     }
 }
 
+/// TODO
 #[derive(Debug)]
-struct RomHeader {}
+struct RomParseError {
+    /// A subslice of the parsing input, with a certain amount of bytes
+    /// before/after the error location
+    ///
+    /// This *could* be an array since it has a fixed max length, but it could
+    /// potentially be shorter than `WINDOW_SIZE*2` if the error is at the
+    /// beginning/end. A vec is much easier.
+    input: Vec<u8>,
+    /// Index of the first byte in `input`, relative to the original input
+    input_start: usize,
+    /// Index of the byte that failed to parse
+    offset: usize,
+    /// Inner parsing error
+    error: ContextError,
+}
+
+impl RomParseError {
+    /// How many bytes before/after the error to retain
+    const WINDOW_SIZE: usize = 16;
+
+    fn new(input: &[u8], offset: usize, error: ContextError) -> Self {
+        // Grab a subset of the input
+        let start = offset.saturating_sub(Self::WINDOW_SIZE);
+        let end = offset.saturating_add(Self::WINDOW_SIZE).min(input.len());
+        Self {
+            input: input[start..end].to_owned(),
+            input_start: start,
+            offset,
+            error,
+        }
+    }
+}
+
+impl Display for RomParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const BYTES_PER_ROW: usize = 4;
+
+        writeln!(f, "Parse error at byte 0x{:x}", self.offset)?;
+        // Pretty byte rendering
+        for (bytes, offset) in self
+            .input
+            .chunks(BYTES_PER_ROW)
+            // For each byte, include its index in the full input
+            .zip((self.input_start..).step_by(BYTES_PER_ROW))
+        {
+            write!(f, "0x{offset:x} |")?;
+            for byte in bytes {
+                write!(f, " {byte:0<8b}")?;
+            }
+            writeln!(f)?;
+
+            // If the offending byte is on this line, point it out
+            if (offset..(offset + BYTES_PER_ROW)).contains(&self.offset) {
+                // Fixed margin padding plus 9 chars per byte within the row
+                let padding = 9 + (self.offset - offset) * 9;
+                writeln!(f, "{:>padding$}", "^")?;
+            }
+        }
+        writeln!(f, "{}", self.error)?;
+        Ok(())
+    }
+}
+
+impl Error for RomParseError {}
+
+/// Metadata at the beginning of a ROM
+#[derive(Debug)]
+pub struct RomHeader {}
 
 type ParseError = ErrMode<ContextError>;
 
 /// Parse all data from the ROM
 fn parse_rom(input: &mut &[u8]) -> ModalResult<Rom> {
-    let (header, instructions) = (
-        take(0x014Fusize).map(|_| RomHeader {}), // Skip the header for now
-        repeat(1.., parse_instruction),
+    let (header, instructions, ()) = (
+        take(0x014Fusize)
+            .context(StrContext::Label("ROM header"))
+            .map(|_| RomHeader {}), // Skip the header for now
+        // The rest of the ROM should be instructions, so if any of them fail
+        // to parse, error immediately
+        repeat(1.., cut_err(parse_instruction))
+            .context(StrContext::Label("ROM instructions")),
+        eof.void()
+            .context(StrContext::Expected(StrContextValue::Description(
+                "end of file",
+            ))),
     )
+        .context(StrContext::Label("ROM"))
         .parse_next(input)?;
     Ok(Rom {
         header,
@@ -74,17 +165,32 @@ macro_rules! alt {
             use winnow::Parser;
 
             let start = input.checkpoint();
+            let mut error: Option<ErrMode<ContextError>> = None;
 
             $({
                 let result: ModalResult<_> = $parser.parse_next(input);
                 // Backtrack errors get tossed, Ok and fatal errors exit
-                if !result.as_ref().is_err_and(ParserError::<&[u8]>::is_backtrack) {
-                    return result;
+                match result {
+                    Err(e) if ParserError::<&[u8]>::is_backtrack(&e) => {
+                        error = match error {
+                            Some(error) => Some(
+                                ParserError::<&[u8]>::or(error, e)
+                            ),
+                            None => Some(e),
+                        };
+                    }
+                    res => return res,
                 }
                 input.reset(&start);
             })*
 
-            todo!("fail for unknown instructions")
+            match error {
+                Some(e) => Err(e.append(input, &start)),
+                None => Err(ParserError::assert(
+                    input,
+                    "`alt!` needs at least one parser",
+                )),
+            }
         }
     };
 }
@@ -96,9 +202,11 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     const MASK_54: u8 = 0b0011_0000;
     const MASK_543: u8 = 0b0011_1000;
 
-    // A giant switch statement for each possible opcode. Most instructions are
+    // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.
-    // https://gbdev.io/pandocs/CPU_Instruction_Set.html#block-0
+    // https://gbdev.io/pandocs/CPU_Instruction_Set.html
+    // TODO add cut_err() on stuff
+    // TODO add trace() on every instruction
     alt!(
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop),
@@ -238,6 +346,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b1111_0011.value(Instruction::Di),
         0b1111_1011.value(Instruction::Ei),
     )
+    .context(StrContext::Label("instruction"))
     .parse_next(input)
 }
 
@@ -265,17 +374,16 @@ fn op1<'a, O>(
     mask: u8,
     map_param: impl Fn(u8) -> Result<O, BitParameterError>,
 ) -> impl Parser<&'a [u8], O, ParseError> {
-    move |input: &mut &'a [u8]| {
+    trace("op1", move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask == opcode {
             // TODO explain
             map_param(get_param(byte, mask))
                 .map_err(|error| ParseError::from_external_error(input, error))
         } else {
-            // TODO do this betterly
-            fail.parse_next(input)
+            Err(ParserError::from_input(input))
         }
-    }
+    })
 }
 
 /// Create a parser for an opcode with two embedded bit parameters
@@ -286,7 +394,7 @@ fn op2<'a, O1, O2>(
     (mask1, map_param1): (u8, impl Fn(u8) -> Result<O1, BitParameterError>),
     (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, BitParameterError>),
 ) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
-    move |input: &mut &'a [u8]| {
+    trace("op2", move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
         if byte & !mask1 & !mask2 == opcode {
             let param1 =
@@ -302,7 +410,7 @@ fn op2<'a, O1, O2>(
             // TODO do this betterly
             fail.parse_next(input)
         }
-    }
+    })
 }
 
 /// Extract a bit param value from a parsed opcode byte; the param will be
@@ -518,5 +626,23 @@ mod tests {
         let input = &[0b0101_0101];
         let mut parser = op2(opcode, (masks.0, Ok), (masks.1, Ok));
         assert_eq!(parser.parse(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::ret(&[0b1100_1001], Instruction::Ret(None))]
+    #[case::ret_cond_nz(
+        &[0b1100_0000], Instruction::Ret(Some(ConditionCode::Nz))
+    )]
+    #[case::ret_cond_z(
+        &[0b1100_1000], Instruction::Ret(Some(ConditionCode::Z))
+    )]
+    #[case::ret_cond_nc(
+        &[0b1101_0000], Instruction::Ret(Some(ConditionCode::Nc))
+    )]
+    #[case::ret_cond_c(
+        &[0b1101_1000], Instruction::Ret(Some(ConditionCode::C))
+    )]
+    fn instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
+        assert_eq!(parse_instruction.parse(bytes).unwrap(), expected);
     }
 }
