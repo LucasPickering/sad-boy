@@ -11,12 +11,13 @@ use std::{
     error::Error,
     fmt::{self, Display},
     fs,
+    ops::BitOr,
     path::Path,
 };
 use winnow::{
     ModalResult, Parser,
     binary::{Endianness, i8, u8, u16},
-    combinator::{cut_err, eof, fail, preceded, repeat, terminated, trace},
+    combinator::{cut_err, eof, preceded, repeat, trace},
     error::{
         ContextError, ErrMode, FromExternalError, ParserError, StrContext,
         StrContextValue,
@@ -376,10 +377,11 @@ fn op1<'a, O>(
 ) -> impl Parser<&'a [u8], O, ParseError> {
     trace("op1", move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
-        if byte & !mask == opcode {
-            // TODO explain
-            map_param(get_param(byte, mask))
-                .map_err(|error| ParseError::from_external_error(input, error))
+        if let Some([param]) = get_bit_params(opcode, [mask], byte) {
+            let param = map_param(param).map_err(|error| {
+                ParseError::from_external_error(input, error)
+            })?;
+            Ok(param)
         } else {
             Err(ParserError::from_input(input))
         }
@@ -396,27 +398,47 @@ fn op2<'a, O1, O2>(
 ) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
     trace("op2", move |input: &mut &'a [u8]| {
         let byte = u8.parse_next(input)?;
-        if byte & !mask1 & !mask2 == opcode {
-            let param1 =
-                map_param1(get_param(byte, mask1)).map_err(|error| {
-                    ParseError::from_external_error(input, error)
-                })?;
-            let param2 =
-                map_param2(get_param(byte, mask2)).map_err(|error| {
-                    ParseError::from_external_error(input, error)
-                })?;
+        if let Some([param1, param2]) =
+            get_bit_params(opcode, [mask1, mask2], byte)
+        {
+            let param1 = map_param1(param1).map_err(|error| {
+                ParseError::from_external_error(input, error)
+            })?;
+            let param2 = map_param2(param2).map_err(|error| {
+                ParseError::from_external_error(input, error)
+            })?;
             Ok((param1, param2))
         } else {
-            // TODO do this betterly
-            fail.parse_next(input)
+            Err(ParserError::from_input(input))
         }
     })
 }
 
-/// Extract a bit param value from a parsed opcode byte; the param will be
-/// shifted down to the rightmost bits
-fn get_param(opcode: u8, mask: u8) -> u8 {
-    (opcode & mask) >> mask.trailing_zeros()
+/// Check if the `input` byte matches the static `opcode`
+///
+/// If it does, extract each bit parameter. Each param value will be shifted
+/// down to the least significant bits.
+fn get_bit_params<const N: usize>(
+    opcode: u8,
+    masks: [u8; N],
+    input: u8,
+) -> Option<[u8; N]> {
+    // Make sure the static opcode has all 0s in the dynamic bits
+    let all_masks = masks.iter().fold(0, u8::bitor);
+    debug_assert_eq!(
+        opcode & all_masks,
+        0,
+        "Static opcode must have 0 for all dynamic bytes; \
+        opcode={opcode:b}, masks={masks:?}"
+    );
+    // If the static bits match the opcode
+    if input & !all_masks == opcode {
+        // Grab each dynamic param via its mask, with its bits shifted down
+        // to the right
+        Some(masks.map(|mask| (input & mask) >> mask.trailing_zeros()))
+    } else {
+        None
+    }
 }
 
 /// Parse a 2-byte little-endian address from the input
@@ -458,12 +480,12 @@ fn bit(input: u8) -> Result<Bit, BitParameterError> {
 
 /// Parse one byte as a constant value
 fn imm8(input: &mut &[u8]) -> ModalResult<u8> {
-    u8.parse_next(input)
+    cut_err(u8).parse_next(input)
 }
 
 /// Parse two bytes little-endian bytes as a constant value
 fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
-    u16(Endianness::Little).parse_next(input)
+    cut_err(u16(Endianness::Little)).parse_next(input)
 }
 
 /// Parse an 8-bit register reference from a 3-bit opcode parameter
