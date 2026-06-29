@@ -16,7 +16,7 @@ use std::{
 };
 use winnow::{
     ModalResult, Parser,
-    binary::{Endianness, i8, u8, u16},
+    binary::{self, Endianness},
     combinator::{cut_err, eof, preceded, repeat, trace},
     error::{
         ContextError, ErrMode, FromExternalError, ParserError, StrContext,
@@ -206,7 +206,6 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.
     // https://gbdev.io/pandocs/CPU_Instruction_Set.html
-    // TODO add cut_err() on stuff
     // TODO add trace() on every instruction
     alt!(
         // ===== BLOCK 0 =====
@@ -246,13 +245,15 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b0011_0111.value(Instruction::Scf),
         0b0011_1111.value(Instruction::Ccf),
         //
-        preceded(0b0001_1000, i8).map(|offset| Instruction::Jr {
-            offset,
+        preceded(0b0001_1000, imm8).map(|offset| Instruction::Jr {
+            // Parse as imm8 so we get its cut_err() call
+            offset: offset as i8,
             condition: None
         }),
-        (op1(0b0010_0000, 0b0001_1000, cond), i8).map(|(cond, offset)| {
+        (op1(0b0010_0000, 0b0001_1000, cond), imm8).map(|(cond, offset)| {
+            // Parse as imm8 so we get its cut_err() call
             Instruction::Jr {
-                offset,
+                offset: offset as i8,
                 condition: Some(cond),
             }
         }),
@@ -339,8 +340,8 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         preceded(0b1111_1010, address)
             .map(|source| Instruction::Ld(Load::AAddress { source })),
         //
-        preceded(0b1110_1000, i8).map(Instruction::AddSp),
-        preceded(0b1111_1000, i8)
+        preceded(0b1110_1000, imm8_signed).map(Instruction::AddSp),
+        preceded(0b1111_1000, imm8_signed)
             .map(|offset| Instruction::Ld(Load::HlSpOffset { offset })),
         0b1111_1001.value(Instruction::Ld(Load::SpHl)),
         //
@@ -376,11 +377,10 @@ fn op1<'a, O>(
     map_param: impl Fn(u8) -> Result<O, BitParameterError>,
 ) -> impl Parser<&'a [u8], O, ParseError> {
     trace("op1", move |input: &mut &'a [u8]| {
-        let byte = u8.parse_next(input)?;
+        let byte = binary::u8.parse_next(input)?;
         if let Some([param]) = get_bit_params(opcode, [mask], byte) {
-            let param = map_param(param).map_err(|error| {
-                ParseError::from_external_error(input, error)
-            })?;
+            let param = map_param(param)
+                .map_err(|error| error.into_parse_error(input))?;
             Ok(param)
         } else {
             Err(ParserError::from_input(input))
@@ -397,16 +397,14 @@ fn op2<'a, O1, O2>(
     (mask2, map_param2): (u8, impl Fn(u8) -> Result<O2, BitParameterError>),
 ) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
     trace("op2", move |input: &mut &'a [u8]| {
-        let byte = u8.parse_next(input)?;
+        let byte = binary::u8.parse_next(input)?;
         if let Some([param1, param2]) =
             get_bit_params(opcode, [mask1, mask2], byte)
         {
-            let param1 = map_param1(param1).map_err(|error| {
-                ParseError::from_external_error(input, error)
-            })?;
-            let param2 = map_param2(param2).map_err(|error| {
-                ParseError::from_external_error(input, error)
-            })?;
+            let param1 = map_param1(param1)
+                .map_err(|error| error.into_parse_error(input))?;
+            let param2 = map_param2(param2)
+                .map_err(|error| error.into_parse_error(input))?;
             Ok((param1, param2))
         } else {
             Err(ParserError::from_input(input))
@@ -480,12 +478,17 @@ fn bit(input: u8) -> Result<Bit, BitParameterError> {
 
 /// Parse one byte as a constant value
 fn imm8(input: &mut &[u8]) -> ModalResult<u8> {
-    cut_err(u8).parse_next(input)
+    cut_err(binary::u8).parse_next(input)
+}
+
+/// Parse one signed byte as a constant value
+fn imm8_signed(input: &mut &[u8]) -> ModalResult<i8> {
+    imm8.map(|value| value as i8).parse_next(input)
 }
 
 /// Parse two bytes little-endian bytes as a constant value
 fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
-    cut_err(u16(Endianness::Little)).parse_next(input)
+    cut_err(binary::u16(Endianness::Little)).parse_next(input)
 }
 
 /// Parse an 8-bit register reference from a 3-bit opcode parameter
@@ -515,7 +518,7 @@ fn math_imm8<'a>(
     opcode: u8,
     operation: Math,
 ) -> impl Parser<&'a [u8], Instruction, ParseError> {
-    preceded(opcode, u8).map(move |operand| Instruction::Math {
+    preceded(opcode, imm8).map(move |operand| Instruction::Math {
         operation,
         target: MathTarget::Const(operand),
     })
@@ -603,6 +606,15 @@ fn tgt3(input: u8) -> Result<Address, BitParameterError> {
 struct BitParameterError {
     bits: u8,
     expected: &'static str,
+}
+
+impl BitParameterError {
+    /// Convert to a [ParseError]
+    fn into_parse_error(self, input: &mut &[u8]) -> ParseError {
+        // If a bit param failed to parse, then it means the instruction opcode
+        // matched, so the error is fatal
+        ParseError::from_external_error(input, self).cut()
+    }
 }
 
 impl Display for BitParameterError {
