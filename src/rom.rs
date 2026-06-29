@@ -19,8 +19,8 @@ use winnow::{
     binary::{self, Endianness},
     combinator::{cut_err, eof, preceded, repeat, trace},
     error::{
-        ContextError, ErrMode, FromExternalError, ParserError, StrContext,
-        StrContextValue,
+        AddContext, ContextError, ErrMode, FromExternalError, ParserError,
+        StrContext, StrContextValue,
     },
     stream::{Offset, Stream},
     token::take,
@@ -192,144 +192,208 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // TODO add trace() on every instruction
     alt!(
         // ===== BLOCK 0 =====
-        0b0000_0000.value(Instruction::Nop),
+        0b0000_0000.value(Instruction::Nop).label("nop"),
         //
-        (op1(0b0000_0001, Mask::M54, r16), imm16).map(|(dest, source)| {
-            Instruction::Ld(Load::R16Const { source, dest })
-        }),
+        (op1(0b0000_0001, Mask::M54, r16), imm16)
+            .map(|(dest, source)| {
+                Instruction::Ld(Load::R16Const { source, dest })
+            })
+            .label("ld r16, imm16"),
         op1(0b0000_0010, Mask::M54, r16mem)
-            .map(|dest| Instruction::Ld(Load::R16MemA { dest })),
+            .map(|dest| Instruction::Ld(Load::R16MemA { dest }))
+            .label("ld [r16mem], a"),
         op1(0b0000_1010, Mask::M54, r16mem)
-            .map(|source| Instruction::Ld(Load::AR16Mem { source })),
+            .map(|source| Instruction::Ld(Load::AR16Mem { source }))
+            .label("ld a, [r16mem]"),
         preceded(0b0000_1000, address)
-            .map(|dest| Instruction::Ld(Load::AddressSp { dest })),
+            .map(|dest| Instruction::Ld(Load::AddressSp { dest }))
+            .label("ld [imm16], sp"),
         //
         op1(0b0000_0011, Mask::M54, r16)
-            .map(|operand| Instruction::Inc(Inc::R16(operand))),
+            .map(|operand| Instruction::Inc(Inc::R16(operand)))
+            .label("inc r16"),
         op1(0b0000_1011, Mask::M54, r16)
-            .map(|operand| Instruction::Dec(Dec::R16(operand))),
+            .map(|operand| Instruction::Dec(Dec::R16(operand)))
+            .label("dec r16"),
         op1(0b0000_1001, Mask::M54, r16)
-            .map(|operand| Instruction::Add(Add::Hl(operand))),
+            .map(|operand| Instruction::Add(Add::Hl(operand)))
+            .label("add hl, r16"),
         //
         op1(0b0000_0100, Mask::M543, r8)
-            .map(|operand| Instruction::Inc(Inc::R8(operand))),
+            .map(|operand| Instruction::Inc(Inc::R8(operand)))
+            .label("inc r8"),
         op1(0b0000_0101, Mask::M543, r8)
-            .map(|operand| Instruction::Dec(Dec::R8(operand))),
+            .map(|operand| Instruction::Dec(Dec::R8(operand)))
+            .label("dec r8"),
         //
-        (op1(0b0000_0110, Mask::M543, r8), imm8).map(|(dest, source)| {
-            Instruction::Ld(Load::R8Const { dest, source })
-        }),
-        0b0000_0111.value(Instruction::Rlca),
-        0b0000_1111.value(Instruction::Rrca),
-        0b0001_0111.value(Instruction::Rla),
-        0b0001_1111.value(Instruction::Rra),
-        0b0010_0111.value(Instruction::Daa),
-        0b0010_1111.value(Instruction::Cpl),
-        0b0011_0111.value(Instruction::Scf),
-        0b0011_1111.value(Instruction::Ccf),
+        (op1(0b0000_0110, Mask::M543, r8), imm8)
+            .map(|(dest, source)| {
+                Instruction::Ld(Load::R8Const { dest, source })
+            })
+            .label("ld r8, imm8"),
+        0b0000_0111.value(Instruction::Rlca).label("rlca"),
+        0b0000_1111.value(Instruction::Rrca).label("rrca"),
+        0b0001_0111.value(Instruction::Rla).label("rla"),
+        0b0001_1111.value(Instruction::Rra).label("rra"),
+        0b0010_0111.value(Instruction::Daa).label("daa"),
+        0b0010_1111.value(Instruction::Cpl).label("cpl"),
+        0b0011_0111.value(Instruction::Scf).label("scf"),
+        0b0011_1111.value(Instruction::Ccf).label("ccf"),
         //
-        preceded(0b0001_1000, imm8).map(|offset| Instruction::Jr {
-            // Parse as imm8 so we get its cut_err() call
-            offset: offset as i8,
-            condition: None
-        }),
-        (op1(0b0010_0000, Mask::M43, cond), imm8).map(|(cond, offset)| {
-            // Parse as imm8 so we get its cut_err() call
-            Instruction::Jr {
+        preceded(0b0001_1000, imm8)
+            .map(|offset| Instruction::Jr {
+                // Parse as imm8 so we get its cut_err() call
                 offset: offset as i8,
-                condition: Some(cond),
-            }
-        }),
+                condition: None
+            })
+            .label("jr imm8"),
+        (op1(0b0010_0000, Mask::M43, cond), imm8)
+            .map(|(cond, offset)| {
+                // Parse as imm8 so we get its cut_err() call
+                Instruction::Jr {
+                    offset: offset as i8,
+                    condition: Some(cond),
+                }
+            })
+            .label("jr cond, imm8"),
         //
-        0b0001_0000.value(Instruction::Stop),
+        0b0001_0000.value(Instruction::Stop).label("stop"),
         // ===== BLOCK 1 =====
         // Halt has to come first because it's a subset of the following opcode
-        0b0111_0110.value(Instruction::Halt),
+        0b0111_0110.value(Instruction::Halt).label("halt"),
         op2(0b0100_0000, (Mask::M543, r8), (Mask::M210, r8))
-            .map(|(dest, source)| Instruction::Ld(Load::R8R8 { dest, source })),
+            .map(|(dest, source)| Instruction::Ld(Load::R8R8 { dest, source }))
+            .label("ld r8, r8"),
         // ===== BLOCK 2 =====
-        math_r8(0b1000_0000, Math::Add),
-        math_r8(0b1000_1000, Math::Adc),
-        math_r8(0b1001_0000, Math::Sub),
-        math_r8(0b1001_1000, Math::Sbc),
-        math_r8(0b1010_0000, Math::And),
-        math_r8(0b1010_1000, Math::Xor),
-        math_r8(0b1011_0000, Math::Or),
-        math_r8(0b1011_1000, Math::Cp),
+        math_r8(0b1000_0000, Math::Add).label("add a, r8"),
+        math_r8(0b1000_1000, Math::Adc).label("adc a, r8"),
+        math_r8(0b1001_0000, Math::Sub).label("sub a, r8"),
+        math_r8(0b1001_1000, Math::Sbc).label("sbc a, r8"),
+        math_r8(0b1010_0000, Math::And).label("and a, r8"),
+        math_r8(0b1010_1000, Math::Xor).label("xor a, r8"),
+        math_r8(0b1011_0000, Math::Or).label("or a, r8"),
+        math_r8(0b1011_1000, Math::Cp).label("cp a, r8"),
         // ===== BLOCK 3 =====
-        math_imm8(0b1000_0110, Math::Add),
-        math_imm8(0b1000_1110, Math::Adc),
-        math_imm8(0b1001_0110, Math::Sub),
-        math_imm8(0b1001_1110, Math::Sbc),
-        math_imm8(0b1010_0110, Math::And),
-        math_imm8(0b1010_1110, Math::Xor),
-        math_imm8(0b1011_0110, Math::Or),
-        math_imm8(0b1011_1110, Math::Cp),
+        math_imm8(0b1000_0110, Math::Add).label("add a, imm8"),
+        math_imm8(0b1000_1110, Math::Adc).label("adc a, imm8"),
+        math_imm8(0b1001_0110, Math::Sub).label("sub a, imm8"),
+        math_imm8(0b1001_1110, Math::Sbc).label("sbc a, imm8"),
+        math_imm8(0b1010_0110, Math::And).label("and a, imm8"),
+        math_imm8(0b1010_1110, Math::Xor).label("xor a, imm8"),
+        math_imm8(0b1011_0110, Math::Or).label("or a, imm8"),
+        math_imm8(0b1011_1110, Math::Cp).label("cp a, imm8"),
         //
         op1(0b1100_0000, Mask::M43, cond)
-            .map(|cond| Instruction::Ret(Some(cond))),
-        0b1100_1001.value(Instruction::Ret(None)),
-        0b1101_1001.value(Instruction::Reti),
-        (op1(0b1100_0010, Mask::M43, cond), address).map(|(cond, dest)| {
-            Instruction::Jp(Jump::AddressCc(cond, dest))
-        }),
+            .map(|cond| Instruction::Ret(Some(cond)))
+            .label("ret cond"),
+        0b1100_1001.value(Instruction::Ret(None)).label("ret"),
+        0b1101_1001.value(Instruction::Reti).label("reti"),
+        (op1(0b1100_0010, Mask::M43, cond), address)
+            .map(|(cond, dest)| {
+                Instruction::Jp(Jump::AddressCc(cond, dest))
+            })
+            .label("jp cond, imm16"),
         preceded(0b1100_0011, address)
-            .map(|dest| Instruction::Jp(Jump::Address(dest))),
-        0b1110_1001.value(Instruction::Jp(Jump::Hl)),
-        (op1(0b1100_0100, Mask::M43, cond), address).map(|(cond, address)| {
-            Instruction::Call {
+            .map(|dest| Instruction::Jp(Jump::Address(dest)))
+            .label("jp imm16"),
+        0b1110_1001.value(Instruction::Jp(Jump::Hl)).label("jp hl"),
+        (op1(0b1100_0100, Mask::M43, cond), address)
+            .map(|(cond, address)| {
+                Instruction::Call {
+                    address,
+                    condition: Some(cond),
+                }
+            })
+            .label("call cond, imm16"),
+        preceded(0b1100_1101, address)
+            .map(|address| Instruction::Call {
                 address,
-                condition: Some(cond),
-            }
-        }),
-        preceded(0b1100_1101, address).map(|address| Instruction::Call {
-            address,
-            condition: None
-        }),
-        op1(0b1100_0111, Mask::M543, tgt3).map(Instruction::Rst),
+                condition: None
+            })
+            .label("call imm16"),
+        op1(0b1100_0111, Mask::M543, tgt3)
+            .map(Instruction::Rst)
+            .label("rst tgt3"),
         //
-        op1(0b1100_0001, Mask::M54, r16stk).map(Instruction::Pop),
-        op1(0b1100_0101, Mask::M54, r16stk).map(Instruction::Push),
+        op1(0b1100_0001, Mask::M54, r16stk)
+            .map(Instruction::Pop)
+            .label("pop r16stk"),
+        op1(0b1100_0101, Mask::M54, r16stk)
+            .map(Instruction::Push)
+            .label("push r16stk"),
         //
         // The byte 0xCB prefixes a set of nested instructions
         preceded(
             0b1100_1011,
             alt!(
-                op1(0b0000_0000, Mask::M210, r8).map(Instruction::Rlc),
-                op1(0b0000_0001, Mask::M210, r8).map(Instruction::Rrc),
-                op1(0b0000_0010, Mask::M210, r8).map(Instruction::Rl),
-                op1(0b0000_0011, Mask::M210, r8).map(Instruction::Rr),
-                op1(0b0000_0100, Mask::M210, r8).map(Instruction::Sla),
-                op1(0b0000_0101, Mask::M210, r8).map(Instruction::Sra),
-                op1(0b0000_0110, Mask::M210, r8).map(Instruction::Swap),
-                op1(0b0000_0111, Mask::M210, r8).map(Instruction::Srl),
+                op1(0b0000_0000, Mask::M210, r8)
+                    .map(Instruction::Rlc)
+                    .label("rlc"),
+                op1(0b0000_0001, Mask::M210, r8)
+                    .map(Instruction::Rrc)
+                    .label("rrc"),
+                op1(0b0000_0010, Mask::M210, r8)
+                    .map(Instruction::Rl)
+                    .label("rl"),
+                op1(0b0000_0011, Mask::M210, r8)
+                    .map(Instruction::Rr)
+                    .label("rr"),
+                op1(0b0000_0100, Mask::M210, r8)
+                    .map(Instruction::Sla)
+                    .label("sla"),
+                op1(0b0000_0101, Mask::M210, r8)
+                    .map(Instruction::Sra)
+                    .label("sra"),
+                op1(0b0000_0110, Mask::M210, r8)
+                    .map(Instruction::Swap)
+                    .label("swap"),
+                op1(0b0000_0111, Mask::M210, r8)
+                    .map(Instruction::Srl)
+                    .label("srl"),
                 op2(0b0100_0000, (Mask::M543, bit), (Mask::M210, r8))
-                    .map(|(bit, register)| Instruction::Bit(bit, register)),
+                    .map(|(bit, register)| Instruction::Bit(bit, register))
+                    .label("bit b3, r8"),
                 op2(0b1000_0000, (Mask::M543, bit), (Mask::M210, r8))
-                    .map(|(bit, register)| Instruction::Res(bit, register)),
+                    .map(|(bit, register)| Instruction::Res(bit, register))
+                    .label("res b3, r8"),
                 op2(0b1100_0000, (Mask::M543, bit), (Mask::M210, r8))
-                    .map(|(bit, register)| Instruction::Set(bit, register)),
+                    .map(|(bit, register)| Instruction::Set(bit, register))
+                    .label("set b3, r8"),
             )
-        ),
+        )
+        .label("$CB prefix"),
         //
-        0b1110_0010.value(Instruction::Ldh(LoadHigh::CA)),
+        0b1110_0010
+            .value(Instruction::Ldh(LoadHigh::CA))
+            .label("ldh [c], a"),
         preceded(0b1110_0000, imm8)
-            .map(|offset| Instruction::Ldh(LoadHigh::ConstA(offset))),
+            .map(|offset| Instruction::Ldh(LoadHigh::ConstA(offset)))
+            .label("ldh [imm8], a"),
         preceded(0b1110_1010, address)
-            .map(|dest| Instruction::Ld(Load::AddressA { dest })),
-        0b1111_0010.value(Instruction::Ldh(LoadHigh::AC)),
+            .map(|dest| Instruction::Ld(Load::AddressA { dest }))
+            .label("ld [imm16], a"),
+        0b1111_0010
+            .value(Instruction::Ldh(LoadHigh::AC))
+            .label("ldh a, [c]"),
         preceded(0b1111_0000, imm8)
-            .map(|offset| Instruction::Ldh(LoadHigh::AConst(offset))),
+            .map(|offset| Instruction::Ldh(LoadHigh::AConst(offset)))
+            .label("ldh a, [imm8]"),
         preceded(0b1111_1010, address)
-            .map(|source| Instruction::Ld(Load::AAddress { source })),
+            .map(|source| Instruction::Ld(Load::AAddress { source }))
+            .label("ld a, [imm16]"),
         //
-        preceded(0b1110_1000, imm8_signed).map(Instruction::AddSp),
+        preceded(0b1110_1000, imm8_signed)
+            .map(Instruction::AddSp)
+            .label("add sp, imm8"),
         preceded(0b1111_1000, imm8_signed)
-            .map(|offset| Instruction::Ld(Load::HlSpOffset { offset })),
-        0b1111_1001.value(Instruction::Ld(Load::SpHl)),
+            .map(|offset| Instruction::Ld(Load::HlSpOffset { offset }))
+            .label("ld hl, sp+imm8"),
+        0b1111_1001
+            .value(Instruction::Ld(Load::SpHl))
+            .label("ld sp, hl"),
         //
-        0b1111_0011.value(Instruction::Di),
-        0b1111_1011.value(Instruction::Ei),
+        0b1111_0011.value(Instruction::Di).label("di"),
+        0b1111_1011.value(Instruction::Ei).label("ei"),
     )
     .context(StrContext::Label("instruction"))
     .parse_next(input)
@@ -388,6 +452,20 @@ impl BitOr for Mask {
 
     fn bitor(self, rhs: Self) -> Self::Output {
         Self(self.0 | rhs.0)
+    }
+}
+
+trait ParserExt<I, O, E> {
+    fn label(self, label: &'static str) -> impl Parser<I, O, E>;
+}
+
+impl<I, O, E, T: Parser<I, O, E>> ParserExt<I, O, E> for T
+where
+    I: Stream,
+    E: AddContext<I, StrContext> + ParserError<I>,
+{
+    fn label(self, label: &'static str) -> impl Parser<I, O, E> {
+        self.context(StrContext::Label(label))
     }
 }
 
@@ -628,7 +706,9 @@ fn r16stk(input: u8) -> Result<Register16Stack, BitParameterError> {
     }
 }
 
-/// TODO
+/// Parse a target memory address for the `rst` instruction
+///
+/// It's a 1-byte address encoded into 3 bits of the opcode
 fn tgt3(input: u8) -> Result<Address, BitParameterError> {
     if input <= 0b111 {
         Ok(Address((input * 8).into()))
