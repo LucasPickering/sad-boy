@@ -189,7 +189,6 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.
     // https://gbdev.io/pandocs/CPU_Instruction_Set.html
-    // TODO add trace() on every instruction
     alt!(
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop).label("nop"),
@@ -274,14 +273,14 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         math_r8(0b1011_0000, Math::Or).label("or a, r8"),
         math_r8(0b1011_1000, Math::Cp).label("cp a, r8"),
         // ===== BLOCK 3 =====
-        math_imm8(0b1000_0110, Math::Add).label("add a, imm8"),
-        math_imm8(0b1000_1110, Math::Adc).label("adc a, imm8"),
-        math_imm8(0b1001_0110, Math::Sub).label("sub a, imm8"),
-        math_imm8(0b1001_1110, Math::Sbc).label("sbc a, imm8"),
-        math_imm8(0b1010_0110, Math::And).label("and a, imm8"),
-        math_imm8(0b1010_1110, Math::Xor).label("xor a, imm8"),
-        math_imm8(0b1011_0110, Math::Or).label("or a, imm8"),
-        math_imm8(0b1011_1110, Math::Cp).label("cp a, imm8"),
+        math_imm8(0b1100_0110, Math::Add).label("add a, imm8"),
+        math_imm8(0b1100_1110, Math::Adc).label("adc a, imm8"),
+        math_imm8(0b1101_0110, Math::Sub).label("sub a, imm8"),
+        math_imm8(0b1101_1110, Math::Sbc).label("sbc a, imm8"),
+        math_imm8(0b1110_0110, Math::And).label("and a, imm8"),
+        math_imm8(0b1110_1110, Math::Xor).label("xor a, imm8"),
+        math_imm8(0b1111_0110, Math::Or).label("or a, imm8"),
+        math_imm8(0b1111_1110, Math::Cp).label("cp a, imm8"),
         //
         op1(0b1100_0000, Mask::M43, cond)
             .map(|cond| Instruction::Ret(Some(cond)))
@@ -329,25 +328,25 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
                 op1(0b0000_0000, Mask::M210, r8)
                     .map(Instruction::Rlc)
                     .label("rlc"),
-                op1(0b0000_0001, Mask::M210, r8)
+                op1(0b0000_1000, Mask::M210, r8)
                     .map(Instruction::Rrc)
                     .label("rrc"),
-                op1(0b0000_0010, Mask::M210, r8)
+                op1(0b0001_0000, Mask::M210, r8)
                     .map(Instruction::Rl)
                     .label("rl"),
-                op1(0b0000_0011, Mask::M210, r8)
+                op1(0b0001_1000, Mask::M210, r8)
                     .map(Instruction::Rr)
                     .label("rr"),
-                op1(0b0000_0100, Mask::M210, r8)
+                op1(0b0010_0000, Mask::M210, r8)
                     .map(Instruction::Sla)
                     .label("sla"),
-                op1(0b0000_0101, Mask::M210, r8)
+                op1(0b0010_1000, Mask::M210, r8)
                     .map(Instruction::Sra)
                     .label("sra"),
-                op1(0b0000_0110, Mask::M210, r8)
+                op1(0b0011_0000, Mask::M210, r8)
                     .map(Instruction::Swap)
                     .label("swap"),
-                op1(0b0000_0111, Mask::M210, r8)
+                op1(0b0011_1000, Mask::M210, r8)
                     .map(Instruction::Srl)
                     .label("srl"),
                 op2(0b0100_0000, (Mask::M543, bit), (Mask::M210, r8))
@@ -782,6 +781,38 @@ mod tests {
     }
 
     #[rstest]
+    #[case::add_a_r8(&[0b1000_0001], Instruction::Math {
+        operation: Math::Add,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::adc_a_r8(&[0b1000_1001], Instruction::Math {
+        operation: Math::Adc,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::sub_a_r8(&[0b1001_0001], Instruction::Math {
+        operation: Math::Sub,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::sbc_a_r8(&[0b1001_1001], Instruction::Math {
+        operation: Math::Sbc,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::and_a_r8(&[0b1010_0001], Instruction::Math {
+        operation: Math::And,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::xor_a_r8(&[0b1010_1001], Instruction::Math {
+        operation: Math::Xor,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::or_a_r8(&[0b1011_0001], Instruction::Math {
+        operation: Math::Or,
+        target: MathTarget::Register(Register8::C),
+    })]
+    #[case::cp_a_r8(&[0b1011_1001], Instruction::Math {
+        operation: Math::Cp,
+        target: MathTarget::Register(Register8::C),
+    })]
     #[case::add_a_imm8(&[0b1100_0110, 0b0101_0101], Instruction::Math {
         operation: Math::Add,
         target: MathTarget::Const(0b0101_0101),
@@ -826,6 +857,10 @@ mod tests {
     )]
     #[case::ret_cond_c(
         &[0b1101_1000], Instruction::Ret(Some(ConditionCode::C))
+    )]
+    #[case::ld_hl_sp_imm8(
+        &[0b1111_1000, 0b1010_1010],
+        Instruction::Ld(Load::HlSpOffset { offset: -86 })
     )]
     fn instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
         assert_eq!(parse_instruction.parse(bytes).unwrap(), expected);
