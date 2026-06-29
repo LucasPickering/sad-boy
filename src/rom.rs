@@ -9,7 +9,7 @@ use color_eyre::eyre::{self, Context};
 use log::info;
 use std::{
     error::Error,
-    fmt::{self, Display},
+    fmt::{self, Debug, Display},
     fs,
     ops::{BitAnd, BitOr, Not},
     path::Path,
@@ -102,6 +102,7 @@ impl Display for RomParseError {
         const BYTES_PER_ROW: usize = 4;
 
         writeln!(f, "Parse error at byte 0x{:x}", self.offset)?;
+        let offset_width = self.input_start.ilog(16) as usize + 1;
         // Pretty byte rendering
         for (bytes, offset) in self
             .input
@@ -118,7 +119,7 @@ impl Display for RomParseError {
             // If the offending byte is on this line, point it out
             if (offset..(offset + BYTES_PER_ROW)).contains(&self.offset) {
                 // Fixed margin padding plus 9 chars per byte within the row
-                let padding = 9 + (self.offset - offset) * 9;
+                let padding = offset_width + 6 + (self.offset - offset) * 9;
                 writeln!(f, "{:>padding$}", "^")?;
             }
         }
@@ -166,32 +167,18 @@ macro_rules! alt {
             use winnow::Parser;
 
             let start = input.checkpoint();
-            let mut error: Option<ErrMode<ContextError>> = None;
 
             $({
                 let result: ModalResult<_> = $parser.parse_next(input);
                 // Backtrack errors get tossed, Ok and fatal errors exit
                 match result {
-                    Err(e) if ParserError::<&[u8]>::is_backtrack(&e) => {
-                        error = match error {
-                            Some(error) => Some(
-                                ParserError::<&[u8]>::or(error, e)
-                            ),
-                            None => Some(e),
-                        };
-                    }
+                    Err(e) if ParserError::<&[u8]>::is_backtrack(&e) => { }
                     res => return res,
                 }
                 input.reset(&start);
             })*
 
-            match error {
-                Some(e) => Err(e.append(input, &start)),
-                None => Err(ParserError::assert(
-                    input,
-                    "`alt!` needs at least one parser",
-                )),
-            }
+            Err(ParseError::from_input(input))
         }
     };
 }
@@ -352,7 +339,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
 ///
 /// There's a lot of `u8`s floating around in this file, so this helps keep them
 /// all straight.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 struct Mask(u8);
 
 impl Mask {
@@ -364,6 +351,12 @@ impl Mask {
     const M54: Self = Self(0b0011_0000);
     /// Mask for bits 5-3
     const M543: Self = Self(0b0011_1000);
+}
+
+impl Debug for Mask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mask(0b{:0>8b})", self.0)
+    }
 }
 
 impl Not for Mask {
@@ -473,7 +466,7 @@ fn get_bit_params<const N: usize>(
         opcode & all_masks,
         0,
         "Static opcode must have 0 for all dynamic bytes; \
-        opcode={opcode:b}, masks={masks:?}"
+        opcode=0b{opcode:0>8b}, masks={masks:?}"
     );
     // If the static bits match the opcode
     if input & !all_masks == opcode {
@@ -709,6 +702,38 @@ mod tests {
     }
 
     #[rstest]
+    #[case::add_a_imm8(&[0b1100_0110, 0b0101_0101], Instruction::Math {
+        operation: Math::Add,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::adc_a_imm8(&[0b1100_1110, 0b0101_0101], Instruction::Math {
+        operation: Math::Adc,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::sub_a_imm8(&[0b1101_0110, 0b0101_0101], Instruction::Math {
+        operation: Math::Sub,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::sbc_a_imm8(&[0b1101_1110, 0b0101_0101], Instruction::Math {
+        operation: Math::Sbc,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::and_a_imm8(&[0b1110_0110, 0b0101_0101], Instruction::Math {
+        operation: Math::And,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::xor_a_imm8(&[0b1110_1110, 0b0101_0101], Instruction::Math {
+        operation: Math::Xor,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::or_a_imm8(&[0b1111_0110, 0b0101_0101], Instruction::Math {
+        operation: Math::Or,
+        target: MathTarget::Const(0b0101_0101),
+    })]
+    #[case::cp_a_imm8(&[0b1111_1110, 0b0101_0101], Instruction::Math {
+        operation: Math::Cp,
+        target: MathTarget::Const(0b0101_0101),
+    })]
     #[case::ret(&[0b1100_1001], Instruction::Ret(None))]
     #[case::ret_cond_nz(
         &[0b1100_0000], Instruction::Ret(Some(ConditionCode::Nz))
