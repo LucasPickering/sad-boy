@@ -404,6 +404,18 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         //
         0b1111_0011.value(Instruction::Di).label("di"),
         0b1111_1011.value(Instruction::Ei).label("ei"),
+        // Invalid opcodes
+        0b1101_0011.value(Instruction::Invalid), // $D3
+        0b1101_1011.value(Instruction::Invalid), // $DB
+        0b1101_1101.value(Instruction::Invalid), // $DD
+        0b1110_0011.value(Instruction::Invalid), // $E3
+        0b1110_0100.value(Instruction::Invalid), // $E4
+        0b1110_1011.value(Instruction::Invalid), // $EB
+        0b1110_1100.value(Instruction::Invalid), // $EC
+        0b1110_1101.value(Instruction::Invalid), // $ED
+        0b1111_0100.value(Instruction::Invalid), // $F4
+        0b1111_1100.value(Instruction::Invalid), // $FC
+        0b1111_1101.value(Instruction::Invalid), // $FD
     )
     .context(StrContext::Label("instruction"))
     .parse_next(input)
@@ -874,6 +886,15 @@ mod tests {
     #[case::ld_hl_sp_imm8(
         &[0b1111_1000, 0b1010_1010],
         Instruction::Ld(Load::HlSpOffset { offset: -86 })
+    )]
+    #[case::bit(
+        &[0b1100_1011, 0b0111_0100], Instruction::Bit(Bit(6), Register8::H)
+    )]
+    #[case::res(
+        &[0b1100_1011, 0b1011_0100], Instruction::Res(Bit(6), Register8::H)
+    )]
+    #[case::set(
+        &[0b1100_1011, 0b1111_0100], Instruction::Set(Bit(6), Register8::H)
     )]
     fn instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
         assert_eq!(parse_instruction.parse(bytes).unwrap(), expected);

@@ -291,6 +291,8 @@ pub enum Instruction {
     Swap(Register8),
     /// Enter CPU low power mode
     Stop,
+    /// An invalid instruction from one of the 11 invalid opcodes
+    Invalid,
 }
 
 /// TODO
