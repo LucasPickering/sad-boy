@@ -4,33 +4,81 @@
 
 #![expect(unused)] // TODO remove this
 
-use crate::rom::Rom;
+use crate::{memory::MemoryMap, rom::Rom};
 use color_eyre::eyre;
-use log::debug;
-use std::{io, path::Path};
+use log::warn;
+use std::{
+    fmt::Display,
+    io,
+    path::Path,
+    thread,
+    time::{Duration, Instant},
+};
 
 /// Game Boy emulator
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GameBoy {
     registers: Registers,
+    /// Virtual memory map
+    memory: MemoryMap,
 }
 
 impl GameBoy {
-    /// Boot the Game Boy, load a ROM from a file, and run it
-    pub fn run(path: &Path) -> eyre::Result<()> {
-        let mut game_boy = Self::default();
+    /// Boot the Game Boy and load the ROM from a file
+    pub fn load(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
-        for instruction in &rom.instructions {
-            game_boy.execute(*instruction);
-        }
-        Ok(())
+        let memory = MemoryMap::new(rom);
+        Ok(Self {
+            registers: Registers::default(),
+            memory,
+        })
     }
 
-    /// Execute a single instruction
-    fn execute(&mut self, instruction: Instruction) {
+    /// Keep running until the CPU is halted
+    pub fn run(&mut self) -> eyre::Result<()> {
+        /// TODO explain
+        const CYCLES_PER_FRAME: usize = 70224;
+        let frame_time = Duration::from_secs_f64(1.0 / 60.0);
+
+        loop {
+            // https://josaphat.co/posts/gameboy-emulator/
+            let mut cycle_budget = CYCLES_PER_FRAME;
+            let frame_start = Instant::now();
+
+            while cycle_budget > 0 {
+                let (instruction, num_bytes) =
+                    self.memory.get_instruction(self.registers.pc)?;
+                let pc = self.registers.pc;
+                let cycles = self.execute(instruction);
+                cycle_budget = cycle_budget.saturating_sub(cycles);
+                // If the instruction didn't modify the PC (e.g. jumps), then
+                // advance it automatically
+                if self.registers.pc == pc {
+                    self.registers.pc.0 += num_bytes as u16;
+                }
+            }
+
+            // Sleep for the rest of the frame
+            // It's possible this sleeps _too_ long, but the difference should
+            // be negligible.
+            // Unstable: use sleep_until
+            // https://github.com/rust-lang/rust/issues/113752
+            let elapsed = frame_start.elapsed();
+            if let Some(sleep_time) = frame_time.checked_sub(elapsed) {
+                thread::sleep(sleep_time);
+            }
+        }
+    }
+
+    /// Execute a single CPU instruction, returning the number of consumed CPU
+    /// cycles
+    fn execute(&mut self, instruction: Instruction) -> usize {
         match instruction {
-            Instruction::Nop => {}
-            _ => todo!(),
+            Instruction::Nop => 1,
+            _ => {
+                warn!("Unknown instruction {instruction:?}");
+                1
+            }
         }
     }
 
@@ -58,7 +106,7 @@ impl GameBoy {
             Register16::Bc => self.registers.bc(),
             Register16::De => self.registers.de(),
             Register16::Hl => self.registers.hl(),
-            Register16::Sp => self.registers.sp,
+            Register16::Sp => self.registers.sp.0,
         }
     }
 }
@@ -83,11 +131,9 @@ struct Registers {
     l: u8,
 
     /// Stack pointer
-    // TODO should be Address?
-    sp: u16,
+    sp: Address,
     /// Program counter
-    // TODO should be Address?
-    pc: u16,
+    pc: Address,
 }
 
 /// Generate methods on [Registers] to access two registers as a 16-bit value
@@ -514,9 +560,18 @@ pub enum ConditionCode {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Bit(pub u8);
 
-/// Address of a byte of RAM
-#[derive(Copy, Clone, Debug, PartialEq)]
+/// Address of a byte of memory
+///
+/// https://rylev.github.io/DMG-01/public/book/memory_map.html
+#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
+
+impl Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const ADDRESS_WIDTH: usize = 4;
+        write!(f, "0x{:0>ADDRESS_WIDTH$x}", self.0)
+    }
+}
 
 #[cfg(test)]
 mod tests {

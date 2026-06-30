@@ -17,13 +17,12 @@ use std::{
 use winnow::{
     ModalResult, Parser,
     binary::{self, Endianness},
-    combinator::{cut_err, eof, preceded, repeat, trace},
+    combinator::{cut_err, preceded, trace},
     error::{
         AddContext, ContextError, ErrMode, FromExternalError, ParserError,
-        StrContext, StrContextValue,
+        StrContext,
     },
     stream::{Offset, Stream},
-    token::take,
 };
 
 /// A GameBoy ROM (cartridge)
@@ -35,45 +34,48 @@ use winnow::{
 /// The header begins at `0x100`; instructions begin at
 #[derive(Debug, PartialEq)]
 pub struct Rom {
-    /// Metadata from the range `[0x0100, 0x014F]`
-    pub header: RomHeader,
-    /// All instructions from the ROM body, loaded and parsed
-    pub instructions: Vec<Instruction>,
+    /// The entire ROM binary data
+    pub data: Vec<u8>,
 }
 
 impl Rom {
-    /// Number of bytes in the ROM header
-    const HEADER_LENGTH: usize = 0x014f;
-
     /// Load and parse a ROM from a file
     pub fn load(path: &Path) -> eyre::Result<Self> {
         // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
             .context(format!("Error reading ROM from {}", path.display()))?;
-        let rom = Self::parse(&data)?;
         info!("Loaded ROM from {}", path.display());
-        Ok(rom)
+        Ok(Self { data })
     }
 
-    /// Parse a ROM from input
-    fn parse(data: &[u8]) -> eyre::Result<Self> {
+    /// Parse the CPU instruction at the given address
+    ///
+    /// Return the instruction as well as the number of bytes it consumed. This
+    /// is the number of bytes that the PC should advance.
+    pub fn get_instruction(
+        &self,
+        address: Address,
+    ) -> Result<(Instruction, usize), RomParseError> {
+        // TODO make sure it's in bounds
+        let mut input = &self.data[(address.0 as usize)..];
+        let start = input.checkpoint(); // TODO this isn't right
         // Don't use Parser::parse() because its error type doesn't print well
         // for binary data
-        let mut input = data;
-        let start = input.checkpoint();
-        let rom = parse_rom.parse_next(&mut input).map_err(|error| {
-            let error = error
-                .into_inner()
-                .expect("Complete parser should not return Incomplete");
-            RomParseError::new(data, input.offset_from(&start), error)
-        })?;
-        Ok(rom)
+        let instruction =
+            parse_instruction.parse_next(&mut input).map_err(|error| {
+                let error = error
+                    .into_inner()
+                    .expect("Complete parser should not return Incomplete");
+                RomParseError::new(&self.data, input.offset_from(&start), error)
+            })?;
+        let num_bytes = input.offset_from(&start);
+        Ok((instruction, num_bytes))
     }
 }
 
 /// TODO
 #[derive(Debug)]
-struct RomParseError {
+pub struct RomParseError {
     /// A subslice of the parsing input, with a certain amount of bytes
     /// before/after the error location
     ///
@@ -112,7 +114,8 @@ impl Display for RomParseError {
         // Max ROM size is 8MB so we need 6 hex digits to fit all addresses
         const ADDRESS_WIDTH: usize = 6;
 
-        writeln!(f, "Parse error at byte 0x{:x}", self.offset)?;
+        // TODO is this cast safe?
+        writeln!(f, "Parse error at byte {}", Address(self.offset as u16))?;
         // Pretty byte rendering
         for (bytes, offset) in self
             .input
@@ -121,7 +124,7 @@ impl Display for RomParseError {
             .zip((self.input_start..).step_by(BYTES_PER_ROW))
         {
             // Pad address with 0s to hit the width
-            write!(f, "0x{offset:0>ADDRESS_WIDTH$x} |")?;
+            write!(f, "{} |", Address(offset as u16))?; // TODO is cast safe?
             for byte in bytes {
                 write!(f, " {byte:0<8b}")?;
             }
@@ -141,34 +144,7 @@ impl Display for RomParseError {
 
 impl Error for RomParseError {}
 
-/// Metadata at the beginning of a ROM
-#[derive(Debug, PartialEq)]
-pub struct RomHeader {}
-
 type ParseError = ErrMode<ContextError>;
-
-/// Parse all data from the ROM
-fn parse_rom(input: &mut &[u8]) -> ModalResult<Rom> {
-    let (header, instructions, ()) = (
-        take(Rom::HEADER_LENGTH)
-            .context(StrContext::Label("ROM header"))
-            .map(|_| RomHeader {}), // Skip the header for now
-        // The rest of the ROM should be instructions, so if any of them fail
-        // to parse, error immediately
-        repeat(1.., cut_err(parse_instruction))
-            .context(StrContext::Label("ROM instructions")),
-        eof.void()
-            .context(StrContext::Expected(StrContextValue::Description(
-                "end of file",
-            ))),
-    )
-        .context(StrContext::Label("ROM"))
-        .parse_next(input)?;
-    Ok(Rom {
-        header,
-        instructions,
-    })
-}
 
 /// A version of winnow's `alt` combinator that takes any number of branches
 macro_rules! alt {
