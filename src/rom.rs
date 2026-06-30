@@ -33,7 +33,7 @@ use winnow::{
 /// - [Instructions](https://gbdev.io/pandocs/CPU_Instruction_Set.html)
 ///
 /// The header begins at `0x100`; instructions begin at
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Rom {
     /// Metadata from the range `[0x0100, 0x014F]`
     pub header: RomHeader,
@@ -42,22 +42,31 @@ pub struct Rom {
 }
 
 impl Rom {
+    /// Number of bytes in the ROM header
+    const HEADER_LENGTH: usize = 0x014f;
+
     /// Load and parse a ROM from a file
     pub fn load(path: &Path) -> eyre::Result<Self> {
         // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
             .context(format!("Error reading ROM from {}", path.display()))?;
+        let rom = Self::parse(&data)?;
+        info!("Loaded ROM from {}", path.display());
+        Ok(rom)
+    }
+
+    /// Parse a ROM from input
+    fn parse(data: &[u8]) -> eyre::Result<Self> {
         // Don't use Parser::parse() because its error type doesn't print well
         // for binary data
-        let mut input = data.as_slice();
+        let mut input = data;
         let start = input.checkpoint();
         let rom = parse_rom.parse_next(&mut input).map_err(|error| {
             let error = error
                 .into_inner()
                 .expect("Complete parser should not return Incomplete");
-            RomParseError::new(input, input.offset_from(&start), error)
+            RomParseError::new(data, input.offset_from(&start), error)
         })?;
-        info!("Loaded ROM from {}", path.display());
         Ok(rom)
     }
 }
@@ -100,9 +109,10 @@ impl RomParseError {
 impl Display for RomParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const BYTES_PER_ROW: usize = 4;
+        // Max ROM size is 8MB so we need 6 hex digits to fit all addresses
+        const ADDRESS_WIDTH: usize = 6;
 
         writeln!(f, "Parse error at byte 0x{:x}", self.offset)?;
-        let offset_width = self.input_start.ilog(16) as usize + 1;
         // Pretty byte rendering
         for (bytes, offset) in self
             .input
@@ -110,7 +120,8 @@ impl Display for RomParseError {
             // For each byte, include its index in the full input
             .zip((self.input_start..).step_by(BYTES_PER_ROW))
         {
-            write!(f, "0x{offset:x} |")?;
+            // Pad address with 0s to hit the width
+            write!(f, "0x{offset:0>ADDRESS_WIDTH$x} |")?;
             for byte in bytes {
                 write!(f, " {byte:0<8b}")?;
             }
@@ -119,7 +130,7 @@ impl Display for RomParseError {
             // If the offending byte is on this line, point it out
             if (offset..(offset + BYTES_PER_ROW)).contains(&self.offset) {
                 // Fixed margin padding plus 9 chars per byte within the row
-                let padding = offset_width + 6 + (self.offset - offset) * 9;
+                let padding = ADDRESS_WIDTH + 6 + (self.offset - offset) * 9;
                 writeln!(f, "{:>padding$}", "^")?;
             }
         }
@@ -131,7 +142,7 @@ impl Display for RomParseError {
 impl Error for RomParseError {}
 
 /// Metadata at the beginning of a ROM
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct RomHeader {}
 
 type ParseError = ErrMode<ContextError>;
@@ -139,7 +150,7 @@ type ParseError = ErrMode<ContextError>;
 /// Parse all data from the ROM
 fn parse_rom(input: &mut &[u8]) -> ModalResult<Rom> {
     let (header, instructions, ()) = (
-        take(0x014Fusize)
+        take(Rom::HEADER_LENGTH)
             .context(StrContext::Label("ROM header"))
             .map(|_| RomHeader {}), // Skip the header for now
         // The rest of the ROM should be instructions, so if any of them fail
@@ -455,6 +466,7 @@ impl BitOr for Mask {
 }
 
 trait ParserExt<I, O, E> {
+    /// Shortcut for `parser.context(StrContext::Label(label))`
     fn label(self, label: &'static str) -> impl Parser<I, O, E>;
 }
 
@@ -780,6 +792,7 @@ mod tests {
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 
+    /// Test parsing individual instructions
     #[rstest]
     #[case::add_a_r8(&[0b1000_0001], Instruction::Math {
         operation: Math::Add,
