@@ -29,7 +29,7 @@ pub struct GameBoy {
 
 impl GameBoy {
     /// Boot the Game Boy and load the ROM from a file
-    pub fn load(path: &Path) -> eyre::Result<Self> {
+    pub fn boot(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
         let memory = MemoryMap::new(rom);
         Ok(Self {
@@ -83,6 +83,7 @@ impl GameBoy {
         match instruction {
             Instruction::Nop => Ok(1),
             Instruction::Jp(jump) => Ok(self.jump(jump)),
+            Instruction::Ld(load) => self.load(load),
             _ => {
                 warn!("Unknown instruction {instruction:?}");
                 Ok(1)
@@ -91,6 +92,8 @@ impl GameBoy {
     }
 
     /// Execute a `JP` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
     fn jump(&mut self, jump: Jump) -> usize {
         match jump {
             Jump::Address(address) => {
@@ -112,6 +115,65 @@ impl GameBoy {
         }
     }
 
+    /// Execute an `LD` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn load(&mut self, load: Load) -> Result<usize, MemoryError> {
+        match load {
+            Load::AddressA { dest } => {
+                *self.memory.get8_mut(dest)? = self.registers.a;
+                Ok(4)
+            }
+            Load::AAddress { source } => {
+                self.registers.a = self.memory.get8(source)?;
+                Ok(4)
+            }
+            Load::AddressSp { dest } => {
+                *self.memory.get16_mut(dest)? = self.registers.sp.0;
+                Ok(5)
+            }
+            Load::HlSpOffset { offset } => {
+                let value =
+                    self.registers.sp.0.wrapping_add_signed(offset.into());
+                *self.registers.hl_mut() = value;
+                // TODO set flags here
+                // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#LD_HL,SP+e8
+                Ok(3)
+            }
+            Load::SpHl => {
+                self.registers.sp = Address(self.registers.hl());
+                Ok(2)
+            }
+            Load::R8Const { dest, source } => {
+                *self.register8_mut(dest)? = source;
+                Ok(2)
+            }
+            Load::R8R8 { dest, source } => {
+                let source = *self.register8_mut(source)?;
+                *self.register8_mut(dest)? = source;
+                Ok(1)
+            }
+            Load::R16Const { dest, source } => {
+                *self.register16_mut(dest) = source;
+                Ok(3)
+            }
+            Load::R16MemA { dest } => {
+                let dest = Address(self.register16_mem(dest));
+                *self.memory.get8_mut(dest)? = self.registers.a;
+                Ok(2)
+            }
+            Load::AR16Mem { source } => {
+                let source = Address(self.register16_mem(source));
+                self.registers.a = self.memory.get8(source)?;
+                Ok(2)
+            }
+            _ => {
+                warn!("Unknown load: {load:?}");
+                Ok(1)
+            }
+        }
+    }
+
     /// Evaluate a [ConditionCode]
     fn condition(&self, condition: ConditionCode) -> bool {
         let flags = self.registers.flags();
@@ -123,31 +185,92 @@ impl GameBoy {
         }
     }
 
-    /// Resolve an 8-bit value
-    fn get_value8(&self, value: Value8) -> u8 {
-        match value {
-            Value8::Register(Register8::A) => self.registers.a,
-            Value8::Register(Register8::B) => self.registers.b,
-            Value8::Register(Register8::C) => self.registers.c,
-            Value8::Register(Register8::D) => self.registers.d,
-            Value8::Register(Register8::E) => self.registers.e,
-            Value8::Register(Register8::H) => self.registers.h,
-            Value8::Register(Register8::L) => self.registers.l,
-            Value8::Register(Register8::Hl) => {
-                let pointer = self.registers.hl();
-                todo!("resolve pointer")
+    /// Get a the value of an 8-bit register
+    fn register8(&self, register: Register8) -> Result<u8, MemoryError> {
+        match register {
+            Register8::A => Ok(self.registers.a),
+            Register8::B => Ok(self.registers.b),
+            Register8::C => Ok(self.registers.c),
+            Register8::D => Ok(self.registers.d),
+            Register8::E => Ok(self.registers.e),
+            Register8::H => Ok(self.registers.h),
+            Register8::Hl => {
+                let address = Address(self.registers.hl());
+                self.memory.get8(address)
             }
-            Value8::Const(value) => value,
+            Register8::L => Ok(self.registers.l),
         }
     }
 
-    /// Resolve a 16-bit value
-    fn get_value16(&self, value: Register16) -> u16 {
+    /// Get a mutable reference to an 8-bit register
+    fn register8_mut(
+        &mut self,
+        register: Register8,
+    ) -> Result<&mut u8, MemoryError> {
+        match register {
+            Register8::A => Ok(&mut self.registers.a),
+            Register8::B => Ok(&mut self.registers.b),
+            Register8::C => Ok(&mut self.registers.c),
+            Register8::D => Ok(&mut self.registers.d),
+            Register8::E => Ok(&mut self.registers.e),
+            Register8::H => Ok(&mut self.registers.h),
+            Register8::Hl => {
+                let address = Address(self.registers.hl());
+                self.memory.get8_mut(address)
+            }
+            Register8::L => Ok(&mut self.registers.l),
+        }
+    }
+
+    /// Get the value of a 16-bit register
+    fn register16(&self, value: Register16) -> u16 {
         match value {
             Register16::Bc => self.registers.bc(),
             Register16::De => self.registers.de(),
             Register16::Hl => self.registers.hl(),
             Register16::Sp => self.registers.sp.0,
+        }
+    }
+
+    /// Get a mutable reference to a 16-bit register
+    fn register16_mut(&mut self, value: Register16) -> &mut u16 {
+        match value {
+            Register16::Bc => self.registers.bc_mut(),
+            Register16::De => self.registers.de_mut(),
+            Register16::Hl => self.registers.hl_mut(),
+            Register16::Sp => &mut self.registers.sp.0,
+        }
+    }
+
+    /// Get the value of a [Register16Memory]
+    ///
+    /// This is like [Self::Register16], but the available registers are
+    /// slightly different. The `Hli` and `Hld` variants mutate the `HL`
+    /// register *after* reporting its value.
+    fn register16_mem(&mut self, register: Register16Memory) -> u16 {
+        match register {
+            Register16Memory::Bc => self.registers.bc(),
+            Register16Memory::De => self.registers.de(),
+            Register16Memory::Hli => {
+                let value = self.registers.hl();
+                // This does NOT set flags
+                *self.registers.hl_mut() = value.wrapping_add(1);
+                value
+            }
+            Register16Memory::Hld => {
+                let value = self.registers.hl();
+                // This does NOT set flags
+                *self.registers.hl_mut() = value.wrapping_sub(1);
+                value
+            }
+        }
+    }
+
+    /// Resolve an 8-bit value
+    fn value8(&self, value: Value8) -> Result<u8, MemoryError> {
+        match value {
+            Value8::Register(register) => self.register8(register),
+            Value8::Const(value) => Ok(value),
         }
     }
 }
@@ -475,9 +598,9 @@ pub enum Load {
     R8R8 { dest: Register8, source: Register8 },
     /// Load a constant into a 16-bit register
     R16Const { dest: Register16, source: u16 },
-    /// Load from register `a` into [Register16Memory]
+    /// Load from register `a` to the byte pointed to by [Register16Memory]
     R16MemA { dest: Register16Memory },
-    /// Load from [Register16Memory] into register `a`
+    /// Load from the byte pointed to by [Register16Memory] into register `a`
     AR16Mem { source: Register16Memory },
 }
 

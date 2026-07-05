@@ -40,8 +40,29 @@ impl MemoryMap {
         }
     }
 
+    /// Get a 1-byte value from memory
+    pub fn get8(&self, address: Address) -> Result<u8, MemoryError> {
+        todo!()
+    }
+
+    /// Get a mutable reference to a 1-byte value in memory
+    pub fn get8_mut(
+        &mut self,
+        address: Address,
+    ) -> Result<&mut u8, MemoryError> {
+        todo!()
+    }
+
     /// Get a 2-byte value from memory
     pub fn get16(&self, address: Address) -> Result<u16, MemoryError> {
+        todo!()
+    }
+
+    /// Get a mutable reference to a 2-byte value in memory
+    pub fn get16_mut(
+        &mut self,
+        address: Address,
+    ) -> Result<&mut u16, MemoryError> {
         todo!()
     }
 }
