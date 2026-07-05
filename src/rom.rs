@@ -3,7 +3,7 @@
 use crate::instruction::{
     Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
     LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
-    Register16Stack,
+    Register16Stack, Value8,
 };
 use color_eyre::eyre::{self, Context};
 use log::info;
@@ -209,22 +209,16 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             .map(|operand| Instruction::Add(Add::Hl(operand)))
             .label("add hl, r16"),
         //
-        0b0011_0100
-            .value(Instruction::Inc(DecInc::Hl))
-            .label("inc [hl]"),
         op1(0b0000_0100, Mask::M543, r8)
-            .map(|operand| Instruction::Inc(DecInc::R8(operand)))
+            .map(|operand| Instruction::Inc(DecInc::V8(operand)))
             .label("inc r8"),
-        0b0011_0101
-            .value(Instruction::Dec(DecInc::Hl))
-            .label("dec [hl]"),
         op1(0b0000_0101, Mask::M543, r8)
-            .map(|operand| Instruction::Dec(DecInc::R8(operand)))
+            .map(|operand| Instruction::Dec(DecInc::V8(operand)))
             .label("dec r8"),
         //
         (op1(0b0000_0110, Mask::M543, r8), imm8)
             .map(|(dest, source)| {
-                Instruction::Ld(Load::R8Const { dest, source })
+                Instruction::Ld(Load::V8Const { dest, source })
             })
             .label("ld r8, imm8"),
         0b0000_0111.value(Instruction::Rlca).label("rlca"),
@@ -258,7 +252,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // Halt has to come first because it's a subset of the following opcode
         0b0111_0110.value(Instruction::Halt).label("halt"),
         op2(0b0100_0000, (Mask::M543, r8), (Mask::M210, r8))
-            .map(|(dest, source)| Instruction::Ld(Load::R8R8 { dest, source }))
+            .map(|(dest, source)| Instruction::Ld(Load::V8V8 { dest, source }))
             .label("ld r8, r8"),
         // ===== BLOCK 2 =====
         math_r8(0b1000_0000, Math::Add).label("add a, r8"),
@@ -624,20 +618,19 @@ fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
 ///
 /// The parameter should be shifted down to the bottom three bits (which [op1]
 /// does automatically). Any value greater than `0b111` is invalid.
-fn r8(input: u8) -> Result<Register8, BitParameterError> {
+fn r8(input: u8) -> Result<Value8, BitParameterError> {
     match input {
-        0b000 => Ok(Register8::B),
-        0b001 => Ok(Register8::C),
-        0b010 => Ok(Register8::D),
-        0b011 => Ok(Register8::E),
-        0b100 => Ok(Register8::H),
-        0b101 => Ok(Register8::L),
-        // 0b110 is HL, which we parse separately per-instruction because the
-        // implementation is different
-        0b111 => Ok(Register8::A),
+        0b000 => Ok(Value8::Register(Register8::B)),
+        0b001 => Ok(Value8::Register(Register8::C)),
+        0b010 => Ok(Value8::Register(Register8::D)),
+        0b011 => Ok(Value8::Register(Register8::E)),
+        0b100 => Ok(Value8::Register(Register8::H)),
+        0b101 => Ok(Value8::Register(Register8::L)),
+        0b110 => Ok(Value8::Hl),
+        0b111 => Ok(Value8::Register(Register8::A)),
         _ => Err(BitParameterError {
             bits: input,
-            expected: "0-7 (excl 6; each instruction must parse [HL] separately)",
+            expected: "0-7",
         }),
     }
 }
@@ -662,7 +655,7 @@ fn math_r8<'a>(
 ) -> impl Parser<&'a [u8], Instruction, ParseError> {
     op1(opcode, Mask::M210, r8).map(move |operand| Instruction::Math {
         operation,
-        target: MathTarget::Register(operand),
+        target: MathTarget::V8(operand),
     })
 }
 
@@ -796,47 +789,47 @@ mod tests {
 
     /// Test parsing individual instructions
     #[rstest]
-    #[case::inc_r8(&[0b0010_1100], Instruction::Inc(DecInc::R8(Register8::L)))]
-    #[case::inc_hl(&[0b0011_0100], Instruction::Inc(DecInc::Hl))]
+    #[case::inc_r8(&[0b0010_1100], Instruction::Inc(Register8::L.into()))]
+    #[case::inc_hl(&[0b0011_0100], Instruction::Inc(DecInc::V8(Value8::Hl)))]
     #[case::inc_r16(
         &[0b0010_0011], Instruction::Inc(DecInc::R16(Register16::Hl))
     )]
-    #[case::dec_r8(&[0b0010_1101], Instruction::Dec(DecInc::R8(Register8::L)))]
-    #[case::dec_hl(&[0b0011_0101], Instruction::Dec(DecInc::Hl))]
+    #[case::dec_r8(&[0b0010_1101], Instruction::Dec(Register8::L.into()))]
+    #[case::dec_hl(&[0b0011_0101], Instruction::Dec(DecInc::V8(Value8::Hl)))]
     #[case::dec_r16(
         &[0b0010_1011], Instruction::Dec(DecInc::R16(Register16::Hl))
     )]
     #[case::add_a_r8(&[0b1000_0001], Instruction::Math {
         operation: Math::Add,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::adc_a_r8(&[0b1000_1001], Instruction::Math {
         operation: Math::Adc,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::sub_a_r8(&[0b1001_0001], Instruction::Math {
         operation: Math::Sub,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::sbc_a_r8(&[0b1001_1001], Instruction::Math {
         operation: Math::Sbc,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::and_a_r8(&[0b1010_0001], Instruction::Math {
         operation: Math::And,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::xor_a_r8(&[0b1010_1001], Instruction::Math {
         operation: Math::Xor,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::or_a_r8(&[0b1011_0001], Instruction::Math {
         operation: Math::Or,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::cp_a_r8(&[0b1011_1001], Instruction::Math {
         operation: Math::Cp,
-        target: MathTarget::Register(Register8::C),
+        target: Register8::C.into(),
     })]
     #[case::add_a_imm8(&[0b1100_0110, 0b0101_0101], Instruction::Math {
         operation: Math::Add,
@@ -888,13 +881,16 @@ mod tests {
         Instruction::Ld(Load::HlSpOffset { offset: -86 })
     )]
     #[case::bit(
-        &[0b1100_1011, 0b0111_0100], Instruction::Bit(Bit(6), Register8::H)
+        &[0b1100_1011, 0b0111_0100],
+        Instruction::Bit(Bit(6), Register8::H.into()),
     )]
     #[case::res(
-        &[0b1100_1011, 0b1011_0100], Instruction::Res(Bit(6), Register8::H)
+        &[0b1100_1011, 0b1011_0100],
+        Instruction::Res(Bit(6), Register8::H.into()),
     )]
     #[case::set(
-        &[0b1100_1011, 0b1111_0100], Instruction::Set(Bit(6), Register8::H)
+        &[0b1100_1011, 0b1111_0100],
+        Instruction::Set(Bit(6), Register8::H.into()),
     )]
     fn instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
         assert_eq!(parse_instruction.parse(bytes).unwrap(), expected);

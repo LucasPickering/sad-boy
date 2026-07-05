@@ -5,7 +5,7 @@
 use crate::{
     instruction::{
         Address, ConditionCode, DecInc, Instruction, Jump, Load, Register8,
-        Register16, Register16Memory,
+        Register16, Register16Memory, Value8,
     },
     memory::{MemoryError, MemoryMap},
     rom::Rom,
@@ -104,20 +104,20 @@ impl GameBoy {
     ) -> Result<usize, MemoryError> {
         // TODO set flags
         match dec_inc {
-            DecInc::R8(register) => {
+            DecInc::V8(Value8::Register(register)) => {
                 let register = self.register8_mut(register);
                 *register = register.wrapping_add_signed(delta);
                 Ok(1)
+            }
+            DecInc::V8(Value8::Hl) => {
+                let value = self.hl_mem_mut()?;
+                *value = value.wrapping_add_signed(delta);
+                Ok(3)
             }
             DecInc::R16(register) => {
                 let register = self.register16_mut(register);
                 *register = register.wrapping_add_signed(delta.into());
                 Ok(2)
-            }
-            DecInc::Hl => {
-                let value = self.hl_mem_mut()?;
-                *value = value.wrapping_add_signed(delta);
-                Ok(3)
             }
         }
     }
@@ -175,14 +175,51 @@ impl GameBoy {
                 self.registers.sp = Address(self.registers.hl());
                 Ok(2)
             }
-            Load::R8Const { dest, source } => {
+            // LD r8,n8
+            Load::V8Const {
+                dest: Value8::Register(dest),
+                source,
+            } => {
                 *self.register8_mut(dest) = source;
                 Ok(2)
             }
-            Load::R8R8 { dest, source } => {
+            // LD [HL],n8
+            Load::V8Const {
+                dest: Value8::Hl,
+                source,
+            } => {
+                *self.hl_mem_mut()? = source;
+                Ok(2)
+            }
+            // LD r8,r8
+            Load::V8V8 {
+                dest: Value8::Register(dest),
+                source: Value8::Register(source),
+            } => {
                 *self.register8_mut(dest) = self.register8(source);
                 Ok(1)
             }
+            // LD [HL],r8
+            Load::V8V8 {
+                dest: Value8::Hl,
+                source: Value8::Register(source),
+            } => {
+                *self.hl_mem_mut()? = self.register8(source);
+                Ok(2)
+            }
+            // LD r8,[HL]
+            Load::V8V8 {
+                dest: Value8::Register(dest),
+                source: Value8::Hl,
+            } => {
+                *self.register8_mut(dest) = self.hl_mem()?;
+                Ok(2)
+            }
+            // LD [HL],[HL] is not valid - that's the opcode for HALT
+            Load::V8V8 {
+                dest: Value8::Hl,
+                source: Value8::Hl,
+            } => unreachable!("LD [HL],[HL] should parse as HALT"),
             Load::R16Const { dest, source } => {
                 *self.register16_mut(dest) = source;
                 Ok(3)
@@ -283,6 +320,11 @@ impl GameBoy {
     }
 
     /// Get the byte of memory referenced by register HL
+    fn hl_mem(&self) -> Result<u8, MemoryError> {
+        self.memory.get8(Address(self.registers.hl()))
+    }
+
+    /// Get a mutable reference to the byte of memory referenced by register HL
     fn hl_mem_mut(&mut self) -> Result<&mut u8, MemoryError> {
         self.memory.get8_mut(Address(self.registers.hl()))
     }

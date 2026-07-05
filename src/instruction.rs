@@ -17,7 +17,7 @@ pub enum Instruction {
     /// Bitwise AND between `a` and another value (modifies `a`)
     And(Value8),
     /// Get a single bit from a register (output to the `zero` flag)
-    Bit(Bit, Register8),
+    Bit(Bit, Value8),
     /// Push a new frame onto the stack, then set `pc` to that address
     Call {
         address: Address,
@@ -63,7 +63,7 @@ pub enum Instruction {
     /// Pop a 16-bit value from the stack into a register
     Push(Register16Stack),
     /// Set a specific bit in a register to 0
-    Res(Bit, Register8),
+    Res(Bit, Value8),
     /// Return from subroutine
     ///
     /// If the condition is defined, only return if it's true
@@ -71,19 +71,19 @@ pub enum Instruction {
     /// Return from subroutine and enable interrupts
     Reti,
     /// Rotate a register left, through the carry flag
-    Rl(Register8),
+    Rl(Value8),
     /// Rotate register `a` left, through the carry flag
     Rla,
     /// Rotate a register left
-    Rlc(Register8),
+    Rlc(Value8),
     /// Rotate register `a` left
     Rlca,
     /// Rotate a register right, through the carry flag
-    Rr(Register8),
+    Rr(Value8),
     /// Rotate register `a` right, through the carry flag
     Rra,
     /// Rotate a register right
-    Rrc(Register8),
+    Rrc(Value8),
     /// Rotate register `a` right
     Rrca,
     /// Call a function at an address
@@ -96,15 +96,15 @@ pub enum Instruction {
     /// Set carry flag
     Scf,
     /// Set a specific bit in a register to 1
-    Set(Bit, Register8),
+    Set(Bit, Value8),
     /// Shift left arithmetically a register
-    Sla(Register8),
+    Sla(Value8),
     /// Shift right arithmetically a register
-    Sra(Register8),
+    Sra(Value8),
     /// Shift right logically a register
-    Srl(Register8),
+    Srl(Value8),
     /// Swap the upper 4 bits of a register with the lower 4
-    Swap(Register8),
+    Swap(Value8),
     /// Enter CPU low power mode
     Stop,
     /// An invalid instruction from one of the 11 invalid opcodes
@@ -135,12 +135,16 @@ pub enum Math {
 /// TODO
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MathTarget {
-    /// Byte in a register
-    Register(Register8),
-    /// Byte pointed to by register `hl`
-    Hl,
+    /// Value in a register or memory
+    V8(Value8),
     /// Constant value
     Const(u8),
+}
+
+impl From<Register8> for MathTarget {
+    fn from(register: Register8) -> Self {
+        Self::V8(Value8::Register(register))
+    }
 }
 
 /// Variations of the `ADD` instruction
@@ -155,12 +159,16 @@ pub enum Add {
 /// Variations of the `DEC` (decrement) and `INC` (increment) instructions
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum DecInc {
-    /// Increment an 8-bit register
-    R8(Register8),
+    /// Increment an 8-bit value
+    V8(Value8),
     /// Increment a 16-bit register
     R16(Register16),
-    /// Increment the byte pointed to by `hl`
-    Hl,
+}
+
+impl From<Register8> for DecInc {
+    fn from(register: Register8) -> Self {
+        Self::V8(Value8::Register(register))
+    }
 }
 
 /// Variations of the `JP` (jump) instruction
@@ -187,10 +195,10 @@ pub enum Load {
     HlSpOffset { offset: i8 },
     /// Load from `sp` to `hl`
     SpHl,
-    /// Load a constant into an 8-bit register
-    R8Const { dest: Register8, source: u8 },
-    /// Load from one 8-bit register to another
-    R8R8 { dest: Register8, source: Register8 },
+    /// Load a constant into an 8-bit value
+    V8Const { dest: Value8, source: u8 },
+    /// Load from one 8-bit value to another
+    V8V8 { dest: Value8, source: Value8 },
     /// Load a constant into a 16-bit register
     R16Const { dest: Register16, source: u16 },
     /// Load from register `a` to the byte pointed to by [Register16Memory]
@@ -219,17 +227,11 @@ pub enum LoadHigh {
 pub enum Value8 {
     /// Value from a register
     Register(Register8),
-    /// Constant value
-    Const(u8),
-    // TODO should this include [HL]?
+    /// Byte pointed to by the address in register `hl`
+    Hl,
 }
 
-impl From<u8> for Value8 {
-    fn from(value: u8) -> Self {
-        Self::Const(value)
-    }
-}
-
+// TODO remove?
 impl From<Register8> for Value8 {
     fn from(register: Register8) -> Self {
         Self::Register(register)
