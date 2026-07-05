@@ -4,7 +4,10 @@
 
 #![expect(unused)] // TODO remove this
 
-use crate::{memory::MemoryMap, rom::Rom};
+use crate::{
+    memory::{MemoryError, MemoryMap},
+    rom::Rom,
+};
 use color_eyre::eyre;
 use log::warn;
 use std::{
@@ -50,7 +53,7 @@ impl GameBoy {
                 let (instruction, num_bytes) =
                     self.memory.get_instruction(self.registers.pc)?;
                 let pc = self.registers.pc;
-                let cycles = self.execute(instruction);
+                let cycles = self.execute(instruction)?;
                 cycle_budget = cycle_budget.saturating_sub(cycles);
                 // If the instruction didn't modify the PC (e.g. jumps), then
                 // advance it automatically
@@ -73,13 +76,50 @@ impl GameBoy {
 
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
-    fn execute(&mut self, instruction: Instruction) -> usize {
+    fn execute(
+        &mut self,
+        instruction: Instruction,
+    ) -> Result<usize, MemoryError> {
         match instruction {
-            Instruction::Nop => 1,
+            Instruction::Nop => Ok(1),
+            Instruction::Jp(jump) => Ok(self.jump(jump)),
             _ => {
                 warn!("Unknown instruction {instruction:?}");
+                Ok(1)
+            }
+        }
+    }
+
+    /// Execute a `JP` instruction
+    fn jump(&mut self, jump: Jump) -> usize {
+        match jump {
+            Jump::Address(address) => {
+                self.registers.pc = address;
+                4
+            }
+            Jump::AddressCc(condition, address) => {
+                if self.condition(condition) {
+                    self.registers.pc = address;
+                    4
+                } else {
+                    3
+                }
+            }
+            Jump::Hl => {
+                self.registers.pc = Address(self.registers.hl());
                 1
             }
+        }
+    }
+
+    /// Evaluate a [ConditionCode]
+    fn condition(&self, condition: ConditionCode) -> bool {
+        let flags = self.registers.flags();
+        match condition {
+            ConditionCode::Z => flags.zero,
+            ConditionCode::Nz => !flags.zero,
+            ConditionCode::C => flags.carry,
+            ConditionCode::Nc => !flags.carry,
         }
     }
 
@@ -412,7 +452,7 @@ pub enum Jump {
     Address(Address),
     /// Jump to a specific memory address if the condition is true
     AddressCc(ConditionCode, Address),
-    /// Jump to the address pointed to by `hl`
+    /// Jump to the address in `hl`
     Hl,
 }
 

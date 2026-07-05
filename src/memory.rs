@@ -39,6 +39,11 @@ impl MemoryMap {
             })
         }
     }
+
+    /// Get a 2-byte value from memory
+    pub fn get16(&self, address: Address) -> Result<u16, MemoryError> {
+        todo!()
+    }
 }
 
 /// Error while accessing memory
