@@ -184,39 +184,39 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop).label("nop"),
         //
-        (op1(0b0000_0001, Mask::M54, r16), imm16)
+        (op1(0b0000_0001, Mask::M54), imm16)
             .map(|(dest, source)| {
                 Instruction::Ld(Load::R16Const { source, dest })
             })
             .label("ld r16, imm16"),
-        op1(0b0000_0010, Mask::M54, r16mem)
+        op1(0b0000_0010, Mask::M54)
             .map(|dest| Instruction::Ld(Load::R16MemA { dest }))
             .label("ld [r16mem], a"),
-        op1(0b0000_1010, Mask::M54, r16mem)
+        op1(0b0000_1010, Mask::M54)
             .map(|source| Instruction::Ld(Load::AR16Mem { source }))
             .label("ld a, [r16mem]"),
         preceded(0b0000_1000, address)
             .map(|dest| Instruction::Ld(Load::AddressSp { dest }))
             .label("ld [imm16], sp"),
         //
-        op1(0b0000_0011, Mask::M54, r16)
+        op1(0b0000_0011, Mask::M54)
             .map(|operand| Instruction::Inc(DecInc::R16(operand)))
             .label("inc r16"),
-        op1(0b0000_1011, Mask::M54, r16)
+        op1(0b0000_1011, Mask::M54)
             .map(|operand| Instruction::Dec(DecInc::R16(operand)))
             .label("dec r16"),
-        op1(0b0000_1001, Mask::M54, r16)
+        op1(0b0000_1001, Mask::M54)
             .map(|operand| Instruction::Add(Add::Hl(operand)))
             .label("add hl, r16"),
         //
-        op1(0b0000_0100, Mask::M543, r8)
+        op1(0b0000_0100, Mask::M543)
             .map(|operand| Instruction::Inc(DecInc::V8(operand)))
             .label("inc r8"),
-        op1(0b0000_0101, Mask::M543, r8)
+        op1(0b0000_0101, Mask::M543)
             .map(|operand| Instruction::Dec(DecInc::V8(operand)))
             .label("dec r8"),
         //
-        (op1(0b0000_0110, Mask::M543, r8), imm8)
+        (op1(0b0000_0110, Mask::M543), imm8)
             .map(|(dest, source)| {
                 Instruction::Ld(Load::V8Const { dest, source })
             })
@@ -237,7 +237,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
                 condition: None
             })
             .label("jr imm8"),
-        (op1(0b0010_0000, Mask::M43, cond), imm8)
+        (op1(0b0010_0000, Mask::M43), imm8)
             .map(|(cond, offset)| {
                 // Parse as imm8 so we get its cut_err() call
                 Instruction::Jr {
@@ -251,7 +251,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         // ===== BLOCK 1 =====
         // Halt has to come first because it's a subset of the following opcode
         0b0111_0110.value(Instruction::Halt).label("halt"),
-        op2(0b0100_0000, (Mask::M543, r8), (Mask::M210, r8))
+        op2(0b0100_0000, Mask::M543, Mask::M210)
             .map(|(dest, source)| Instruction::Ld(Load::V8V8 { dest, source }))
             .label("ld r8, r8"),
         // ===== BLOCK 2 =====
@@ -273,12 +273,12 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         math_imm8(0b1111_0110, Math::Or).label("or a, imm8"),
         math_imm8(0b1111_1110, Math::Cp).label("cp a, imm8"),
         //
-        op1(0b1100_0000, Mask::M43, cond)
+        op1(0b1100_0000, Mask::M43)
             .map(|cond| Instruction::Ret(Some(cond)))
             .label("ret cond"),
         0b1100_1001.value(Instruction::Ret(None)).label("ret"),
         0b1101_1001.value(Instruction::Reti).label("reti"),
-        (op1(0b1100_0010, Mask::M43, cond), address)
+        (op1(0b1100_0010, Mask::M43), address)
             .map(|(cond, dest)| {
                 Instruction::Jp(Jump::AddressCc(cond, dest))
             })
@@ -287,7 +287,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             .map(|dest| Instruction::Jp(Jump::Address(dest)))
             .label("jp imm16"),
         0b1110_1001.value(Instruction::Jp(Jump::Hl)).label("jp hl"),
-        (op1(0b1100_0100, Mask::M43, cond), address)
+        (op1(0b1100_0100, Mask::M43), address)
             .map(|(cond, address)| {
                 Instruction::Call {
                     address,
@@ -301,14 +301,14 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
                 condition: None
             })
             .label("call imm16"),
-        op1(0b1100_0111, Mask::M543, tgt3)
+        op1::<Address>(0b1100_0111, Mask::M543)
             .map(Instruction::Rst)
             .label("rst tgt3"),
         //
-        op1(0b1100_0001, Mask::M54, r16stk)
+        op1(0b1100_0001, Mask::M54)
             .map(Instruction::Pop)
             .label("pop r16stk"),
-        op1(0b1100_0101, Mask::M54, r16stk)
+        op1(0b1100_0101, Mask::M54)
             .map(Instruction::Push)
             .label("push r16stk"),
         //
@@ -316,37 +316,37 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         preceded(
             0b1100_1011,
             alt!(
-                op1(0b0000_0000, Mask::M210, r8)
+                op1(0b0000_0000, Mask::M210)
                     .map(Instruction::Rlc)
                     .label("rlc"),
-                op1(0b0000_1000, Mask::M210, r8)
+                op1(0b0000_1000, Mask::M210)
                     .map(Instruction::Rrc)
                     .label("rrc"),
-                op1(0b0001_0000, Mask::M210, r8)
+                op1(0b0001_0000, Mask::M210)
                     .map(Instruction::Rl)
                     .label("rl"),
-                op1(0b0001_1000, Mask::M210, r8)
+                op1(0b0001_1000, Mask::M210)
                     .map(Instruction::Rr)
                     .label("rr"),
-                op1(0b0010_0000, Mask::M210, r8)
+                op1(0b0010_0000, Mask::M210)
                     .map(Instruction::Sla)
                     .label("sla"),
-                op1(0b0010_1000, Mask::M210, r8)
+                op1(0b0010_1000, Mask::M210)
                     .map(Instruction::Sra)
                     .label("sra"),
-                op1(0b0011_0000, Mask::M210, r8)
+                op1(0b0011_0000, Mask::M210)
                     .map(Instruction::Swap)
                     .label("swap"),
-                op1(0b0011_1000, Mask::M210, r8)
+                op1(0b0011_1000, Mask::M210)
                     .map(Instruction::Srl)
                     .label("srl"),
-                op2(0b0100_0000, (Mask::M543, bit), (Mask::M210, r8))
+                op2(0b0100_0000, Mask::M543, Mask::M210)
                     .map(|(bit, register)| Instruction::Bit(bit, register))
                     .label("bit b3, r8"),
-                op2(0b1000_0000, (Mask::M543, bit), (Mask::M210, r8))
+                op2(0b1000_0000, Mask::M543, Mask::M210)
                     .map(|(bit, register)| Instruction::Res(bit, register))
                     .label("res b3, r8"),
-                op2(0b1100_0000, (Mask::M543, bit), (Mask::M210, r8))
+                op2(0b1100_0000, Mask::M543, Mask::M210)
                     .map(|(bit, register)| Instruction::Set(bit, register))
                     .label("set b3, r8"),
             )
@@ -494,15 +494,14 @@ where
 ///   value. **The value will be shifted down to the least significant bits), so
 ///   that the same function can be used for all opcodes with the same parameter
 ///   type, regardless of which bits store the param.
-fn op1<'a, O>(
+fn op1<'a, O: BitParameter>(
     opcode: u8,
     mask: Mask,
-    map_param: impl Fn(u8) -> Result<O, BitParameterError>,
 ) -> impl Parser<&'a [u8], O, ParseError> {
     trace("op1", move |input: &mut &'a [u8]| {
         let byte = binary::u8.parse_next(input)?;
         if let Some([param]) = get_bit_params(opcode, [mask], byte) {
-            let param = map_param(param)
+            let param = O::from_byte(param)
                 .map_err(|error| error.into_parse_error(input))?;
             Ok(param)
         } else {
@@ -514,19 +513,19 @@ fn op1<'a, O>(
 /// Create a parser for an opcode with two embedded bit parameters
 ///
 /// See [op1] for more info.
-fn op2<'a, O1, O2>(
+fn op2<'a, O1: BitParameter, O2: BitParameter>(
     opcode: u8,
-    (mask1, map_param1): (Mask, impl Fn(u8) -> Result<O1, BitParameterError>),
-    (mask2, map_param2): (Mask, impl Fn(u8) -> Result<O2, BitParameterError>),
+    mask1: Mask,
+    mask2: Mask,
 ) -> impl Parser<&'a [u8], (O1, O2), ParseError> {
     trace("op2", move |input: &mut &'a [u8]| {
         let byte = binary::u8.parse_next(input)?;
         if let Some([param1, param2]) =
             get_bit_params(opcode, [mask1, mask2], byte)
         {
-            let param1 = map_param1(param1)
+            let param1 = O1::from_byte(param1)
                 .map_err(|error| error.into_parse_error(input))?;
-            let param2 = map_param2(param2)
+            let param2 = O2::from_byte(param2)
                 .map_err(|error| error.into_parse_error(input))?;
             Ok((param1, param2))
         } else {
@@ -567,38 +566,6 @@ fn address(input: &mut &[u8]) -> ModalResult<Address> {
     imm16.map(Address).parse_next(input)
 }
 
-/// Parse a condition code from a 2-bit opcode parameter
-///
-/// The parameter should be shifted down to the bottom two bits (which [op1]
-/// does automatically). Any value greater than `0b11` is invalid.
-fn cond(input: u8) -> Result<ConditionCode, BitParameterError> {
-    match input {
-        0b00 => Ok(ConditionCode::Nz),
-        0b01 => Ok(ConditionCode::Z),
-        0b10 => Ok(ConditionCode::Nc),
-        0b11 => Ok(ConditionCode::C),
-        _ => Err(BitParameterError {
-            bits: input,
-            expected: "0-3",
-        }),
-    }
-}
-
-/// Parse a bit index from a 3-bit opcode parameter
-///
-/// The parameter should be shifted down to the bottom three bits (which [op1]
-/// does automatically). Any value greater than `0b111` is invalid.
-fn bit(input: u8) -> Result<Bit, BitParameterError> {
-    if input <= 0b111 {
-        Ok(Bit(input))
-    } else {
-        Err(BitParameterError {
-            bits: input,
-            expected: "0-7",
-        })
-    }
-}
-
 /// Parse one byte as a constant value
 fn imm8(input: &mut &[u8]) -> ModalResult<u8> {
     cut_err(binary::u8).parse_next(input)
@@ -612,27 +579,6 @@ fn imm8_signed(input: &mut &[u8]) -> ModalResult<i8> {
 /// Parse two bytes little-endian bytes as a constant value
 fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
     cut_err(binary::u16(Endianness::Little)).parse_next(input)
-}
-
-/// Parse an 8-bit register reference from a 3-bit opcode parameter
-///
-/// The parameter should be shifted down to the bottom three bits (which [op1]
-/// does automatically). Any value greater than `0b111` is invalid.
-fn r8(input: u8) -> Result<Value8, BitParameterError> {
-    match input {
-        0b000 => Ok(Value8::Register(Register8::B)),
-        0b001 => Ok(Value8::Register(Register8::C)),
-        0b010 => Ok(Value8::Register(Register8::D)),
-        0b011 => Ok(Value8::Register(Register8::E)),
-        0b100 => Ok(Value8::Register(Register8::H)),
-        0b101 => Ok(Value8::Register(Register8::L)),
-        0b110 => Ok(Value8::Hl),
-        0b111 => Ok(Value8::Register(Register8::A)),
-        _ => Err(BitParameterError {
-            bits: input,
-            expected: "0-7",
-        }),
-    }
 }
 
 /// Parse an 8-bit math operation ([Instruction::Math]) where the operand is the
@@ -653,80 +599,146 @@ fn math_r8<'a>(
     opcode: u8,
     operation: Math,
 ) -> impl Parser<&'a [u8], Instruction, ParseError> {
-    op1(opcode, Mask::M210, r8).map(move |operand| Instruction::Math {
+    op1::<Value8>(opcode, Mask::M210).map(move |operand| Instruction::Math {
         operation,
         target: MathTarget::V8(operand),
     })
 }
 
-/// Parse a 16-bit register reference from a 2-bit opcode parameter
+/// A type that can be parsed from an opcode bit parameter
 ///
-/// The parameter should be shifted down to the bottom two bits (which [op1]
-/// does automatically). Any value greater than `0b11` is invalid.
-fn r16(input: u8) -> Result<Register16, BitParameterError> {
-    match input {
-        0b00 => Ok(Register16::Bc),
-        0b01 => Ok(Register16::De),
-        0b10 => Ok(Register16::Hl),
-        0b11 => Ok(Register16::Sp),
-        _ => Err(BitParameterError {
-            bits: input,
-            expected: "0-3",
-        }),
+/// Bit parameters are values packed into either 2 or 3 bits of a dynamic
+/// opcode. See the first section of
+/// https://gbdev.io/pandocs/CPU_Instruction_Set.html
+trait BitParameter: Sized {
+    /// Map the bit parameter to a semantic value
+    ///
+    /// The input byte should be shifted down to the bottom (right-most) bits
+    /// (which [op1] and [op2] do automatically). Return `Err` for any invalid
+    /// value.
+    fn from_byte(input: u8) -> Result<Self, BitParameterError>;
+}
+
+/// Parse `bit` parameter
+impl BitParameter for Bit {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        if input <= 0b111 {
+            Ok(Bit(input))
+        } else {
+            Err(BitParameterError {
+                bits: input,
+                expected: "0-7",
+            })
+        }
     }
 }
 
-/// Parse a 16-bit register reference from a 2-bit opcode parameter (for
-/// `LD` only!!)
-///
-/// The parameter should be shifted down to the bottom two bits (which [op1]
-/// does automatically). Any value greater than `0b11` is invalid.
-fn r16mem(input: u8) -> Result<Register16Memory, BitParameterError> {
-    match input {
-        0b00 => Ok(Register16Memory::Bc),
-        0b01 => Ok(Register16Memory::De),
-        0b10 => Ok(Register16Memory::Hli),
-        0b11 => Ok(Register16Memory::Hld),
-        _ => Err(BitParameterError {
-            bits: input,
-            expected: "0-3",
-        }),
+/// Parse `cond` parameter
+impl BitParameter for ConditionCode {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        match input {
+            0b00 => Ok(Self::Nz),
+            0b01 => Ok(Self::Z),
+            0b10 => Ok(Self::Nc),
+            0b11 => Ok(Self::C),
+            _ => Err(BitParameterError {
+                bits: input,
+                expected: "0-3",
+            }),
+        }
     }
 }
 
-/// Parse a 16-bit register reference from a 2-bit opcode parameter (for
-/// push/pop only!!)
-///
-/// The parameter should be shifted down to the bottom two bits (which [op1]
-/// does automatically). Any value greater than `0b11` is invalid.
-fn r16stk(input: u8) -> Result<Register16Stack, BitParameterError> {
-    match input {
-        0b00 => Ok(Register16Stack::Bc),
-        0b01 => Ok(Register16Stack::De),
-        0b10 => Ok(Register16Stack::Hl),
-        0b11 => Ok(Register16Stack::Af),
-        _ => Err(BitParameterError {
-            bits: input,
-            expected: "0-3",
-        }),
+/// Parse `r8` parameter
+impl BitParameter for Value8 {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        match input {
+            0b000 => Ok(Self::Register(Register8::B)),
+            0b001 => Ok(Self::Register(Register8::C)),
+            0b010 => Ok(Self::Register(Register8::D)),
+            0b011 => Ok(Self::Register(Register8::E)),
+            0b100 => Ok(Self::Register(Register8::H)),
+            0b101 => Ok(Self::Register(Register8::L)),
+            0b110 => Ok(Self::Hl),
+            0b111 => Ok(Self::Register(Register8::A)),
+            _ => Err(BitParameterError {
+                bits: input,
+                expected: "0-7",
+            }),
+        }
     }
 }
 
-/// Parse a target memory address for the `rst` instruction
+/// Parse `r16` parameter
+impl BitParameter for Register16 {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        match input {
+            0b00 => Ok(Self::Bc),
+            0b01 => Ok(Self::De),
+            0b10 => Ok(Self::Hl),
+            0b11 => Ok(Self::Sp),
+            _ => Err(BitParameterError {
+                bits: input,
+                expected: "0-3",
+            }),
+        }
+    }
+}
+
+/// Parse `r16mem` parameter
+impl BitParameter for Register16Memory {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        match input {
+            0b00 => Ok(Self::Bc),
+            0b01 => Ok(Self::De),
+            0b10 => Ok(Self::Hli),
+            0b11 => Ok(Self::Hld),
+            _ => Err(BitParameterError {
+                bits: input,
+                expected: "0-3",
+            }),
+        }
+    }
+}
+
+/// Parse `r16stk` parameter
+impl BitParameter for Register16Stack {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        match input {
+            0b00 => Ok(Self::Bc),
+            0b01 => Ok(Self::De),
+            0b10 => Ok(Self::Hl),
+            0b11 => Ok(Self::Af),
+            _ => Err(BitParameterError {
+                bits: input,
+                expected: "0-3",
+            }),
+        }
+    }
+}
+
+/// Parse `tgt3` parameter (for the `RST` instruction)
 ///
 /// It's a 1-byte address encoded into 3 bits of the opcode
-fn tgt3(input: u8) -> Result<Address, BitParameterError> {
-    if input <= 0b111 {
-        Ok(Address((input * 8).into()))
-    } else {
-        Err(BitParameterError {
-            bits: input,
-            expected: "0-7",
-        })
+impl BitParameter for Address {
+    fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+        if input <= 0b111 {
+            Ok(Address((input * 8).into()))
+        } else {
+            Err(BitParameterError {
+                bits: input,
+                expected: "0-7",
+            })
+        }
     }
 }
 
-/// TODO
+/// Extracted a bit parameter with an invalid value
+///
+/// All the bit parameter types use all the possible values for the extracted
+/// bits (4 possible values for 2-bit parameters, 8 values for 3-bit params).
+/// This error indicates a bug in parsing, probably meaning too many bits were
+/// extracted.
 #[derive(Debug)]
 struct BitParameterError {
     bits: u8,
@@ -759,13 +771,20 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    /// Pass-through bit param parsing for testing
+    impl BitParameter for u8 {
+        fn from_byte(input: u8) -> Result<Self, BitParameterError> {
+            Ok(input)
+        }
+    }
+
     /// Test success cases of the `op1` parser
     #[rstest]
     // Masked bits get shifted down to the right
-    #[case::middle_bits(0b0100_0101, Mask::M54, 0b0000_0001)]
+    #[case::middle_bits(0b0100_0101, Mask::M54, 0b01)]
     fn op1_ok(#[case] opcode: u8, #[case] mask: Mask, #[case] expected: u8) {
         let input = &[0b0101_0101];
-        let mut parser = op1(opcode, mask, Ok);
+        let mut parser = op1::<u8>(opcode, mask);
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 
@@ -783,7 +802,7 @@ mod tests {
         #[case] expected: (u8, u8),
     ) {
         let input = &[0b0101_0101];
-        let mut parser = op2(opcode, (masks.0, Ok), (masks.1, Ok));
+        let mut parser = op2::<u8, u8>(opcode, masks.0, masks.1);
         assert_eq!(parser.parse(input).unwrap(), expected);
     }
 
