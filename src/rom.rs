@@ -1,7 +1,7 @@
 //! Utilities for ROM management
 
 use crate::emu::{
-    Add, Address, Bit, ConditionCode, Dec, Inc, Instruction, Jump, Load,
+    Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
     LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
     Register16Stack,
 };
@@ -176,6 +176,9 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.
     // https://gbdev.io/pandocs/CPU_Instruction_Set.html
+    // NOTE: That doc includes [HL] under r8, with the parameter code 0b110. I
+    // broke that out into separate instructions, because the behavior is
+    // appreciably different. 0b110 is not a valid param code for r8.
     alt!(
         // ===== BLOCK 0 =====
         0b0000_0000.value(Instruction::Nop).label("nop"),
@@ -196,20 +199,26 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             .label("ld [imm16], sp"),
         //
         op1(0b0000_0011, Mask::M54, r16)
-            .map(|operand| Instruction::Inc(Inc::R16(operand)))
+            .map(|operand| Instruction::Inc(DecInc::R16(operand)))
             .label("inc r16"),
         op1(0b0000_1011, Mask::M54, r16)
-            .map(|operand| Instruction::Dec(Dec::R16(operand)))
+            .map(|operand| Instruction::Dec(DecInc::R16(operand)))
             .label("dec r16"),
         op1(0b0000_1001, Mask::M54, r16)
             .map(|operand| Instruction::Add(Add::Hl(operand)))
             .label("add hl, r16"),
         //
+        0b0011_0100
+            .value(Instruction::Inc(DecInc::Hl))
+            .label("inc [hl]"),
         op1(0b0000_0100, Mask::M543, r8)
-            .map(|operand| Instruction::Inc(Inc::R8(operand)))
+            .map(|operand| Instruction::Inc(DecInc::R8(operand)))
             .label("inc r8"),
+        0b0011_0101
+            .value(Instruction::Dec(DecInc::Hl))
+            .label("dec [hl]"),
         op1(0b0000_0101, Mask::M543, r8)
-            .map(|operand| Instruction::Dec(Dec::R8(operand)))
+            .map(|operand| Instruction::Dec(DecInc::R8(operand)))
             .label("dec r8"),
         //
         (op1(0b0000_0110, Mask::M543, r8), imm8)
@@ -619,11 +628,12 @@ fn r8(input: u8) -> Result<Register8, BitParameterError> {
         0b011 => Ok(Register8::E),
         0b100 => Ok(Register8::H),
         0b101 => Ok(Register8::L),
-        0b110 => Ok(Register8::Hl),
+        // 0b110 is HL, which we parse separately per-instruction because the
+        // implementation is different
         0b111 => Ok(Register8::A),
         _ => Err(BitParameterError {
             bits: input,
-            expected: "0-7",
+            expected: "0-7 (excl 6; each instruction must parse [HL] separately)",
         }),
     }
 }
@@ -782,6 +792,16 @@ mod tests {
 
     /// Test parsing individual instructions
     #[rstest]
+    #[case::inc_r8(&[0b0010_1100], Instruction::Inc(DecInc::R8(Register8::L)))]
+    #[case::inc_hl(&[0b0011_0100], Instruction::Inc(DecInc::Hl))]
+    #[case::inc_r16(
+        &[0b0010_0011], Instruction::Inc(DecInc::R16(Register16::Hl))
+    )]
+    #[case::dec_r8(&[0b0010_1101], Instruction::Dec(DecInc::R8(Register8::L)))]
+    #[case::dec_hl(&[0b0011_0101], Instruction::Dec(DecInc::Hl))]
+    #[case::dec_r16(
+        &[0b0010_1011], Instruction::Dec(DecInc::R16(Register16::Hl))
+    )]
     #[case::add_a_r8(&[0b1000_0001], Instruction::Math {
         operation: Math::Add,
         target: MathTarget::Register(Register8::C),

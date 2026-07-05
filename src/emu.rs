@@ -82,8 +82,8 @@ impl GameBoy {
     ) -> Result<usize, MemoryError> {
         match instruction {
             Instruction::Nop => Ok(1),
-            Instruction::Dec(dec) => Ok(self.dec(dec)?),
-            Instruction::Inc(inc) => Ok(self.inc(inc)?),
+            Instruction::Dec(dec_inc) => Ok(self.dec_inc(dec_inc, -1)?),
+            Instruction::Inc(dec_inc) => Ok(self.dec_inc(dec_inc, 1)?),
             Instruction::Jp(jump) => Ok(self.jump(jump)),
             Instruction::Ld(load) => self.load(load),
             _ => {
@@ -93,49 +93,30 @@ impl GameBoy {
         }
     }
 
-    /// Execute a `DEC` instruction
+    /// Execute a `DEC` or `INC` instruction
     ///
-    /// Return the number of consumed CPU cycles.
-    fn dec(&mut self, dec: Dec) -> Result<usize, MemoryError> {
+    /// `delta` should be `-1` for `DEC`, `1` for `INC` Return the number of
+    /// consumed CPU cycles.
+    fn dec_inc(
+        &mut self,
+        dec_inc: DecInc,
+        delta: i8,
+    ) -> Result<usize, MemoryError> {
         // TODO set flags
-        match dec {
-            Dec::R8(register) => {
-                let register = self.register8_mut(register)?;
-                *register = register.wrapping_sub(1);
+        match dec_inc {
+            DecInc::R8(register) => {
+                let register = self.register8_mut(register);
+                *register = register.wrapping_add_signed(delta);
                 Ok(1)
             }
-            Dec::R16(register) => {
+            DecInc::R16(register) => {
                 let register = self.register16_mut(register);
-                *register = register.wrapping_sub(1);
+                *register = register.wrapping_add_signed(delta.into());
                 Ok(2)
             }
-            Dec::Hl => {
+            DecInc::Hl => {
                 let value = self.hl_mem_mut()?;
-                *value = value.wrapping_sub(1);
-                Ok(3)
-            }
-        }
-    }
-
-    /// Execute an `INC` instruction
-    ///
-    /// Return the number of consumed CPU cycles.
-    fn inc(&mut self, inc: Inc) -> Result<usize, MemoryError> {
-        // TODO set flags
-        match inc {
-            Inc::R8(register) => {
-                let register = self.register8_mut(register)?;
-                *register = register.wrapping_add(1);
-                Ok(1)
-            }
-            Inc::R16(register) => {
-                let register = self.register16_mut(register);
-                *register = register.wrapping_add(1);
-                Ok(2)
-            }
-            Inc::Hl => {
-                let value = self.hl_mem_mut()?;
-                *value = value.wrapping_add(1);
+                *value = value.wrapping_add_signed(delta);
                 Ok(3)
             }
         }
@@ -195,12 +176,11 @@ impl GameBoy {
                 Ok(2)
             }
             Load::R8Const { dest, source } => {
-                *self.register8_mut(dest)? = source;
+                *self.register8_mut(dest) = source;
                 Ok(2)
             }
             Load::R8R8 { dest, source } => {
-                let source = *self.register8_mut(source)?;
-                *self.register8_mut(dest)? = source;
+                *self.register8_mut(dest) = self.register8(source);
                 Ok(1)
             }
             Load::R16Const { dest, source } => {
@@ -236,39 +216,28 @@ impl GameBoy {
     }
 
     /// Get a the value of an 8-bit register
-    fn register8(&self, register: Register8) -> Result<u8, MemoryError> {
+    fn register8(&self, register: Register8) -> u8 {
         match register {
-            Register8::A => Ok(self.registers.a),
-            Register8::B => Ok(self.registers.b),
-            Register8::C => Ok(self.registers.c),
-            Register8::D => Ok(self.registers.d),
-            Register8::E => Ok(self.registers.e),
-            Register8::H => Ok(self.registers.h),
-            Register8::Hl => {
-                let address = Address(self.registers.hl());
-                self.memory.get8(address)
-            }
-            Register8::L => Ok(self.registers.l),
+            Register8::A => self.registers.a,
+            Register8::B => self.registers.b,
+            Register8::C => self.registers.c,
+            Register8::D => self.registers.d,
+            Register8::E => self.registers.e,
+            Register8::H => self.registers.h,
+            Register8::L => self.registers.l,
         }
     }
 
     /// Get a mutable reference to an 8-bit register
-    fn register8_mut(
-        &mut self,
-        register: Register8,
-    ) -> Result<&mut u8, MemoryError> {
+    fn register8_mut(&mut self, register: Register8) -> &mut u8 {
         match register {
-            Register8::A => Ok(&mut self.registers.a),
-            Register8::B => Ok(&mut self.registers.b),
-            Register8::C => Ok(&mut self.registers.c),
-            Register8::D => Ok(&mut self.registers.d),
-            Register8::E => Ok(&mut self.registers.e),
-            Register8::H => Ok(&mut self.registers.h),
-            Register8::Hl => {
-                let address = Address(self.registers.hl());
-                self.memory.get8_mut(address)
-            }
-            Register8::L => Ok(&mut self.registers.l),
+            Register8::A => &mut self.registers.a,
+            Register8::B => &mut self.registers.b,
+            Register8::C => &mut self.registers.c,
+            Register8::D => &mut self.registers.d,
+            Register8::E => &mut self.registers.e,
+            Register8::H => &mut self.registers.h,
+            Register8::L => &mut self.registers.l,
         }
     }
 
@@ -320,14 +289,6 @@ impl GameBoy {
     /// Get the byte of memory referenced by register HL
     fn hl_mem_mut(&mut self) -> Result<&mut u8, MemoryError> {
         self.memory.get8_mut(Address(self.registers.hl()))
-    }
-
-    /// Resolve an 8-bit value
-    fn value8(&self, value: Value8) -> Result<u8, MemoryError> {
-        match value {
-            Value8::Register(register) => self.register8(register),
-            Value8::Const(value) => Ok(value),
-        }
     }
 }
 
@@ -483,7 +444,7 @@ pub enum Instruction {
     /// Decimal Adjust Accumulator
     Daa,
     /// Decrement a value by 1
-    Dec(Dec),
+    Dec(DecInc),
     /// Disable interrupts
     Di,
     /// Enable interrupts
@@ -491,7 +452,7 @@ pub enum Instruction {
     /// Enter CPU low-power consumption mode until an interrupt occurs
     Halt,
     /// Increment a value by 1
-    Inc(Inc),
+    Inc(DecInc),
     /// Jump to another address in the code
     Jp(Jump),
     /// Jump a relative number of instructions in the code
@@ -602,20 +563,9 @@ pub enum Add {
     HlSp,
 }
 
-/// Variations of the `DEC` (decrement) instruction
+/// Variations of the `DEC` (decrement) and `INC` (increment) instructions
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Dec {
-    /// Decrement an 8-bit register
-    R8(Register8),
-    /// Decrement a 16-bit register
-    R16(Register16),
-    /// Decrement the byte pointed to by `hl`
-    Hl,
-}
-
-/// Variations of the `INC` (increment) instruction
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Inc {
+pub enum DecInc {
     /// Increment an 8-bit register
     R8(Register8),
     /// Increment a 16-bit register
@@ -682,6 +632,7 @@ pub enum Value8 {
     Register(Register8),
     /// Constant value
     Const(u8),
+    // TODO should this include [HL]?
 }
 
 impl From<u8> for Value8 {
@@ -698,7 +649,10 @@ impl From<Register8> for Value8 {
 
 /// 8-bit register value (excluding `f`)
 ///
-/// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
+/// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html EXCEPT this does
+/// not include the `hl` variant. Every instruction that needs that instead
+/// handles it separately. The behavior of that variant is different because it
+/// includes a memory lookup.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register8 {
     A,
@@ -707,10 +661,6 @@ pub enum Register8 {
     D,
     E,
     H,
-    /// Byte pointed to by the address in register `hl`
-    ///
-    /// TODO break this out? instructions on it consume extra CPU cycles
-    Hl,
     L,
 }
 
