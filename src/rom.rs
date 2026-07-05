@@ -36,7 +36,7 @@ use winnow::{
 #[derive(Debug, PartialEq)]
 pub struct Rom {
     /// The entire ROM binary data
-    pub data: Vec<u8>,
+    data: Vec<u8>,
 }
 
 impl Rom {
@@ -46,6 +46,7 @@ impl Rom {
         let data = fs::read(path)
             .context(format!("Error reading ROM from {}", path.display()))?;
         info!("Loaded ROM from {}", path.display());
+        assert!(data.len() > 0x3FFF, "TODO");
         Ok(Self { data })
     }
 
@@ -71,6 +72,11 @@ impl Rom {
             })?;
         let num_bytes = input.offset_from(&start);
         Ok((instruction, num_bytes))
+    }
+
+    /// Get the raw ROM bytes
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
     }
 }
 

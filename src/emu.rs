@@ -10,8 +10,8 @@ use crate::{
     memory::{MemoryError, MemoryMap},
     rom::Rom,
 };
-use color_eyre::eyre;
-use log::warn;
+use color_eyre::eyre::{self, Context};
+use log::{trace, warn};
 use std::{
     path::Path,
     thread,
@@ -76,10 +76,8 @@ impl GameBoy {
 
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
-    fn execute(
-        &mut self,
-        instruction: Instruction,
-    ) -> Result<usize, MemoryError> {
+    fn execute(&mut self, instruction: Instruction) -> eyre::Result<usize> {
+        trace!("Executing {instruction:?}");
         match instruction {
             Instruction::Nop => Ok(1),
             Instruction::Dec(dec_inc) => Ok(self.dec_inc(dec_inc, -1)?),
@@ -91,6 +89,8 @@ impl GameBoy {
                 Ok(1)
             }
         }
+        // Full emulator state is helpful for debugging
+        .with_context(|| format!("Executing {instruction:?}; state: {self:#?}"))
     }
 
     /// Execute a `DEC` or `INC` instruction
@@ -156,7 +156,7 @@ impl GameBoy {
                 Ok(4)
             }
             Load::AAddress { source } => {
-                self.registers.a = self.memory.get8(source)?;
+                self.registers.a = self.memory.get8(source);
                 Ok(4)
             }
             Load::AddressSp { dest } => {
@@ -212,7 +212,7 @@ impl GameBoy {
                 dest: Value8::Register(dest),
                 source: Value8::Hl,
             } => {
-                *self.register8_mut(dest) = self.hl_mem()?;
+                *self.register8_mut(dest) = self.hl_mem();
                 Ok(2)
             }
             // LD [HL],[HL] is not valid - that's the opcode for HALT
@@ -231,7 +231,7 @@ impl GameBoy {
             }
             Load::AR16Mem { source } => {
                 let source = Address(self.register16_mem(source));
-                self.registers.a = self.memory.get8(source)?;
+                self.registers.a = self.memory.get8(source);
                 Ok(2)
             }
         }
@@ -320,7 +320,7 @@ impl GameBoy {
     }
 
     /// Get the byte of memory referenced by register HL
-    fn hl_mem(&self) -> Result<u8, MemoryError> {
+    fn hl_mem(&self) -> u8 {
         self.memory.get8(Address(self.registers.hl()))
     }
 
@@ -367,18 +367,18 @@ macro_rules! register_pair {
         /// Get the value of the `$pair` register pair
         fn $pair(&self) -> u16 {
             // SAFETY: TODO
-            #[expect(clippy::cast_ptr_alignment, clippy::ptr_as_ptr)]
+            #[expect(clippy::cast_ptr_alignment)]
             unsafe {
-                *((&raw const self.$r1) as *const u16)
+                *(&raw const self.$r1).cast::<u16>()
             }
         }
 
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
             // SAFETY: TODO
-            #[expect(clippy::cast_ptr_alignment, clippy::ptr_as_ptr)]
+            #[expect(clippy::cast_ptr_alignment)]
             unsafe {
-                &mut *((&raw mut self.$r1) as *mut u16)
+                &mut *(&raw mut self.$r1).cast::<u16>()
             }
         }
     };

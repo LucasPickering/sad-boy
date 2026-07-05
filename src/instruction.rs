@@ -326,12 +326,15 @@ pub struct Bit(pub u8);
 /// Address of a byte of memory
 ///
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
-#[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Copy, Clone, derive_more::Debug, Default, Eq, Ord, PartialEq, PartialOrd,
+)]
+#[debug("{self}")]
 pub struct Address(pub u16);
 
 impl Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const ADDRESS_WIDTH: usize = 4;
-        write!(f, "0x{:0>ADDRESS_WIDTH$x}", self.0)
+        write!(f, "0x{:0>ADDRESS_WIDTH$X}", self.0)
     }
 }
