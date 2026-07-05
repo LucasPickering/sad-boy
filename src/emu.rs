@@ -82,11 +82,61 @@ impl GameBoy {
     ) -> Result<usize, MemoryError> {
         match instruction {
             Instruction::Nop => Ok(1),
+            Instruction::Dec(dec) => Ok(self.dec(dec)?),
+            Instruction::Inc(inc) => Ok(self.inc(inc)?),
             Instruction::Jp(jump) => Ok(self.jump(jump)),
             Instruction::Ld(load) => self.load(load),
             _ => {
                 warn!("Unknown instruction {instruction:?}");
                 Ok(1)
+            }
+        }
+    }
+
+    /// Execute a `DEC` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn dec(&mut self, dec: Dec) -> Result<usize, MemoryError> {
+        // TODO set flags
+        match dec {
+            Dec::R8(register) => {
+                let register = self.register8_mut(register)?;
+                *register = register.wrapping_sub(1);
+                Ok(1)
+            }
+            Dec::R16(register) => {
+                let register = self.register16_mut(register);
+                *register = register.wrapping_sub(1);
+                Ok(2)
+            }
+            Dec::Hl => {
+                let value = self.hl_mem_mut()?;
+                *value = value.wrapping_sub(1);
+                Ok(3)
+            }
+        }
+    }
+
+    /// Execute an `INC` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn inc(&mut self, inc: Inc) -> Result<usize, MemoryError> {
+        // TODO set flags
+        match inc {
+            Inc::R8(register) => {
+                let register = self.register8_mut(register)?;
+                *register = register.wrapping_add(1);
+                Ok(1)
+            }
+            Inc::R16(register) => {
+                let register = self.register16_mut(register);
+                *register = register.wrapping_add(1);
+                Ok(2)
+            }
+            Inc::Hl => {
+                let value = self.hl_mem_mut()?;
+                *value = value.wrapping_add(1);
+                Ok(3)
             }
         }
     }
@@ -252,9 +302,10 @@ impl GameBoy {
             Register16Memory::Bc => self.registers.bc(),
             Register16Memory::De => self.registers.de(),
             Register16Memory::Hli => {
-                let value = self.registers.hl();
                 // This does NOT set flags
-                *self.registers.hl_mut() = value.wrapping_add(1);
+                let hl_mut = self.registers.hl_mut();
+                let value = *hl_mut;
+                *hl_mut = value.wrapping_add(1);
                 value
             }
             Register16Memory::Hld => {
@@ -264,6 +315,11 @@ impl GameBoy {
                 value
             }
         }
+    }
+
+    /// Get the byte of memory referenced by register HL
+    fn hl_mem_mut(&mut self) -> Result<&mut u8, MemoryError> {
+        self.memory.get8_mut(Address(self.registers.hl()))
     }
 
     /// Resolve an 8-bit value
@@ -652,6 +708,8 @@ pub enum Register8 {
     E,
     H,
     /// Byte pointed to by the address in register `hl`
+    ///
+    /// TODO break this out? instructions on it consume extra CPU cycles
     Hl,
     L,
 }
