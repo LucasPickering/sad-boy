@@ -16,10 +16,11 @@ use std::{
 };
 
 /// Game Boy emulator
-#[derive(Debug)]
+#[derive(derive_more::Debug)]
 pub struct GameBoy {
     registers: Registers,
     /// Virtual memory map
+    #[debug(skip)]
     memory: MemoryMap,
 }
 
