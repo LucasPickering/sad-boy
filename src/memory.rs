@@ -1,5 +1,5 @@
 use crate::{
-    emu::{Address, Instruction},
+    instruction::{Address, Instruction},
     rom::{Rom, RomParseError},
 };
 use derive_more::{Display, Error};

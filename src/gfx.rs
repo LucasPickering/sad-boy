@@ -21,6 +21,7 @@ pub struct Screen {
 
 impl Screen {
     /// TODO
+    #[expect(clippy::large_types_passed_by_value)] // TODO fix this
     pub fn new(pixels: [Pixel; IMAGE_SIZE]) -> Self {
         Self { pixels }
     }

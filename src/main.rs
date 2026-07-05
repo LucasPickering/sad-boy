@@ -1,6 +1,7 @@
 mod emu;
 #[expect(dead_code)] // TODO remove this
 mod gfx;
+mod instruction;
 mod memory;
 mod rom;
 

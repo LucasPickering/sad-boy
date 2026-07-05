@@ -1,6 +1,6 @@
-//! Utilities for ROM management
+//! ROM loading and parsing
 
-use crate::emu::{
+use crate::instruction::{
     Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
     LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
     Register16Stack,
