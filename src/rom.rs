@@ -23,6 +23,7 @@ use winnow::{
         StrContext,
     },
     stream::{Offset, Stream},
+    token::one_of,
 };
 
 /// A GameBoy ROM (cartridge)
@@ -390,17 +391,20 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
         0b1111_0011.value(Instruction::Di).label("di"),
         0b1111_1011.value(Instruction::Ei).label("ei"),
         // Invalid opcodes
-        0b1101_0011.value(Instruction::Invalid), // $D3
-        0b1101_1011.value(Instruction::Invalid), // $DB
-        0b1101_1101.value(Instruction::Invalid), // $DD
-        0b1110_0011.value(Instruction::Invalid), // $E3
-        0b1110_0100.value(Instruction::Invalid), // $E4
-        0b1110_1011.value(Instruction::Invalid), // $EB
-        0b1110_1100.value(Instruction::Invalid), // $EC
-        0b1110_1101.value(Instruction::Invalid), // $ED
-        0b1111_0100.value(Instruction::Invalid), // $F4
-        0b1111_1100.value(Instruction::Invalid), // $FC
-        0b1111_1101.value(Instruction::Invalid), // $FD
+        one_of([
+            0b1101_0011, // $D3
+            0b1101_1011, // $DB
+            0b1101_1101, // $DD
+            0b1110_0011, // $E3
+            0b1110_0100, // $E4
+            0b1110_1011, // $EB
+            0b1110_1100, // $EC
+            0b1110_1101, // $ED
+            0b1111_0100, // $F4
+            0b1111_1100, // $FC
+            0b1111_1101, // $FD
+        ])
+        .value(Instruction::Invalid),
     )
     .context(StrContext::Label("instruction"))
     .parse_next(input)
