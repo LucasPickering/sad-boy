@@ -6,7 +6,7 @@ use crate::instruction::{
     Register16Stack, Value8,
 };
 use color_eyre::eyre::{self, Context};
-use log::info;
+use log::{info, trace};
 use std::{
     error::Error,
     fmt::{self, Debug, Display},
@@ -63,15 +63,21 @@ impl Rom {
         let start = input.checkpoint(); // TODO this isn't right
         // Don't use Parser::parse() because its error type doesn't print well
         // for binary data
-        let instruction =
-            parse_instruction.parse_next(&mut input).map_err(|error| {
+        let (instruction, taken) = parse_instruction
+            .with_taken()
+            .parse_next(&mut input)
+            .map_err(|error| {
                 let error = error
                     .into_inner()
                     .expect("Complete parser should not return Incomplete");
                 RomParseError::new(&self.data, input.offset_from(&start), error)
             })?;
-        let num_bytes = input.offset_from(&start);
-        Ok((instruction, num_bytes))
+        let offset = input.offset_from(&start);
+        trace!(
+            "Parsed {instruction:?} from [{bytes}] at {address}",
+            bytes = BytesDisplay(taken),
+        );
+        Ok((instruction, offset))
     }
 
     /// Get the raw ROM bytes
@@ -131,10 +137,12 @@ impl Display for RomParseError {
             .zip((self.input_start..).step_by(BYTES_PER_ROW))
         {
             // Pad address with 0s to hit the width
-            write!(f, "{} |", Address(offset as u16))?; // TODO is cast safe?
-            for byte in bytes {
-                write!(f, " {byte:0<8b}")?;
-            }
+            write!(
+                f,
+                "{} | {}",
+                Address(offset as u16), // TODO is cast safe?
+                BytesDisplay(bytes),
+            )?;
             writeln!(f)?;
 
             // If the offending byte is on this line, point it out
@@ -150,6 +158,21 @@ impl Display for RomParseError {
 }
 
 impl Error for RomParseError {}
+
+/// Wrapper to pretty print a byte slice
+struct BytesDisplay<'a>(&'a [u8]);
+
+impl Display for BytesDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, byte) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{byte:0>8b}")?;
+        }
+        Ok(())
+    }
+}
 
 type ParseError = ErrMode<ContextError>;
 

@@ -152,6 +152,7 @@ impl GameBoy {
     fn load(&mut self, load: Load) -> Result<usize, MemoryError> {
         match load {
             Load::AddressA { dest } => {
+                // TODO should we ignore unwritable addresses instead of error?
                 *self.memory.get8_mut(dest)? = self.registers.a;
                 Ok(4)
             }
