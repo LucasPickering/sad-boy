@@ -2,7 +2,7 @@
 
 use crate::instruction::{
     Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
-    LoadHigh, Math, MathTarget, Register8, Register16, Register16Memory,
+    LoadHigh, Operand, Register8, Register16, Register16Memory,
     Register16Stack, Value8,
 };
 use color_eyre::eyre::{self, Context};
@@ -286,23 +286,23 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             .map(|(dest, source)| Instruction::Ld(Load::V8V8 { dest, source }))
             .label("ld r8, r8"),
         // ===== BLOCK 2 =====
-        math_r8(0b1000_0000, Math::Add).label("add a, r8"),
-        math_r8(0b1000_1000, Math::Adc).label("adc a, r8"),
-        math_r8(0b1001_0000, Math::Sub).label("sub a, r8"),
-        math_r8(0b1001_1000, Math::Sbc).label("sbc a, r8"),
-        math_r8(0b1010_0000, Math::And).label("and a, r8"),
-        math_r8(0b1010_1000, Math::Xor).label("xor a, r8"),
-        math_r8(0b1011_0000, Math::Or).label("or a, r8"),
-        math_r8(0b1011_1000, Math::Cp).label("cp a, r8"),
+        math_r8(0b1000_0000, Instruction::add).label("add a, r8"),
+        math_r8(0b1000_1000, Instruction::Adc).label("adc a, r8"),
+        math_r8(0b1001_0000, Instruction::Sub).label("sub a, r8"),
+        math_r8(0b1001_1000, Instruction::Sbc).label("sbc a, r8"),
+        math_r8(0b1010_0000, Instruction::And).label("and a, r8"),
+        math_r8(0b1010_1000, Instruction::Xor).label("xor a, r8"),
+        math_r8(0b1011_0000, Instruction::Or).label("or a, r8"),
+        math_r8(0b1011_1000, Instruction::Cp).label("cp a, r8"),
         // ===== BLOCK 3 =====
-        math_imm8(0b1100_0110, Math::Add).label("add a, imm8"),
-        math_imm8(0b1100_1110, Math::Adc).label("adc a, imm8"),
-        math_imm8(0b1101_0110, Math::Sub).label("sub a, imm8"),
-        math_imm8(0b1101_1110, Math::Sbc).label("sbc a, imm8"),
-        math_imm8(0b1110_0110, Math::And).label("and a, imm8"),
-        math_imm8(0b1110_1110, Math::Xor).label("xor a, imm8"),
-        math_imm8(0b1111_0110, Math::Or).label("or a, imm8"),
-        math_imm8(0b1111_1110, Math::Cp).label("cp a, imm8"),
+        math_imm8(0b1100_0110, Instruction::add).label("add a, imm8"),
+        math_imm8(0b1100_1110, Instruction::Adc).label("adc a, imm8"),
+        math_imm8(0b1101_0110, Instruction::Sub).label("sub a, imm8"),
+        math_imm8(0b1101_1110, Instruction::Sbc).label("sbc a, imm8"),
+        math_imm8(0b1110_0110, Instruction::And).label("and a, imm8"),
+        math_imm8(0b1110_1110, Instruction::Xor).label("xor a, imm8"),
+        math_imm8(0b1111_0110, Instruction::Or).label("or a, imm8"),
+        math_imm8(0b1111_1110, Instruction::Cp).label("cp a, imm8"),
         //
         op1(0b1100_0000, Mask::M43)
             .map(|cond| Instruction::Ret(Some(cond)))
@@ -612,28 +612,24 @@ fn imm16(input: &mut &[u8]) -> ModalResult<u16> {
     cut_err(binary::u16(Endianness::Little)).parse_next(input)
 }
 
-/// Parse an 8-bit math operation ([Instruction::Math]) where the operand is the
-/// byte value following the opcode
+/// Parse an 8-bit math operation where the operand is the byte value following
+/// the opcode
 fn math_imm8<'a>(
     opcode: u8,
-    operation: Math,
+    operation: fn(Operand) -> Instruction,
 ) -> impl Parser<&'a [u8], Instruction, ParseError> {
-    preceded(opcode, imm8).map(move |operand| Instruction::Math {
-        operation,
-        target: MathTarget::Const(operand),
-    })
+    preceded(opcode, imm8)
+        .map(move |operand| operation(Operand::Const(operand)))
 }
 
 /// Parse an 8-bit math operation ([Instruction::Math]) where the operand is an
 /// 8-bit register encoded in bits 0-2 of the opcode.
 fn math_r8<'a>(
     opcode: u8,
-    operation: Math,
+    operation: fn(Operand) -> Instruction,
 ) -> impl Parser<&'a [u8], Instruction, ParseError> {
-    op1::<Value8>(opcode, Mask::M210).map(move |operand| Instruction::Math {
-        operation,
-        target: MathTarget::V8(operand),
-    })
+    op1::<Value8>(opcode, Mask::M210)
+        .map(move |operand| operation(Operand::V8(operand)))
 }
 
 /// A type that can be parsed from an opcode bit parameter
@@ -849,70 +845,46 @@ mod tests {
     #[case::dec_r16(
         &[0b0010_1011], Instruction::Dec(DecInc::R16(Register16::Hl))
     )]
-    #[case::add_a_r8(&[0b1000_0001], Instruction::Math {
-        operation: Math::Add,
-        target: Register8::C.into(),
-    })]
-    #[case::adc_a_r8(&[0b1000_1001], Instruction::Math {
-        operation: Math::Adc,
-        target: Register8::C.into(),
-    })]
-    #[case::sub_a_r8(&[0b1001_0001], Instruction::Math {
-        operation: Math::Sub,
-        target: Register8::C.into(),
-    })]
-    #[case::sbc_a_r8(&[0b1001_1001], Instruction::Math {
-        operation: Math::Sbc,
-        target: Register8::C.into(),
-    })]
-    #[case::and_a_r8(&[0b1010_0001], Instruction::Math {
-        operation: Math::And,
-        target: Register8::C.into(),
-    })]
-    #[case::xor_a_r8(&[0b1010_1001], Instruction::Math {
-        operation: Math::Xor,
-        target: Register8::C.into(),
-    })]
-    #[case::or_a_r8(&[0b1011_0001], Instruction::Math {
-        operation: Math::Or,
-        target: Register8::C.into(),
-    })]
-    #[case::cp_a_r8(&[0b1011_1001], Instruction::Math {
-        operation: Math::Cp,
-        target: Register8::C.into(),
-    })]
-    #[case::add_a_imm8(&[0b1100_0110, 0b0101_0101], Instruction::Math {
-        operation: Math::Add,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::adc_a_imm8(&[0b1100_1110, 0b0101_0101], Instruction::Math {
-        operation: Math::Adc,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::sub_a_imm8(&[0b1101_0110, 0b0101_0101], Instruction::Math {
-        operation: Math::Sub,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::sbc_a_imm8(&[0b1101_1110, 0b0101_0101], Instruction::Math {
-        operation: Math::Sbc,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::and_a_imm8(&[0b1110_0110, 0b0101_0101], Instruction::Math {
-        operation: Math::And,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::xor_a_imm8(&[0b1110_1110, 0b0101_0101], Instruction::Math {
-        operation: Math::Xor,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::or_a_imm8(&[0b1111_0110, 0b0101_0101], Instruction::Math {
-        operation: Math::Or,
-        target: MathTarget::Const(0b0101_0101),
-    })]
-    #[case::cp_a_imm8(&[0b1111_1110, 0b0101_0101], Instruction::Math {
-        operation: Math::Cp,
-        target: MathTarget::Const(0b0101_0101),
-    })]
+    #[case::add_a_r8(&[0b1000_0001], Instruction::add(Register8::C.into()))]
+    #[case::adc_a_r8(&[0b1000_1001], Instruction::Adc(Register8::C.into()))]
+    #[case::sub_a_r8(&[0b1001_0001], Instruction::Sub(Register8::C.into()))]
+    #[case::sbc_a_r8(&[0b1001_1001], Instruction::Sbc(Register8::C.into()))]
+    #[case::and_a_r8(&[0b1010_0001], Instruction::And(Register8::C.into()))]
+    #[case::xor_a_r8(&[0b1010_1001], Instruction::Xor(Register8::C.into()))]
+    #[case::or_a_r8(&[0b1011_0001], Instruction::Or(Register8::C.into()))]
+    #[case::cp_a_r8(&[0b1011_1001], Instruction::Cp(Register8::C.into()))]
+    #[case::add_a_imm8(
+         &[0b1100_0110, 0b0101_0101],
+         Instruction::add(Operand::Const(0b0101_0101)),
+     )]
+    #[case::adc_a_imm8(
+         &[0b1100_1110, 0b0101_0101],
+         Instruction::Adc(Operand::Const(0b0101_0101)),
+     )]
+    #[case::sub_a_imm8(
+         &[0b1101_0110, 0b0101_0101],
+         Instruction::Sub(Operand::Const(0b0101_0101)),
+     )]
+    #[case::sbc_a_imm8(
+         &[0b1101_1110, 0b0101_0101],
+         Instruction::Sbc(Operand::Const(0b0101_0101)),
+     )]
+    #[case::and_a_imm8(
+         &[0b1110_0110, 0b0101_0101],
+         Instruction::And(Operand::Const(0b0101_0101)),
+     )]
+    #[case::xor_a_imm8(
+         &[0b1110_1110, 0b0101_0101],
+         Instruction::Xor(Operand::Const(0b0101_0101)),
+     )]
+    #[case::or_a_imm8(
+         &[0b1111_0110, 0b0101_0101],
+         Instruction::Or(Operand::Const(0b0101_0101)),
+     )]
+    #[case::cp_a_imm8(
+         &[0b1111_1110, 0b0101_0101],
+         Instruction::Cp(Operand::Const(0b0101_0101)),
+     )]
     #[case::ret(&[0b1100_1001], Instruction::Ret(None))]
     #[case::ret_cond_nz(
         &[0b1100_0000], Instruction::Ret(Some(ConditionCode::Nz))

@@ -4,8 +4,8 @@
 
 use crate::{
     instruction::{
-        Address, ConditionCode, DecInc, Instruction, Jump, Load, Register8,
-        Register16, Register16Memory, Register16Stack, Value8,
+        Add, Address, ConditionCode, DecInc, Instruction, Jump, Load,
+        Register8, Register16, Register16Memory, Register16Stack, Value8,
     },
     memory::{self, MemoryMap},
     rom::Rom,
@@ -87,7 +87,7 @@ impl GameBoy {
         .entered();
         trace!("Executing");
         match instruction {
-            Instruction::Nop => 1,
+            Instruction::Add(add) => self.add(add),
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
@@ -95,6 +95,7 @@ impl GameBoy {
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
+            Instruction::Nop => 1,
             Instruction::Push(register) => {
                 let value = *self.register16_stack_mut(register);
                 self.push(value);
@@ -114,6 +115,20 @@ impl GameBoy {
                 error!("Unknown instruction");
                 1
             }
+        }
+    }
+
+    /// Execute an `ADD` instruction
+    ///
+    /// Return the number of consumed CPU cycles
+    fn add(&mut self, add: Add) -> usize {
+        match add {
+            Add::A(_) => todo!(),
+            Add::Hl(register) => {
+                let _operand = self.register16(register);
+                todo!()
+            }
+            Add::HlSp => todo!(),
         }
     }
 

@@ -7,15 +7,15 @@ use std::fmt::Display;
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Instruction {
+    /// Add a value plus the carry flag to `a`
+    Adc(Operand),
     /// Add a value to a register
-    /// TODO flatten this?
     Add(Add),
     /// Add an offset to register `sp`
+    /// TODO flatten into [Add]
     AddSp(i8),
-    /// Add a value plus the flag to register `a`
-    AddCarry(Value8),
     /// Bitwise AND between `a` and another value (modifies `a`)
-    And(Value8),
+    And(Operand),
     /// Get a single bit from a register (output to the `zero` flag)
     Bit(Bit, Value8),
     /// Push a new frame onto the stack, then set `pc` to that address
@@ -26,8 +26,8 @@ pub enum Instruction {
     },
     /// Complement (invert) carry flag
     Ccf,
-    /// Compare register `a` with another value
-    Cp(Value8),
+    /// Compare register `a` with another value (modifies flags but NOT `a`)
+    Cp(Operand),
     /// Complement (bitwise NOT) register `a`
     Cpl,
     /// Decimal Adjust Accumulator
@@ -54,10 +54,10 @@ pub enum Instruction {
     Ld(Load),
     /// Move a value, but different
     Ldh(LoadHigh),
-    /// TODO
-    Math { operation: Math, target: MathTarget },
     /// No op
     Nop,
+    /// Bitwise OR between `a` and another value (modifies `a`)
+    Or(Operand),
     /// Push a 16-bit register value onto the stack
     Pop(Register16Stack),
     /// Pop a 16-bit value from the stack into a register
@@ -93,6 +93,8 @@ pub enum Instruction {
     /// *could* be combined into [Self::Call], but keeping it separate makes
     /// debugging easier.
     Rst(Address),
+    /// Subtract a value and the carry flag from `a`
+    Sbc(Operand),
     /// Set carry flag
     Scf,
     /// Set a specific bit in a register to 1
@@ -103,53 +105,50 @@ pub enum Instruction {
     Sra(Value8),
     /// Shift right logically a register
     Srl(Value8),
+    /// Subtract a value from `a`
+    Sub(Operand),
     /// Swap the upper 4 bits of a register with the lower 4
     Swap(Value8),
     /// Enter CPU low power mode
     Stop,
+    /// Bitwise XOR between `a` and another value (modifies `a`)
+    Xor(Operand),
     /// An invalid instruction from one of the 11 invalid opcodes
     Invalid,
 }
 
-/// TODO
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Math {
-    /// TODO
-    Adc,
-    /// TODO
-    Add,
-    /// TODO
-    And,
-    /// TODO
-    Cp,
-    /// TODO
-    Or,
-    /// TODO
-    Sbc,
-    /// TODO
-    Sub,
-    /// TODO
-    Xor,
+impl Instruction {
+    /// Construct a `ADD a, *` instruction
+    ///
+    /// `ADD` has a few more variants than the other math instructions; this
+    /// makes it easy to construct the "standard" form.
+    pub fn add(operand: Operand) -> Self {
+        Self::Add(Add::A(operand))
+    }
 }
 
-/// TODO
+/// Right-hand side of a math instruction (`r8` or `imm8`)
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum MathTarget {
+pub enum Operand {
     /// Value in a register or memory
     V8(Value8),
     /// Constant value
     Const(u8),
 }
 
-impl From<Register8> for MathTarget {
+impl From<Register8> for Operand {
     fn from(register: Register8) -> Self {
         Self::V8(Value8::Register(register))
     }
 }
 
 /// Variations of the `ADD` instruction
+///
+/// Most add variants of `ADD` are handled by [Instruction::Math].
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Add {
+    /// Add an 8-bit value to `a`
+    A(Operand),
     /// Add a 16-bit value to `hl`
     Hl(Register16),
     /// Add `sp` to `hl`
