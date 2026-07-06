@@ -41,7 +41,7 @@ impl GameBoy {
     }
 
     /// Keep running until the CPU is halted
-    pub fn run(&mut self) -> eyre::Result<()> {
+    pub fn run(&mut self) {
         /// TODO explain
         const CYCLES_PER_FRAME: usize = 70224;
         let frame_time = Duration::from_secs_f64(1.0 / 60.0);
@@ -53,7 +53,7 @@ impl GameBoy {
 
             while cycle_budget > 0 {
                 let (instruction, num_bytes) =
-                    self.memory.get_instruction(self.registers.pc)?;
+                    self.memory.get_instruction(self.registers.pc);
                 let pc = self.registers.pc;
                 let cycles = self.execute(instruction);
                 cycle_budget = cycle_budget.saturating_sub(cycles);
@@ -281,7 +281,7 @@ impl GameBoy {
         self.registers.sp.0 -= 2;
         debug_assert!(
             memory::RAM.contains(self.registers.sp),
-            "Stack pointer {} is outside RAM range {}",
+            "Stack pointer {} is outside range {}",
             self.registers.sp,
             memory::RAM
         );
@@ -297,7 +297,7 @@ impl GameBoy {
         self.registers.sp.0 += 2;
         debug_assert!(
             memory::RAM.contains(self.registers.sp),
-            "Stack pointer {} is outside RAM range {}",
+            "Stack pointer {} is outside range {}",
             self.registers.sp,
             memory::RAM
         );

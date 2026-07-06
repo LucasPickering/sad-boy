@@ -20,7 +20,7 @@ fn main() -> eyre::Result<()> {
     let rom_path =
         PathBuf::from(env::args().nth(1).ok_or(eyre!("Missing ROM path"))?);
     let mut game_boy = GameBoy::boot(&rom_path)?;
-    game_boy.run()?;
+    game_boy.run();
     Ok(())
 }
 

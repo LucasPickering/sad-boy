@@ -1,8 +1,8 @@
 use crate::{
     instruction::{Address, Instruction},
-    rom::{Rom, RomParseError},
+    rom::Rom,
 };
-use derive_more::{Display, Error};
+use derive_more::Display;
 use std::ops::RangeInclusive;
 use tracing::error;
 
@@ -55,14 +55,18 @@ impl MemoryMap {
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
-    pub fn get_instruction(
-        &self,
-        address: Address,
-    ) -> Result<(Instruction, usize), MemoryError> {
-        Self::check_bounds(address, GAME_ROM)?;
-        self.rom
-            .get_instruction(address)
-            .map_err(MemoryError::InstructionParse)
+    pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
+        if GAME_ROM.contains(address) {
+            self.rom.get_instruction(address).unwrap_or_else(|error| {
+                panic!("Failed to parse instruction: {error}");
+            })
+        } else {
+            // Either the ROM is buggy (possible, but unlikely), or it's a bug
+            // (more likely). Panic will make it more identifiable.
+            panic!(
+                "Requested instruction at {address} is out of range {GAME_ROM}"
+            );
+        }
     }
 
     /// Get a 1-byte value from memory
@@ -115,10 +119,22 @@ impl MemoryMap {
                 let index: usize = address.0.into();
                 &self.rom.bytes()[index]
             }
-            0x4000..=0x7FFF => todo!("Game ROM bank N"),
-            0x8000..=0x97FF => todo!("Tile RAM"),
-            0x9800..=0x9FFF => todo!("Background Map"),
-            0xA000..=0xBFFF => todo!("Cartridge RAM"),
+            0x4000..=0x7FFF => {
+                error!("TODO: Game ROM bank N read");
+                &0
+            }
+            0x8000..=0x97FF => {
+                error!("TODO: Tile RAM read");
+                &0
+            }
+            0x9800..=0x9FFF => {
+                error!("TODO: Background Map read");
+                &0
+            }
+            0xA000..=0xBFFF => {
+                error!("TODO: Cartridge RAM read");
+                &0
+            }
             RAM_START..=RAM_END => {
                 // Safety: self.ram is initialized to the same length as
                 // this range
@@ -131,16 +147,25 @@ impl MemoryMap {
                 let index = (address.0 - ECHO_RAM_START) as usize;
                 &self.ram[index]
             }
-            0xFE00..=0xFE9F => todo!("Object Attribute Memory"),
+            0xFE00..=0xFE9F => {
+                error!("TODO: Object Attribute Memory read");
+                &0
+            }
             0xFEA0..=0xFEFF => &0,
-            0xFF00..=0xFF7F => todo!("I/O Registers"),
+            0xFF00..=0xFF7F => {
+                error!("TODO: I/O register read");
+                &0
+            }
             HIGH_RAM_START..=HIGH_RAM_END => {
                 // Safety: self.high_ram is initialized to the same length as
                 // this range
                 let index = (address.0 - HIGH_RAM.start()) as usize;
                 &self.high_ram[index]
             }
-            0xFFFF => todo!("Interrupt Enabled Register"),
+            0xFFFF => {
+                error!("TODO: Interrupt Enabled Register read");
+                &0
+            }
         }
     }
 
@@ -168,7 +193,10 @@ impl MemoryMap {
             }
             0xFE00..=0xFE9F => None, // Object Attribute Memory
             0xFEA0..=0xFEFF => None,
-            0xFF00..=0xFF7F => todo!("I/O Registers"),
+            0xFF00..=0xFF7F => {
+                error!("unimplemented: I/O register write");
+                None
+            }
             HIGH_RAM_START..=HIGH_RAM_END => {
                 // Safety: self.high_ram is initialized to the same length as
                 // this range
@@ -178,38 +206,6 @@ impl MemoryMap {
             0xFFFF => todo!("Interrupt Enabled Register"),
         }
     }
-    /// Check if the address is in the given range, returning
-    /// [MemoryError::OutOfBounds] if not
-    fn check_bounds(
-        address: Address,
-        range: AddressRange,
-    ) -> Result<(), MemoryError> {
-        if range.contains(address) {
-            Ok(())
-        } else {
-            Err(MemoryError::OutOfBounds { address, range })
-        }
-    }
-}
-
-/// Error while accessing memory
-#[derive(Debug, Display, Error)]
-pub enum MemoryError {
-    /// TODO
-    #[display("{_0}")]
-    InstructionParse(#[error(source)] RomParseError),
-    /// Requested access to memory that either doesn't exist or doesn't serve
-    /// the requested purpose
-    ///
-    /// For example, if you pass an address to [MemoryMap::get_instruction]
-    /// that's outside the CPU instruction memory range, you'll get this error.
-    #[display("Out of bounds: address {address} not in range {range}")]
-    OutOfBounds {
-        /// Address that was requested
-        address: Address,
-        /// Range of valid addresses for the purpose
-        range: AddressRange,
-    },
 }
 
 /// A range of memory addresses
