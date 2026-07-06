@@ -223,6 +223,8 @@ pub enum LoadHigh {
 }
 
 /// Source of an 8-bit value
+///
+/// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value8 {
     /// Value from a register
@@ -240,10 +242,8 @@ impl From<Register8> for Value8 {
 
 /// 8-bit register value (excluding `f`)
 ///
-/// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html EXCEPT this does
-/// not include the `hl` variant. Every instruction that needs that instead
-/// handles it separately. The behavior of that variant is different because it
-/// includes a memory lookup.
+/// This is *not* equivalent to `r8` on
+/// https://gbdev.io/pandocs/CPU_Instruction_Set.html. See [Value8] instead.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Register8 {
     A,
@@ -273,7 +273,7 @@ pub enum Register16 {
 /// Name of a general purpose 16-bit register for stack operations
 ///
 /// Most instructions use [Register16], but `PUSH`/`POP` use `af` instead of
-/// `sp`
+/// `sp`.
 ///
 /// `r16stk` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
 #[derive(Copy, Clone, Debug, PartialEq)]

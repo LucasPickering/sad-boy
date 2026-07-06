@@ -5,9 +5,9 @@
 use crate::{
     instruction::{
         Address, ConditionCode, DecInc, Instruction, Jump, Load, Register8,
-        Register16, Register16Memory, Value8,
+        Register16, Register16Memory, Register16Stack, Value8,
     },
-    memory::MemoryMap,
+    memory::{self, MemoryMap},
     rom::Rom,
 };
 use color_eyre::eyre;
@@ -16,7 +16,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{error_span, info_span, trace_span, warn};
+use tracing::{info_span, trace, warn};
 
 /// Game Boy emulator
 #[derive(derive_more::Debug)]
@@ -77,13 +77,27 @@ impl GameBoy {
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
     fn execute(&mut self, instruction: Instruction) -> usize {
-        let _span = info_span!("Executing instruction", ?instruction).entered();
+        let _span = info_span!(
+            "Instruction",
+            registers = ?self.registers,
+            ?instruction,
+        )
+        .entered();
+        trace!("Executing");
         match instruction {
             Instruction::Nop => 1,
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
+            Instruction::Push(register) => {
+                self.push(register);
+                4
+            }
+            Instruction::Pop(register) => {
+                self.pop(register);
+                4
+            }
             _ => {
                 warn!("Unknown instruction");
                 1
@@ -230,6 +244,49 @@ impl GameBoy {
         }
     }
 
+    /// Push a 16-bit value from a register onto the stack
+    fn push(&mut self, register: Register16Stack) {
+        let source = match register {
+            Register16Stack::Bc => self.registers.bc(),
+            Register16Stack::De => self.registers.de(),
+            Register16Stack::Hl => self.registers.hl(),
+            Register16Stack::Af => self.registers.af(),
+        };
+
+        // SP points to the LAST OCCUPIED slot, so we have to move it back
+        // BEFORE writing
+        self.registers.sp.0 -= 2;
+        debug_assert!(
+            memory::RAM.contains(self.registers.sp),
+            "Stack pointer {} is outside RAM range {}",
+            self.registers.sp,
+            memory::RAM
+        );
+        self.memory.set16(self.registers.sp, source);
+    }
+
+    /// Pop a 16-bit value from the top of the stack into a register
+    fn pop(&mut self, register: Register16Stack) {
+        let sp = self.registers.sp;
+        let dest = match register {
+            Register16Stack::Bc => self.registers.bc_mut(),
+            Register16Stack::De => self.registers.de_mut(),
+            Register16Stack::Hl => self.registers.hl_mut(),
+            Register16Stack::Af => self.registers.af_mut(),
+        };
+
+        *dest = self.memory.get16(sp);
+        // SP points to the LAST OCCUPIED slot, so we need to increment it to
+        // "deallocate" the value we just popped.
+        self.registers.sp.0 += 2;
+        debug_assert!(
+            memory::RAM.contains(self.registers.sp),
+            "Stack pointer {} is outside RAM range {}",
+            self.registers.sp,
+            memory::RAM
+        );
+    }
+
     /// Evaluate a [ConditionCode]
     fn condition(&self, condition: ConditionCode) -> bool {
         let flags = self.registers.flags();
@@ -324,7 +381,7 @@ impl GameBoy {
 }
 
 /// Registers in a Game Boy CPU
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[repr(C)] // Field ordering/alignment is important
 struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
@@ -343,9 +400,35 @@ struct Registers {
     l: u8,
 
     /// Stack pointer
+    ///
+    /// The stack is a series of 16-bit values at the high end of working RAM.
+    /// The bottom value of the stack will be the final value of RAM, and the
+    /// stack grows backward from there. This points to the *last occupied slot
+    /// on the stack*, meaning the SP must be decremented *before* pushing
+    /// and incremented *after* popping.
     sp: Address,
     /// Program counter
     pc: Address,
+}
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self {
+            a: 0,
+            f: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            // Stack starts at the end of RAM
+            sp: Address(memory::RAM.end() + 1),
+            // Skip the boot ROM, go straight to the game's ROM
+            // https://gbdev.io/pandocs/Power_Up_Sequence.html
+            pc: Address(0x0100),
+        }
+    }
 }
 
 /// Generate methods on [Registers] to access two registers as a 16-bit value

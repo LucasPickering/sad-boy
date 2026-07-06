@@ -9,7 +9,7 @@ use tracing::warn;
 /// Range of CPU instructions and data from a game cartridge
 const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
 /// Address range for general-purpose writable RAM
-const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
+pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
 const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
 /// Address range for additional general-purpose writable RAM
@@ -235,7 +235,7 @@ pub struct AddressRange {
 
 impl AddressRange {
     /// Define a range of memory
-    const fn new(name: &'static str, start: u16, end: u16) -> Self {
+    pub const fn new(name: &'static str, start: u16, end: u16) -> Self {
         Self {
             name,
             range: Address(start)..=Address(end),
@@ -248,15 +248,15 @@ impl AddressRange {
         (self.range.end().0 - self.range.start().0 + 1) as usize
     }
 
-    const fn start(&self) -> u16 {
+    pub const fn start(&self) -> u16 {
         self.range.start().0
     }
 
-    const fn end(&self) -> u16 {
+    pub const fn end(&self) -> u16 {
         self.range.end().0
     }
 
-    fn contains(&self, address: Address) -> bool {
+    pub fn contains(&self, address: Address) -> bool {
         self.range.contains(&address)
     }
 }
