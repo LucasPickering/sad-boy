@@ -53,7 +53,7 @@ impl GameBoy {
                 let (instruction, num_bytes) =
                     self.memory.get_instruction(self.registers.pc)?;
                 let pc = self.registers.pc;
-                let cycles = self.execute(instruction)?;
+                let cycles = self.execute(instruction);
                 cycle_budget = cycle_budget.saturating_sub(cycles);
                 // If the instruction didn't modify the PC (e.g. jumps), then
                 // advance it automatically
@@ -76,48 +76,41 @@ impl GameBoy {
 
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
-    fn execute(&mut self, instruction: Instruction) -> eyre::Result<usize> {
+    fn execute(&mut self, instruction: Instruction) -> usize {
         trace!("Executing {instruction:?}");
         match instruction {
-            Instruction::Nop => Ok(1),
-            Instruction::Dec(dec_inc) => Ok(self.dec_inc(dec_inc, -1)?),
-            Instruction::Inc(dec_inc) => Ok(self.dec_inc(dec_inc, 1)?),
-            Instruction::Jp(jump) => Ok(self.jump(jump)),
+            Instruction::Nop => 1,
+            Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
+            Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
+            Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
             _ => {
                 warn!("Unknown instruction {instruction:?}");
-                Ok(1)
+                1
             }
         }
-        // Full emulator state is helpful for debugging
-        .with_context(|| format!("Executing {instruction:?}; state: {self:#?}"))
     }
 
     /// Execute a `DEC` or `INC` instruction
     ///
     /// `delta` should be `-1` for `DEC`, `1` for `INC` Return the number of
     /// consumed CPU cycles.
-    fn dec_inc(
-        &mut self,
-        dec_inc: DecInc,
-        delta: i8,
-    ) -> Result<usize, MemoryError> {
+    fn dec_inc(&mut self, dec_inc: DecInc, delta: i8) -> usize {
         // TODO set flags
         match dec_inc {
             DecInc::V8(Value8::Register(register)) => {
                 let register = self.register8_mut(register);
                 *register = register.wrapping_add_signed(delta);
-                Ok(1)
+                1
             }
             DecInc::V8(Value8::Hl) => {
-                let value = self.hl_mem_mut()?;
-                *value = value.wrapping_add_signed(delta);
-                Ok(3)
+                self.set_hl_mem(self.hl_mem().wrapping_add_signed(delta));
+                3
             }
             DecInc::R16(register) => {
                 let register = self.register16_mut(register);
                 *register = register.wrapping_add_signed(delta.into());
-                Ok(2)
+                2
             }
         }
     }
@@ -149,20 +142,19 @@ impl GameBoy {
     /// Execute an `LD` instruction
     ///
     /// Return the number of consumed CPU cycles.
-    fn load(&mut self, load: Load) -> Result<usize, MemoryError> {
+    fn load(&mut self, load: Load) -> usize {
         match load {
             Load::AddressA { dest } => {
-                // TODO should we ignore unwritable addresses instead of error?
-                *self.memory.get8_mut(dest)? = self.registers.a;
-                Ok(4)
+                self.memory.set8(dest, self.registers.a);
+                4
             }
             Load::AAddress { source } => {
                 self.registers.a = self.memory.get8(source);
-                Ok(4)
+                4
             }
             Load::AddressSp { dest } => {
-                *self.memory.get16_mut(dest)? = self.registers.sp.0;
-                Ok(5)
+                self.memory.set16(dest, self.registers.sp.0);
+                5
             }
             Load::HlSpOffset { offset } => {
                 let value =
@@ -170,11 +162,11 @@ impl GameBoy {
                 *self.registers.hl_mut() = value;
                 // TODO set flags here
                 // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#LD_HL,SP+e8
-                Ok(3)
+                3
             }
             Load::SpHl => {
                 self.registers.sp = Address(self.registers.hl());
-                Ok(2)
+                2
             }
             // LD r8,n8
             Load::V8Const {
@@ -182,15 +174,15 @@ impl GameBoy {
                 source,
             } => {
                 *self.register8_mut(dest) = source;
-                Ok(2)
+                2
             }
             // LD [HL],n8
             Load::V8Const {
                 dest: Value8::Hl,
                 source,
             } => {
-                *self.hl_mem_mut()? = source;
-                Ok(2)
+                self.set_hl_mem(source);
+                2
             }
             // LD r8,r8
             Load::V8V8 {
@@ -198,15 +190,15 @@ impl GameBoy {
                 source: Value8::Register(source),
             } => {
                 *self.register8_mut(dest) = self.register8(source);
-                Ok(1)
+                1
             }
             // LD [HL],r8
             Load::V8V8 {
                 dest: Value8::Hl,
                 source: Value8::Register(source),
             } => {
-                *self.hl_mem_mut()? = self.register8(source);
-                Ok(2)
+                self.set_hl_mem(self.register8(source));
+                2
             }
             // LD r8,[HL]
             Load::V8V8 {
@@ -214,7 +206,7 @@ impl GameBoy {
                 source: Value8::Hl,
             } => {
                 *self.register8_mut(dest) = self.hl_mem();
-                Ok(2)
+                2
             }
             // LD [HL],[HL] is not valid - that's the opcode for HALT
             Load::V8V8 {
@@ -223,17 +215,17 @@ impl GameBoy {
             } => unreachable!("LD [HL],[HL] should parse as HALT"),
             Load::R16Const { dest, source } => {
                 *self.register16_mut(dest) = source;
-                Ok(3)
+                3
             }
             Load::R16MemA { dest } => {
                 let dest = Address(self.register16_mem(dest));
-                *self.memory.get8_mut(dest)? = self.registers.a;
-                Ok(2)
+                self.memory.set8(dest, self.registers.a);
+                2
             }
             Load::AR16Mem { source } => {
                 let source = Address(self.register16_mem(source));
                 self.registers.a = self.memory.get8(source);
-                Ok(2)
+                2
             }
         }
     }
@@ -320,14 +312,14 @@ impl GameBoy {
         }
     }
 
-    /// Get the byte of memory referenced by register HL
+    /// Get the byte of memory referenced by register `hl`
     fn hl_mem(&self) -> u8 {
         self.memory.get8(Address(self.registers.hl()))
     }
 
-    /// Get a mutable reference to the byte of memory referenced by register HL
-    fn hl_mem_mut(&mut self) -> Result<&mut u8, MemoryError> {
-        self.memory.get8_mut(Address(self.registers.hl()))
+    /// Set the value of the byte of memory pointed to by register `hl`
+    fn set_hl_mem(&mut self, value: u8) {
+        self.memory.set8(Address(self.registers.hl()), value);
     }
 }
 

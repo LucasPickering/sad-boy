@@ -3,6 +3,7 @@ use crate::{
     rom::{Rom, RomParseError},
 };
 use derive_more::{Display, Error};
+use log::warn;
 use std::{ops::RangeInclusive, ptr};
 
 /// Range of CPU instructions and data from a game cartridge
@@ -71,42 +72,46 @@ impl MemoryMap {
         *self.get_ref(address)
     }
 
-    /// Get a mutable reference to a 1-byte value in memory
+    /// Set a 1-byte value in memory
     ///
-    /// Return [MemoryError::ReadOnly] if the address does not point to writable
-    /// memory.
-    pub fn get8_mut(
-        &mut self,
-        address: Address,
-    ) -> Result<&mut u8, MemoryError> {
-        self.get_ref_mut(address)
+    /// All 16-bit addresses point to _some_ memory. If the memory isn't
+    /// writable, this does nothing.
+    pub fn set8(&mut self, address: Address, value: u8) {
+        if let Some(byte) = self.get_ref_mut(address) {
+            *byte = value;
+        } else {
+            warn!("Skipping write to read-only address {address}");
+        }
     }
 
     /// Get a 2-byte value from memory
     ///
     /// TODO explain error case
-    pub fn get16(&self, address: Address) -> Result<u16, MemoryError> {
+    pub fn get16(&self, address: Address) -> u16 {
         // TODO check the pointer is valid somehow (doesn't hang over the
         // edge of the range)
         // TODO check alignment
         // Safety: TODO
-        let ptr = ptr::from_ref::<u8>(self.get_ref(address));
-        Ok(unsafe { *ptr.cast::<u16>() })
+        let ptr = ptr::from_ref(self.get_ref(address)).cast::<u16>();
+        unsafe { *ptr }
     }
 
-    /// Get a mutable reference to a 2-byte value in memory
+    /// Set a 2-byte value in memory
     ///
-    /// TODO explain error cases
-    pub fn get16_mut(
-        &mut self,
-        address: Address,
-    ) -> Result<&mut u16, MemoryError> {
+    /// TODO describe error case
+    pub fn set16(&mut self, address: Address, value: u16) {
         // TODO check the pointer is valid somehow (doesn't hang over the
         // edge of the range)
         // TODO check alignment
         // Safety: TODO
-        let ptr = ptr::from_mut::<u8>(self.get_ref_mut(address)?);
-        Ok(unsafe { &mut (*ptr.cast::<u16>()) })
+        if let Some(byte_ref) = self.get_ref_mut(address) {
+            let ptr = ptr::from_mut(byte_ref).cast::<u16>();
+            unsafe {
+                *ptr = value;
+            }
+        } else {
+            warn!("Skipping write to read-only address {address}");
+        }
     }
 
     /// Map an Game Boy [Address] into an address in real memory
@@ -154,21 +159,17 @@ impl MemoryMap {
 
     /// Map an Game Boy [Address] to an a mutable reference to real memory
     ///
-    /// TODO
-    fn get_ref_mut(
-        &mut self,
-        address: Address,
-    ) -> Result<&mut u8, MemoryError> {
+    /// Return `None` if the addressed memory is not writable.
+    fn get_ref_mut(&mut self, address: Address) -> Option<&mut u8> {
         // TODO dedupe this with get_ref()
         match address.0 {
-            0x0000..=0xBFFF | 0xFE00..=0xFE9F | 0xFF00..=0xFF7F => {
-                Err(MemoryError::ReadOnly { address })
-            }
+            0x0000..=0x9FFF => None, // Cartridge ROM
+            0xA000..=0xBFFF => todo!("Cartridge RAM"),
             RAM_START..=RAM_END => {
                 // Safety: self.ram is initialized to the same length as
                 // this range
                 let index = (address.0 - RAM.start()) as usize;
-                Ok(&mut self.ram[index])
+                Some(&mut self.ram[index])
             }
             ECHO_RAM_START..=ECHO_RAM_END => {
                 // Make sure mirrored references can't go out of bounds
@@ -176,14 +177,16 @@ impl MemoryMap {
                 // Echo RAM
                 // Safety: self.ram is LARGER than the echo RAM section
                 let index = (address.0 - ECHO_RAM_START) as usize;
-                Ok(&mut self.ram[index])
+                Some(&mut self.ram[index])
             }
-            0xFEA0..=0xFEFF => todo!("Writing here should do nothing"),
+            0xFE00..=0xFE9F => None, // Object Attribute Memory
+            0xFEA0..=0xFEFF => None,
+            0xFF00..=0xFF7F => todo!("I/O Registers"),
             HIGH_RAM_START..=HIGH_RAM_END => {
                 // Safety: self.high_ram is initialized to the same length as
                 // this range
                 let index = (address.0 - HIGH_RAM.start()) as usize;
-                Ok(&mut self.high_ram[index])
+                Some(&mut self.high_ram[index])
             }
             0xFFFF => todo!("Interrupt Enabled Register"),
         }
@@ -199,15 +202,6 @@ impl MemoryMap {
         } else {
             Err(MemoryError::OutOfBounds { address, range })
         }
-    }
-
-    /// Get an index into the `self.ram` array
-    ///
-    /// The returned index is guaranteed to be valid for `self.ram`. Return
-    /// `Err` if the address is out of [WORKING_RAM].
-    fn ram_index(&self, address: Address) -> Result<usize, MemoryError> {
-        Self::check_bounds(address, RAM)?;
-        Ok((address.0 - RAM.range.start().0) as usize)
     }
 }
 
@@ -229,9 +223,6 @@ pub enum MemoryError {
         /// Range of valid addresses for the purpose
         range: AddressRange,
     },
-    /// Attempted to write to read-only memory
-    #[display("Cannot write to read-only memory at {address}")]
-    ReadOnly { address: Address },
 }
 
 /// A range of memory addresses
