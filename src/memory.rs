@@ -4,7 +4,7 @@ use crate::{
 };
 use derive_more::{Display, Error};
 use std::{ops::RangeInclusive, ptr};
-use tracing::warn;
+use tracing::error;
 
 /// Range of CPU instructions and data from a game cartridge
 const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
@@ -80,7 +80,7 @@ impl MemoryMap {
         if let Some(byte) = self.get_ref_mut(address) {
             *byte = value;
         } else {
-            warn!("Skipping write to read-only address {address}");
+            error!("Skipping write to read-only address {address}");
         }
     }
 
@@ -110,7 +110,7 @@ impl MemoryMap {
                 *ptr = value;
             }
         } else {
-            warn!("Skipping write to read-only address {address}");
+            error!("Skipping write to read-only address {address}");
         }
     }
 

@@ -18,7 +18,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{info_span, trace, warn};
+use tracing::{error, info_span, trace};
 
 /// Game Boy emulator
 #[derive(derive_more::Debug)]
@@ -101,7 +101,7 @@ impl GameBoy {
                 4
             }
             _ => {
-                warn!("Unknown instruction");
+                error!("Unknown instruction");
                 1
             }
         }
@@ -473,20 +473,37 @@ macro_rules! register_pair {
     ($pair:ident, $pair_mut:ident, $r1:ident) => {
         /// Get the value of the `$pair` register pair
         fn $pair(&self) -> u16 {
-            // SAFETY: TODO
+            // SAFETY: Safety is predicated on the macro being called with
+            // registers that are paired together in the struct layout.
+            // - Alignment is safe because u16 is 2-byte aligned and the
+            //   registers are pairs of 2. The entire struct is aligned, so
+            //   every other register (i.e. the first register of each pair)
+            //   will be 2-byte aligned
+            // - This will not read/write out of bounds because the first
+            //   register must have a second register after it.
+            let ptr8 = &raw const self.$r1;
+            debug_assert_eq!(
+                ptr8.align_offset(2),
+                0,
+                "Register pointer must be 2-byte aligned"
+            );
             #[expect(clippy::cast_ptr_alignment)]
-            unsafe {
-                *(&raw const self.$r1).cast::<u16>()
-            }
+            let ptr16 = ptr8.cast::<u16>();
+            unsafe { *ptr16 }
         }
 
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
-            // SAFETY: TODO
+            // SAFETY: see above fn
+            let ptr8 = &raw mut self.$r1;
+            debug_assert_eq!(
+                ptr8.align_offset(2),
+                0,
+                "Register pointer must be 2-byte aligned"
+            );
             #[expect(clippy::cast_ptr_alignment)]
-            unsafe {
-                &mut *(&raw mut self.$r1).cast::<u16>()
-            }
+            let ptr16 = ptr8.cast::<u16>();
+            unsafe { &mut *ptr16 }
         }
     };
 }
