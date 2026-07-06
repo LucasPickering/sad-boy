@@ -81,29 +81,57 @@ impl GameBoy {
     fn execute(&mut self, instruction: Instruction) -> usize {
         let _span = info_span!(
             "Instruction",
-            registers = ?self.registers,
             ?instruction,
+            registers = ?self.registers,
         )
         .entered();
         trace!("Executing");
         match instruction {
             Instruction::Nop => 1,
+            Instruction::Call { address, condition } => {
+                self.call(address, condition)
+            }
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
             Instruction::Push(register) => {
-                self.push(register);
+                let value = *self.register16_stack_mut(register);
+                self.push(value);
                 4
             }
             Instruction::Pop(register) => {
-                self.pop(register);
+                *self.register16_stack_mut(register) = self.pop();
+                3
+            }
+            Instruction::Ret(condition) => self.ret(condition),
+            Instruction::Reti => {
+                self.ret(None);
+                // TODO enable interrupts
                 4
             }
             _ => {
                 error!("Unknown instruction");
                 1
             }
+        }
+    }
+
+    /// Execute a function call
+    ///
+    /// Return the number of consumed CPU cycles
+    fn call(
+        &mut self,
+        address: Address,
+        condition: Option<ConditionCode>,
+    ) -> usize {
+        if condition.is_none_or(|cond| self.condition(cond)) {
+            // Push the address of the instruction *after* this one
+            self.push(self.registers.pc.next().0);
+            self.registers.pc = address;
+            6
+        } else {
+            3 // Quick exit
         }
     }
 
@@ -246,15 +274,8 @@ impl GameBoy {
         }
     }
 
-    /// Push a 16-bit value from a register onto the stack
-    fn push(&mut self, register: Register16Stack) {
-        let source = match register {
-            Register16Stack::Bc => self.registers.bc(),
-            Register16Stack::De => self.registers.de(),
-            Register16Stack::Hl => self.registers.hl(),
-            Register16Stack::Af => self.registers.af(),
-        };
-
+    /// Push a 16-bit value onto the stack
+    fn push(&mut self, value: u16) {
         // SP points to the LAST OCCUPIED slot, so we have to move it back
         // BEFORE writing
         self.registers.sp.0 -= 2;
@@ -264,20 +285,13 @@ impl GameBoy {
             self.registers.sp,
             memory::RAM
         );
-        self.memory.set16(self.registers.sp, source);
+        self.memory.set16(self.registers.sp, value);
     }
 
-    /// Pop a 16-bit value from the top of the stack into a register
-    fn pop(&mut self, register: Register16Stack) {
-        let sp = self.registers.sp;
-        let dest = match register {
-            Register16Stack::Bc => self.registers.bc_mut(),
-            Register16Stack::De => self.registers.de_mut(),
-            Register16Stack::Hl => self.registers.hl_mut(),
-            Register16Stack::Af => self.registers.af_mut(),
-        };
-
-        *dest = self.memory.get16(sp);
+    /// Pop a 16-bit value from the top of the stack
+    fn pop(&mut self) -> u16 {
+        // TODO make sure the stack isn't empty
+        let value = self.memory.get16(self.registers.sp);
         // SP points to the LAST OCCUPIED slot, so we need to increment it to
         // "deallocate" the value we just popped.
         self.registers.sp.0 += 2;
@@ -287,6 +301,25 @@ impl GameBoy {
             self.registers.sp,
             memory::RAM
         );
+
+        value
+    }
+
+    /// Return from the current function
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn ret(&mut self, condition: Option<ConditionCode>) -> usize {
+        match condition {
+            Some(cond) if self.condition(cond) => {
+                self.registers.pc = Address(self.pop());
+                5
+            }
+            Some(_) => 2, // Condition false
+            None => {
+                self.registers.pc = Address(self.pop());
+                4
+            }
+        }
     }
 
     /// Evaluate a [ConditionCode]
@@ -368,6 +401,16 @@ impl GameBoy {
                 *self.registers.hl_mut() = value.wrapping_sub(1);
                 value
             }
+        }
+    }
+
+    /// Get a mutable reference to a [Register16Stack]
+    fn register16_stack_mut(&mut self, register: Register16Stack) -> &mut u16 {
+        match register {
+            Register16Stack::Bc => self.registers.bc_mut(),
+            Register16Stack::De => self.registers.de_mut(),
+            Register16Stack::Hl => self.registers.hl_mut(),
+            Register16Stack::Af => self.registers.af_mut(),
         }
     }
 

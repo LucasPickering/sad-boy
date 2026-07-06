@@ -3,7 +3,7 @@ use crate::{
     rom::{Rom, RomParseError},
 };
 use derive_more::{Display, Error};
-use std::{ops::RangeInclusive, ptr};
+use std::ops::RangeInclusive;
 use tracing::error;
 
 /// Range of CPU instructions and data from a game cartridge
