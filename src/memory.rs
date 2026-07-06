@@ -3,8 +3,8 @@ use crate::{
     rom::{Rom, RomParseError},
 };
 use derive_more::{Display, Error};
-use log::warn;
 use std::{ops::RangeInclusive, ptr};
+use tracing::warn;
 
 /// Range of CPU instructions and data from a game cartridge
 const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);

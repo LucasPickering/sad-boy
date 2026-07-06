@@ -6,7 +6,6 @@ use crate::instruction::{
     Register16Stack, Value8,
 };
 use color_eyre::eyre::{self, Context};
-use log::{info, trace};
 use std::{
     error::Error,
     fmt::{self, Debug, Display},
@@ -14,6 +13,7 @@ use std::{
     ops::{BitAnd, BitOr, Not},
     path::Path,
 };
+use tracing::{info, trace};
 use winnow::{
     ModalResult, Parser,
     binary::{self, Endianness},
@@ -74,8 +74,10 @@ impl Rom {
             })?;
         let offset = input.offset_from(&start);
         trace!(
-            "Parsed {instruction:?} from [{bytes}] at {address}",
-            bytes = BytesDisplay(taken),
+            ?instruction,
+            bytes = %BytesDisplay(taken),
+            %address,
+            "Parsed instruction",
         );
         Ok((instruction, offset))
     }

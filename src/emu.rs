@@ -7,16 +7,16 @@ use crate::{
         Address, ConditionCode, DecInc, Instruction, Jump, Load, Register8,
         Register16, Register16Memory, Value8,
     },
-    memory::{MemoryError, MemoryMap},
+    memory::MemoryMap,
     rom::Rom,
 };
-use color_eyre::eyre::{self, Context};
-use log::{trace, warn};
+use color_eyre::eyre;
 use std::{
     path::Path,
     thread,
     time::{Duration, Instant},
 };
+use tracing::{error_span, info_span, trace_span, warn};
 
 /// Game Boy emulator
 #[derive(derive_more::Debug)]
@@ -77,7 +77,7 @@ impl GameBoy {
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
     fn execute(&mut self, instruction: Instruction) -> usize {
-        trace!("Executing {instruction:?}");
+        let _span = info_span!("Executing instruction", ?instruction).entered();
         match instruction {
             Instruction::Nop => 1,
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
@@ -85,7 +85,7 @@ impl GameBoy {
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
             _ => {
-                warn!("Unknown instruction {instruction:?}");
+                warn!("Unknown instruction");
                 1
             }
         }
