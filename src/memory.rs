@@ -74,8 +74,7 @@ impl MemoryMap {
 
     /// Set a 1-byte value in memory
     ///
-    /// All 16-bit addresses point to _some_ memory. If the memory isn't
-    /// writable, this does nothing.
+    /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
         if let Some(byte) = self.get_ref_mut(address) {
             *byte = value;
@@ -85,33 +84,21 @@ impl MemoryMap {
     }
 
     /// Get a 2-byte value from memory
-    ///
-    /// TODO explain error case
     pub fn get16(&self, address: Address) -> u16 {
-        // TODO check the pointer is valid somehow (doesn't hang over the
-        // edge of the range)
-        // TODO check alignment
-        // Safety: TODO
-        let ptr = ptr::from_ref(self.get_ref(address)).cast::<u16>();
-        unsafe { *ptr }
+        let low = self.get8(address);
+        let high = self.get8(address.next());
+        u16::from_le_bytes([low, high]) // Game Boy is little-endian
     }
 
     /// Set a 2-byte value in memory
     ///
-    /// TODO describe error case
+    /// If the memory isn't writable, this does nothing.
     pub fn set16(&mut self, address: Address, value: u16) {
-        // TODO check the pointer is valid somehow (doesn't hang over the
-        // edge of the range)
-        // TODO check alignment
-        // Safety: TODO
-        if let Some(byte_ref) = self.get_ref_mut(address) {
-            let ptr = ptr::from_mut(byte_ref).cast::<u16>();
-            unsafe {
-                *ptr = value;
-            }
-        } else {
-            error!("Skipping write to read-only address {address}");
-        }
+        // This would be more exciting with `unsafe`, but the alignment stuff
+        // is annoying to deal with
+        let [low, high] = value.to_le_bytes(); // Game Boy is little-endian
+        self.set8(address, low);
+        self.set8(address.next(), high);
     }
 
     /// Map an Game Boy [Address] into an address in real memory

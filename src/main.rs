@@ -28,7 +28,7 @@ fn main() -> eyre::Result<()> {
 fn initialize_tracing() {
     let stderr_subscriber = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
-        .with_target(false)
+        .with_target(true)
         .with_span_events(FmtSpan::NONE);
 
     let targets = match env::var("RUST_LOG") {

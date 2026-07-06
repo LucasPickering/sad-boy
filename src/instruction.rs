@@ -332,6 +332,16 @@ pub struct Bit(pub u8);
 #[debug("{self}")]
 pub struct Address(pub u16);
 
+impl Address {
+    /// Get the next address after this one (+1 byte)
+    ///
+    /// Useful for accessing 16-bit values as two separate bytes.
+    pub fn next(self) -> Self {
+        // TODO check if self == 0xffff
+        Self(self.0 + 1)
+    }
+}
+
 impl Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const ADDRESS_WIDTH: usize = 4;

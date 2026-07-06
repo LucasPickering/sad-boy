@@ -481,7 +481,7 @@ macro_rules! register_pair {
             //   will be 2-byte aligned
             // - This will not read/write out of bounds because the first
             //   register must have a second register after it.
-            let ptr8 = &raw const self.$r1;
+            let ptr8 = std::ptr::from_ref(&self.$r1);
             debug_assert_eq!(
                 ptr8.align_offset(2),
                 0,
@@ -495,7 +495,7 @@ macro_rules! register_pair {
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
             // SAFETY: see above fn
-            let ptr8 = &raw mut self.$r1;
+            let ptr8 = std::ptr::from_mut(&mut self.$r1);
             debug_assert_eq!(
                 ptr8.align_offset(2),
                 0,
