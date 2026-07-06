@@ -11,7 +11,9 @@ use crate::{
     rom::Rom,
 };
 use color_eyre::eyre;
+use static_assertions::assert_cfg;
 use std::{
+    fmt::{self, Debug},
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -380,24 +382,29 @@ impl GameBoy {
     }
 }
 
+// Optimizations below rely on this.
+assert_cfg!(target_endian = "little");
+
 /// Registers in a Game Boy CPU
-#[derive(Debug)]
 #[repr(C)] // Field ordering/alignment is important
 struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
-    // accessed as separate bytes or a pair together
+    // accessed as separate bytes or a pair together. The pairs are SWAPPED
+    // here because `af` means `a` is the high byte and `f` is the low byte.
+    // The assertion above ensures we're on an little-endian system.
+
     // af
-    a: u8,
     f: u8,
+    a: u8,
     // bc
-    b: u8,
     c: u8,
+    b: u8,
     // de
-    d: u8,
     e: u8,
+    d: u8,
     // hl
-    h: u8,
     l: u8,
+    h: u8,
 
     /// Stack pointer
     ///
@@ -411,17 +418,38 @@ struct Registers {
     pc: Address,
 }
 
+impl Debug for Registers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registers")
+            .field("a", &self.a)
+            .field("f", &self.f)
+            .field("af", &self.af())
+            .field("b", &self.b)
+            .field("c", &self.c)
+            .field("bc", &self.bc())
+            .field("d", &self.d)
+            .field("e", &self.e)
+            .field("de", &self.de())
+            .field("h", &self.h)
+            .field("l", &self.l)
+            .field("hl", &self.hl())
+            .field("sp", &self.sp)
+            .field("pc", &self.pc)
+            .finish()
+    }
+}
+
 impl Default for Registers {
     fn default() -> Self {
         Self {
-            a: 0,
             f: 0,
-            b: 0,
+            a: 0,
             c: 0,
-            d: 0,
+            b: 0,
             e: 0,
-            h: 0,
+            d: 0,
             l: 0,
+            h: 0,
             // Stack starts at the end of RAM
             sp: Address(memory::RAM.end() + 1),
             // Skip the boot ROM, go straight to the game's ROM
@@ -438,6 +466,9 @@ impl Default for Registers {
 /// important.** The pointer to the first register of the pair is case from a
 /// `u8` pointer to a `u16` pointer; the second register is **assumed** to
 /// be the following byte in memory.
+///
+/// The `$r1` register should be the register with the *lower* bits. Because the
+/// system is little-endian, that register must come first in memory.
 macro_rules! register_pair {
     ($pair:ident, $pair_mut:ident, $r1:ident) => {
         /// Get the value of the `$pair` register pair
@@ -461,10 +492,10 @@ macro_rules! register_pair {
 }
 
 impl Registers {
-    register_pair!(af, af_mut, a);
-    register_pair!(bc, bc_mut, b);
-    register_pair!(de, de_mut, d);
-    register_pair!(hl, hl_mut, h);
+    register_pair!(af, af_mut, f);
+    register_pair!(bc, bc_mut, c);
+    register_pair!(de, de_mut, e);
+    register_pair!(hl, hl_mut, l);
 
     /// Read bit flags from the `f` register
     fn flags(&self) -> Flags {
@@ -532,6 +563,40 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    // Static functions for test cases
+
+    fn a(registers: &mut Registers) -> &mut u8 {
+        &mut registers.a
+    }
+
+    fn f(registers: &mut Registers) -> &mut u8 {
+        &mut registers.f
+    }
+
+    fn b(registers: &mut Registers) -> &mut u8 {
+        &mut registers.b
+    }
+
+    fn c(registers: &mut Registers) -> &mut u8 {
+        &mut registers.c
+    }
+
+    fn d(registers: &mut Registers) -> &mut u8 {
+        &mut registers.d
+    }
+
+    fn e(registers: &mut Registers) -> &mut u8 {
+        &mut registers.e
+    }
+
+    fn h(registers: &mut Registers) -> &mut u8 {
+        &mut registers.h
+    }
+
+    fn l(registers: &mut Registers) -> &mut u8 {
+        &mut registers.l
+    }
+
     fn zero(register: Flags) -> bool {
         register.zero
     }
@@ -546,6 +611,29 @@ mod tests {
 
     fn carry(register: Flags) -> bool {
         register.carry
+    }
+
+    /// Test reading/writing all register pairs
+    #[rstest]
+    #[case::af(a, f, Registers::af, Registers::af_mut)]
+    #[case::bc(b, c, Registers::bc, Registers::bc_mut)]
+    #[case::de(d, e, Registers::de, Registers::de_mut)]
+    #[case::hl(h, l, Registers::hl, Registers::hl_mut)]
+    fn register_pairs(
+        #[case] high: fn(&mut Registers) -> &mut u8,
+        #[case] low: fn(&mut Registers) -> &mut u8,
+        #[case] pair_read: fn(&Registers) -> u16,
+        #[case] pair_write: fn(&mut Registers) -> &mut u16,
+    ) {
+        let mut registers = Registers::default();
+        // Write individuals, read pair
+        *high(&mut registers) = 0x12;
+        *low(&mut registers) = 0x34;
+        assert_eq!(pair_read(&registers), 0x1234);
+        // Write to pair, read individual
+        *pair_write(&mut registers) = 0xabcd;
+        assert_eq!(*high(&mut registers), 0xab);
+        assert_eq!(*low(&mut registers), 0xcd);
     }
 
     /// Test [Registers::flags]
