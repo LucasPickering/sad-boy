@@ -14,6 +14,7 @@ use color_eyre::eyre;
 use static_assertions::assert_cfg;
 use std::{
     fmt::{self, Debug},
+    ops::{BitAnd, BitOr, BitXor},
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -88,6 +89,7 @@ impl GameBoy {
         trace!("Executing");
         match instruction {
             Instruction::Add(add) => self.add(add),
+            Instruction::And(rhs) => self.bitwise(u8::bitand, rhs, true),
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
@@ -96,6 +98,7 @@ impl GameBoy {
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
             Instruction::Nop => 1,
+            Instruction::Or(rhs) => self.bitwise(u8::bitor, rhs, false),
             Instruction::Push(register) => {
                 let value = *self.register16_stack_mut(register);
                 self.push(value);
@@ -111,6 +114,7 @@ impl GameBoy {
                 // TODO enable interrupts
                 4
             }
+            Instruction::Xor(rhs) => self.bitwise(u8::bitxor, rhs, false),
             _ => {
                 error!("Unknown instruction");
                 1
@@ -129,13 +133,7 @@ impl GameBoy {
         let (flags, cycles) = match add {
             Add::A(operand) => {
                 // Number of CPU cycles varies by operand source
-                let (operand, cycles) = match operand {
-                    Operand::V8(Value8::Register(register)) => {
-                        (self.register8(register), 1)
-                    }
-                    Operand::V8(Value8::Hl) => (self.hl_mem(), 2),
-                    Operand::Const(value) => (value, 2),
-                };
+                let (operand, cycles) = self.operand(operand);
                 let old = self.registers.a;
                 let (new, carry) = old.overflowing_add(operand);
                 self.registers.a = new;
@@ -174,6 +172,35 @@ impl GameBoy {
             }
         };
         self.registers.set_flags(flags);
+        cycles
+    }
+
+    /// Execute a bitwise instruction like `AND` or `XOR`, mutating `a`
+    ///
+    /// ## Params
+    ///
+    /// - `operation`: bitwise operation, taking `a, operand`
+    /// - `operand`: right-hand side of the operation
+    /// - `half_carry`: value for the `half_carry` flag
+    ///
+    /// ## Return
+    ///
+    /// Return the number of consumed CPU cycles
+    fn bitwise(
+        &mut self,
+        operation: fn(u8, u8) -> u8,
+        rhs: Operand,
+        half_carry: bool,
+    ) -> usize {
+        let (operand, cycles) = self.operand(rhs);
+        let old = self.registers.a;
+        self.registers.a = operation(old, operand);
+        self.registers.set_flags(Flags {
+            zero: self.registers.a == 0,
+            subtract: false,
+            half_carry,
+            carry: false,
+        });
         cycles
     }
 
@@ -390,6 +417,20 @@ impl GameBoy {
             ConditionCode::Nz => !flags.zero,
             ConditionCode::C => flags.carry,
             ConditionCode::Nc => !flags.carry,
+        }
+    }
+
+    /// Evaluate an 8-bit math operand
+    ///
+    /// Return `(operand, cycles)`. All math operations take 1 CPU cycle for
+    /// 8-bit register operands, 2 cycles for `[HL]` or constants.
+    fn operand(&mut self, operand: Operand) -> (u8, usize) {
+        match operand {
+            Operand::V8(Value8::Register(register)) => {
+                (self.register8(register), 1)
+            }
+            Operand::V8(Value8::Hl) => (self.hl_mem(), 2),
+            Operand::Const(value) => (value, 2),
         }
     }
 
