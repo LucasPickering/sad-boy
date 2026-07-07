@@ -17,15 +17,8 @@ impl GameBoy {
         let (flags, cycles) = match add {
             Add::A(operand) => {
                 let (rhs, cycles) = self.operand(operand);
-                let lhs = self.registers.a;
-                let (new, carry) = lhs.overflowing_add(rhs);
-                self.registers.a = new;
-                let flags = Flags {
-                    zero: new == 0,
-                    subtract: false,
-                    half_carry: (lhs & HALF8) + (rhs & HALF8) > HALF8,
-                    carry,
-                };
+                let (sum, flags) = add8(self.registers.a, rhs);
+                self.registers.a = sum;
                 (flags, cycles)
             }
             Add::Hl(register) => {
@@ -140,5 +133,106 @@ impl GameBoy {
             Operand::V8(Value8::Hl) => (self.hl_mem(), 2),
             Operand::Const(value) => (value, 2),
         }
+    }
+}
+
+/// Add two 8-bit numbers
+fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
+    let (sum, carry) = lhs.overflowing_add(rhs);
+    let flags = Flags {
+        zero: sum == 0,
+        subtract: false,
+        half_carry: (lhs & HALF8) + (rhs & HALF8) > HALF8,
+        carry,
+    };
+    (sum, flags)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quickcheck_macros::quickcheck;
+    use rstest::rstest;
+
+    /// Test addition to register `a` (`ADD A,n8`)
+    #[rstest]
+    #[case::zero(0x00, 0x00, 0x00, Flags {
+        zero: true,
+        subtract: false,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::no_carry(0x44, 0x88, 0xCC, Flags {
+        zero: false,
+        subtract: false,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::half_carry(0x08, 0x88, 0x90, Flags {
+        zero: false,
+        subtract: false,
+        half_carry: true,
+        carry: false,
+    })]
+    #[case::carry(0xFF, 0x10, 0x0F, Flags {
+        zero: false,
+        subtract: false,
+        half_carry: false,
+        carry: true,
+    })]
+    #[case::double_carry(0xFF, 0x01, 0x00, Flags {
+        zero: true,
+        subtract: false,
+        half_carry: true,
+        carry: true,
+    })]
+    #[case::todo(0x50, 0xb0, 0x00, Flags {
+        zero: true,
+        subtract: false,
+        half_carry: false,
+        carry: true,
+    })]
+    fn add_a(
+        #[case] lhs: u8,
+        #[case] rhs: u8,
+        #[case] expected_value: u8,
+        #[case] expected_flags: Flags,
+    ) {
+        let mut game_boy = GameBoy::empty();
+        game_boy.registers.a = lhs;
+        game_boy.add(Add::A(Operand::Const(rhs)));
+        assert_eq!(game_boy.registers.a, expected_value, "sum");
+        assert_eq!(game_boy.registers.flags(), expected_flags, "flags");
+    }
+
+    /// Property test for [add8]
+    /// - Sum is always `lhs+rhs % 256`
+    /// - Zero flag is set if sum is 0
+    /// - Carry flag is set if `lhs+rhs > 255`
+    /// - Half carry flag is set if TODO
+    ///
+    /// The goal of this is to take a different angle to flag calculation to
+    /// give another level of insurance.
+    #[quickcheck]
+    fn add8_prop(lhs: u8, rhs: u8) {
+        let (sum, flags) = add8(lhs, rhs);
+
+        // Convert operands to u16 so we can do the add without wrapping
+        let lhs: u16 = lhs.into();
+        let rhs: u16 = rhs.into();
+        let sum16 = lhs + rhs;
+        let sum_wrap = (sum16 % 0x100) as u8;
+
+        assert_eq!(sum, sum_wrap, "sum");
+        assert_eq!(
+            flags,
+            Flags {
+                zero: sum_wrap == 0,
+                subtract: false,
+                half_carry: ((lhs & 0xf) + (rhs & 0xf)) != (sum16 & 0xf),
+                carry: sum16 > 0xff,
+            },
+            "flags"
+        );
     }
 }

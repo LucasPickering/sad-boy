@@ -50,6 +50,14 @@ impl Rom {
         Ok(Self { data })
     }
 
+    /// Create an empty ROM
+    ///
+    /// Useful for testing on the [GameBoy] when the ROM doesn't matter.
+    #[cfg(test)]
+    pub fn empty() -> Rom {
+        Self { data: vec![] }
+    }
+
     /// Parse the CPU instruction at the given address
     ///
     /// Return the instruction as well as the number of bytes it consumed. This

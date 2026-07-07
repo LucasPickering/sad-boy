@@ -6,8 +6,8 @@ mod math;
 
 use crate::{
     instruction::{
-        Address, ConditionCode, DecInc, Instruction, Jump, Load, Register8,
-        Register16, Register16Memory, Register16Stack, Value8,
+        Address, ConditionCode, Instruction, Jump, Load, Register8, Register16,
+        Register16Memory, Register16Stack, Value8,
     },
     memory::{self, MemoryMap},
     rom::Rom,
@@ -41,6 +41,15 @@ impl GameBoy {
             registers: Registers::default(),
             memory,
         })
+    }
+
+    /// Create a [GameBoy] with an empty ROM for testing
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            registers: Registers::default(),
+            memory: MemoryMap::new(Rom::empty()),
+        }
     }
 
     /// Keep running until the CPU is halted
@@ -559,7 +568,7 @@ impl Registers {
 /// Use [Registers::flags] to get this value.
 ///
 /// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[expect(clippy::struct_excessive_bools)]
 struct Flags {
     /// Was the result of the operation zero?

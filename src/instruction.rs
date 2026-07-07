@@ -135,6 +135,12 @@ pub enum Operand {
     Const(u8),
 }
 
+impl From<u8> for Operand {
+    fn from(value: u8) -> Self {
+        Self::Const(value)
+    }
+}
+
 impl From<Register8> for Operand {
     fn from(register: Register8) -> Self {
         Self::V8(Value8::Register(register))
