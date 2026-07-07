@@ -96,6 +96,43 @@ impl GameBoy {
         cycles
     }
 
+    /// Execute a `BIT`
+    ///
+    /// The value of the bit is stored in the `zero` flag.
+    pub(super) fn bit_get(&mut self, bit: Bit, value: Value8) -> usize {
+        let (value, cycles) = match value {
+            Value8::Register(register) => (self.register8(register), 2),
+            Value8::Hl => (self.hl_mem(), 3),
+        };
+        let carry = self.registers.flags().carry;
+        self.registers.set_flags(Flags {
+            zero: bit.get(value),
+            // These two flags are hard-coded
+            subtract: false,
+            half_carry: true,
+            // This flag retains its value
+            carry,
+        });
+        cycles
+    }
+
+    /// Execute a `SET` or `RES` instruction
+    ///
+    /// These instructions for not modify any flags.
+    pub(super) fn bit_set(
+        &mut self,
+        bit: Bit,
+        dest: Value8,
+        value: bool,
+    ) -> usize {
+        let (dest, cycles) = match dest {
+            Value8::Register(register) => (self.register8_mut(register), 2),
+            Value8::Hl => (self.hl_mem_mut(), 4),
+        };
+        *dest = bit.set(*dest, value);
+        cycles
+    }
+
     /// Execute a unary bitwise instruction like `SWAP` or `SRL`
     ///
     /// These instructions modify the `carry` flag. This will also set the

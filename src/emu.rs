@@ -102,6 +102,7 @@ impl GameBoy {
             Instruction::Adc(rhs) => self.add_carry(rhs),
             Instruction::Add(add) => self.add(add),
             Instruction::And(rhs) => self.bit_binary(u8::bitand, rhs, true),
+            Instruction::Bit(bit, source) => self.bit_get(bit, source),
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
@@ -121,6 +122,7 @@ impl GameBoy {
                 *self.register16_stack_mut(register) = self.pop();
                 3
             }
+            Instruction::Res(bit, dest) => self.bit_set(bit, dest, false),
             Instruction::Ret(condition) => self.ret(condition),
             Instruction::Reti => {
                 self.ret(None);
@@ -152,6 +154,7 @@ impl GameBoy {
             ),
             Instruction::Rst(address) => self.call(address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
+            Instruction::Set(bit, dest) => self.bit_set(bit, dest, true),
             Instruction::Sla(dest) => {
                 self.bit_unary(|value, _| (value << 1, Bit(7).get(value)), dest)
             }
