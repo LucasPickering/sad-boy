@@ -21,6 +21,10 @@ use std::{
 };
 use tracing::{error, info_span, trace};
 
+// Masks for the bottom half of 8/16-bit values
+const HALF8: u8 = 0xf;
+const HALF16: u16 = 0xff;
+
 /// Game Boy emulator
 #[derive(derive_more::Debug)]
 pub struct GameBoy {
@@ -114,6 +118,7 @@ impl GameBoy {
                 // TODO enable interrupts
                 4
             }
+            Instruction::Sub(rhs) => self.sub(rhs),
             Instruction::Xor(rhs) => self.bitwise(u8::bitxor, rhs, false),
             _ => {
                 error!("Unknown instruction");
@@ -126,46 +131,41 @@ impl GameBoy {
     ///
     /// Return the number of consumed CPU cycles
     fn add(&mut self, add: Add) -> usize {
-        // Masks for the bottom half of 8/16-bit values
-        const HALF8: u8 = 0xf;
-        const HALF16: u16 = 0xff;
-
         let (flags, cycles) = match add {
             Add::A(operand) => {
-                // Number of CPU cycles varies by operand source
-                let (operand, cycles) = self.operand(operand);
-                let old = self.registers.a;
-                let (new, carry) = old.overflowing_add(operand);
+                let (rhs, cycles) = self.operand(operand);
+                let lhs = self.registers.a;
+                let (new, carry) = lhs.overflowing_add(rhs);
                 self.registers.a = new;
                 let flags = Flags {
                     zero: new == 0,
                     subtract: false,
-                    half_carry: (old & HALF8) + (new & HALF8) > HALF8,
+                    half_carry: (lhs & HALF8) + (rhs & HALF8) > HALF8,
                     carry,
                 };
                 (flags, cycles)
             }
             Add::Hl(register) => {
-                let operand = self.register16(register);
-                let old = self.registers.hl();
-                let (new, carry) = old.overflowing_add(operand);
+                let rhs = self.register16(register);
+                let lhs = self.registers.hl();
+                let (new, carry) = lhs.overflowing_add(rhs);
                 *self.registers.hl_mut() = new;
                 let flags = Flags {
                     zero: new == 0,
                     subtract: false,
-                    half_carry: (old & HALF16) + (new & HALF16) > HALF16,
+                    half_carry: (lhs & HALF16) + (rhs & HALF16) > HALF16,
                     carry,
                 };
                 (flags, 2)
             }
-            Add::Sp(offset) => {
-                let old = self.registers.sp.0;
-                let (new, carry) = old.overflowing_add_signed(offset.into());
+            Add::Sp(rhs) => {
+                let lhs = self.registers.sp.0;
+                let (new, carry) = lhs.overflowing_add_signed(rhs.into());
                 self.registers.sp.0 = new;
                 let flags = Flags {
                     zero: new == 0,
                     subtract: false,
-                    half_carry: (old & HALF16) + (new & HALF16) > HALF16,
+                    half_carry: false, // TODO
                     carry,
                 };
                 (flags, 4)
@@ -180,7 +180,7 @@ impl GameBoy {
     /// ## Params
     ///
     /// - `operation`: bitwise operation, taking `a, operand`
-    /// - `operand`: right-hand side of the operation
+    /// - `rhs`: right-hand operand
     /// - `half_carry`: value for the `half_carry` flag
     ///
     /// ## Return
@@ -192,9 +192,9 @@ impl GameBoy {
         rhs: Operand,
         half_carry: bool,
     ) -> usize {
-        let (operand, cycles) = self.operand(rhs);
-        let old = self.registers.a;
-        self.registers.a = operation(old, operand);
+        let (rhs, cycles) = self.operand(rhs);
+        let lhs = self.registers.a;
+        self.registers.a = operation(lhs, rhs);
         self.registers.set_flags(Flags {
             zero: self.registers.a == 0,
             subtract: false,
@@ -407,6 +407,23 @@ impl GameBoy {
                 4
             }
         }
+    }
+
+    /// Execute a `SUB` instruction
+    ///
+    /// Return the number of consumed CPU cycles
+    fn sub(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        let lhs = self.registers.a;
+        let (new, carry) = lhs.overflowing_sub(rhs);
+        self.registers.a = new;
+        self.registers.set_flags(Flags {
+            zero: new == 0,
+            subtract: true,
+            half_carry: (lhs & HALF8) < (rhs & HALF8),
+            carry,
+        });
+        cycles
     }
 
     /// Evaluate a [ConditionCode]
