@@ -4,7 +4,7 @@
 
 use crate::{
     instruction::{
-        Add, Address, ConditionCode, DecInc, Instruction, Jump, Load,
+        Add, Address, ConditionCode, DecInc, Instruction, Jump, Load, Operand,
         Register8, Register16, Register16Memory, Register16Stack, Value8,
     },
     memory::{self, MemoryMap},
@@ -122,14 +122,59 @@ impl GameBoy {
     ///
     /// Return the number of consumed CPU cycles
     fn add(&mut self, add: Add) -> usize {
-        match add {
-            Add::A(_) => todo!(),
-            Add::Hl(register) => {
-                let _operand = self.register16(register);
-                todo!()
+        // Masks for the bottom half of 8/16-bit values
+        const HALF8: u8 = 0xf;
+        const HALF16: u16 = 0xff;
+
+        let (flags, cycles) = match add {
+            Add::A(operand) => {
+                // Number of CPU cycles varies by operand source
+                let (operand, cycles) = match operand {
+                    Operand::V8(Value8::Register(register)) => {
+                        (self.register8(register), 1)
+                    }
+                    Operand::V8(Value8::Hl) => (self.hl_mem(), 2),
+                    Operand::Const(value) => (value, 2),
+                };
+                let old = self.registers.a;
+                let (new, carry) = old.overflowing_add(operand);
+                self.registers.a = new;
+                let flags = Flags {
+                    zero: new == 0,
+                    subtract: false,
+                    half_carry: (old & HALF8) + (new & HALF8) > HALF8,
+                    carry,
+                };
+                (flags, cycles)
             }
-            Add::HlSp => todo!(),
-        }
+            Add::Hl(register) => {
+                let operand = self.register16(register);
+                let old = self.registers.hl();
+                let (new, carry) = old.overflowing_add(operand);
+                *self.registers.hl_mut() = new;
+                let flags = Flags {
+                    zero: new == 0,
+                    subtract: false,
+                    half_carry: (old & HALF16) + (new & HALF16) > HALF16,
+                    carry,
+                };
+                (flags, 2)
+            }
+            Add::Sp(offset) => {
+                let old = self.registers.sp.0;
+                let (new, carry) = old.overflowing_add_signed(offset.into());
+                self.registers.sp.0 = new;
+                let flags = Flags {
+                    zero: new == 0,
+                    subtract: false,
+                    half_carry: (old & HALF16) + (new & HALF16) > HALF16,
+                    carry,
+                };
+                (flags, 4)
+            }
+        };
+        self.registers.set_flags(flags);
+        cycles
     }
 
     /// Execute a function call
@@ -348,7 +393,7 @@ impl GameBoy {
         }
     }
 
-    /// Get a the value of an 8-bit register
+    /// Get the value of an 8-bit register
     fn register8(&self, register: Register8) -> u8 {
         match register {
             Register8::A => self.registers.a,
@@ -478,6 +523,7 @@ struct Registers {
 
 impl Debug for Registers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Include virtual 16-bit register pairs in the output
         f.debug_struct("Registers")
             .field("a", &self.a)
             .field("f", &self.f)
@@ -588,17 +634,17 @@ impl Registers {
 ///
 /// Use [Registers::flags] to get this value.
 ///
-/// https://rylev.github.io/DMG-01/public/book/cpu/registers.html#flags-register
+/// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
 #[derive(Copy, Clone)]
 #[expect(clippy::struct_excessive_bools)]
 struct Flags {
-    /// TODO
+    /// Was the result of the operation zero?
     zero: bool,
-    /// TODO
+    /// Was the operation a subtraction?
     subtract: bool,
-    /// TODO
+    /// Did the result overflow from bit 3 (bit 7 for 16-bit ops)?
     half_carry: bool,
-    /// TODO
+    /// Did the result overflow the value and wrap?
     carry: bool,
 }
 

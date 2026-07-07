@@ -404,7 +404,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
             .label("ld a, [imm16]"),
         //
         preceded(0b1110_1000, imm8_signed)
-            .map(Instruction::AddSp)
+            .map(|offset| Instruction::Add(Add::Sp(offset)))
             .label("add sp, imm8"),
         preceded(0b1111_1000, imm8_signed)
             .map(|offset| Instruction::Ld(Load::HlSpOffset { offset }))
@@ -846,6 +846,12 @@ mod tests {
     #[case::dec_r16(
         &[0b0010_1011], Instruction::Dec(DecInc::R16(Register16::Hl))
     )]
+    #[case::add_hl_r16(
+        &[0b0001_1001], Instruction::Add(Add::Hl(Register16::De))
+    )]
+    #[case::add_sp_imm8(
+        &[0b1110_1000, 0b0101_0101], Instruction::Add(Add::Sp(0x55))
+    )]
     #[case::add_a_r8(&[0b1000_0001], Instruction::add(Register8::C.into()))]
     #[case::adc_a_r8(&[0b1000_1001], Instruction::Adc(Register8::C.into()))]
     #[case::sub_a_r8(&[0b1001_0001], Instruction::Sub(Register8::C.into()))]
@@ -855,36 +861,28 @@ mod tests {
     #[case::or_a_r8(&[0b1011_0001], Instruction::Or(Register8::C.into()))]
     #[case::cp_a_r8(&[0b1011_1001], Instruction::Cp(Register8::C.into()))]
     #[case::add_a_imm8(
-         &[0b1100_0110, 0b0101_0101],
-         Instruction::add(Operand::Const(0b0101_0101)),
+         &[0b1100_0110, 0b0101_0101], Instruction::add(Operand::Const(0x55))
      )]
     #[case::adc_a_imm8(
-         &[0b1100_1110, 0b0101_0101],
-         Instruction::Adc(Operand::Const(0b0101_0101)),
+         &[0b1100_1110, 0b0101_0101], Instruction::Adc(Operand::Const(0x55))
      )]
     #[case::sub_a_imm8(
-         &[0b1101_0110, 0b0101_0101],
-         Instruction::Sub(Operand::Const(0b0101_0101)),
+         &[0b1101_0110, 0b0101_0101], Instruction::Sub(Operand::Const(0x55))
      )]
     #[case::sbc_a_imm8(
-         &[0b1101_1110, 0b0101_0101],
-         Instruction::Sbc(Operand::Const(0b0101_0101)),
+         &[0b1101_1110, 0b0101_0101], Instruction::Sbc(Operand::Const(0x55))
      )]
     #[case::and_a_imm8(
-         &[0b1110_0110, 0b0101_0101],
-         Instruction::And(Operand::Const(0b0101_0101)),
+         &[0b1110_0110, 0b0101_0101], Instruction::And(Operand::Const(0x55))
      )]
     #[case::xor_a_imm8(
-         &[0b1110_1110, 0b0101_0101],
-         Instruction::Xor(Operand::Const(0b0101_0101)),
+         &[0b1110_1110, 0b0101_0101], Instruction::Xor(Operand::Const(0x55))
      )]
     #[case::or_a_imm8(
-         &[0b1111_0110, 0b0101_0101],
-         Instruction::Or(Operand::Const(0b0101_0101)),
+         &[0b1111_0110, 0b0101_0101], Instruction::Or(Operand::Const(0x55))
      )]
     #[case::cp_a_imm8(
-         &[0b1111_1110, 0b0101_0101],
-         Instruction::Cp(Operand::Const(0b0101_0101)),
+         &[0b1111_1110, 0b0101_0101], Instruction::Cp(Operand::Const(0x55))
      )]
     #[case::ret(&[0b1100_1001], Instruction::Ret(None))]
     #[case::ret_cond_nz(

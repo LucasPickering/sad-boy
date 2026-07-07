@@ -11,9 +11,6 @@ pub enum Instruction {
     Adc(Operand),
     /// Add a value to a register
     Add(Add),
-    /// Add an offset to register `sp`
-    /// TODO flatten into [Add]
-    AddSp(i8),
     /// Bitwise AND between `a` and another value (modifies `a`)
     And(Operand),
     /// Get a single bit from a register (output to the `zero` flag)
@@ -31,6 +28,8 @@ pub enum Instruction {
     /// Complement (bitwise NOT) register `a`
     Cpl,
     /// Decimal Adjust Accumulator
+    ///
+    /// https://blog.ollien.com/posts/gb-daa/
     Daa,
     /// Decrement a value by 1
     Dec(DecInc),
@@ -149,10 +148,10 @@ impl From<Register8> for Operand {
 pub enum Add {
     /// Add an 8-bit value to `a`
     A(Operand),
-    /// Add a 16-bit value to `hl`
+    /// Add a 16-bit register value to `hl`
     Hl(Register16),
-    /// Add `sp` to `hl`
-    HlSp,
+    /// Add a signed offset to `sp`
+    Sp(i8),
 }
 
 /// Variations of the `DEC` (decrement) and `INC` (increment) instructions
