@@ -99,6 +99,7 @@ impl GameBoy {
         .entered();
         trace!("Executing");
         match instruction {
+            Instruction::Adc(rhs) => self.adc(rhs),
             Instruction::Add(add) => self.add(add),
             Instruction::And(rhs) => self.bitwise(u8::bitand, rhs, true),
             Instruction::Call { address, condition } => {

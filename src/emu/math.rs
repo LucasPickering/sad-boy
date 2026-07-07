@@ -10,6 +10,19 @@ const HALF8: u8 = 0xf;
 const HALF16: u16 = 0xff;
 
 impl GameBoy {
+    /// Execute an `ADC` instruction
+    ///
+    /// Return the number of consumed CPU cycles
+    pub(super) fn adc(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        // Add the carry flag as a 0/1
+        let rhs = rhs.wrapping_add(self.registers.flags().carry.into());
+        let (sum, flags) = add8(self.registers.a, rhs);
+        self.registers.a = sum;
+        self.registers.set_flags(flags);
+        cycles
+    }
+
     /// Execute an `ADD` instruction
     ///
     /// Return the number of consumed CPU cycles
@@ -151,6 +164,7 @@ fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instruction::Instruction;
     use quickcheck_macros::quickcheck;
     use rstest::rstest;
 
@@ -200,7 +214,7 @@ mod tests {
     ) {
         let mut game_boy = GameBoy::empty();
         game_boy.registers.a = lhs;
-        game_boy.add(Add::A(Operand::Const(rhs)));
+        game_boy.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(game_boy.registers.a, expected_value, "sum");
         assert_eq!(game_boy.registers.flags(), expected_flags, "flags");
     }
