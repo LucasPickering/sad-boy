@@ -99,12 +99,13 @@ impl GameBoy {
         .entered();
         trace!("Executing");
         match instruction {
-            Instruction::Adc(rhs) => self.adc(rhs),
+            Instruction::Adc(rhs) => self.add_carry(rhs),
             Instruction::Add(add) => self.add(add),
             Instruction::And(rhs) => self.bitwise(u8::bitand, rhs, true),
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
+            Instruction::Cp(rhs) => self.compare(rhs),
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
@@ -126,6 +127,7 @@ impl GameBoy {
                 // TODO enable interrupts
                 4
             }
+            Instruction::Sbc(rhs) => self.subtract_carry(rhs),
             Instruction::Sub(rhs) => self.subtract(rhs),
             Instruction::Xor(rhs) => self.bitwise(u8::bitxor, rhs, false),
             _ => {

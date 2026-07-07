@@ -10,19 +10,6 @@ const HALF8: u8 = 0xf;
 const HALF16: u16 = 0xff;
 
 impl GameBoy {
-    /// Execute an `ADC` instruction
-    ///
-    /// Return the number of consumed CPU cycles
-    pub(super) fn adc(&mut self, rhs: Operand) -> usize {
-        let (rhs, cycles) = self.operand(rhs);
-        // Add the carry flag as a 0/1
-        let rhs = rhs.wrapping_add(self.registers.flags().carry.into());
-        let (sum, flags) = add8(self.registers.a, rhs);
-        self.registers.a = sum;
-        self.registers.set_flags(flags);
-        cycles
-    }
-
     /// Execute an `ADD` instruction
     ///
     /// Return the number of consumed CPU cycles
@@ -64,6 +51,22 @@ impl GameBoy {
         cycles
     }
 
+    /// Execute an `ADC` instruction
+    ///
+    /// This adds the (operand + carry flag) to `a`. The carry flag is 0/1.
+    /// Return the number of consumed CPU cycles
+    pub(super) fn add_carry(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        let (sum, flags) = add8(
+            self.registers.a,
+            // Add the carry flag as a 0/1
+            rhs.wrapping_add(self.registers.flags().carry.into()),
+        );
+        self.registers.a = sum;
+        self.registers.set_flags(flags);
+        cycles
+    }
+
     /// Execute a bitwise instruction like `AND` or `XOR`, mutating `a`
     ///
     /// ## Params
@@ -93,6 +96,18 @@ impl GameBoy {
         cycles
     }
 
+    /// Execute a `CP` instruction
+    ///
+    /// This subtracts the operand from `a` and sets the flags accordingly, but
+    /// discards the value without modifying `a`. Return the number of consumed
+    /// CPU cycles
+    pub(super) fn compare(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        let (_, flags) = sub8(self.registers.a, rhs);
+        self.registers.set_flags(flags);
+        cycles
+    }
+
     /// Execute a `DEC` or `INC` instruction
     ///
     /// `delta` should be `-1` for `DEC`, `1` for `INC` Return the number of
@@ -117,20 +132,30 @@ impl GameBoy {
         }
     }
 
+    /// Execute an `SBC` instruction
+    ///
+    /// This subtracts the (operand + carry flag) from `a`. The carry flag is
+    /// 0/1. Return the number of consumed CPU cycles
+    pub(super) fn subtract_carry(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        let (difference, flags) = sub8(
+            self.registers.a,
+            // Subtract the carry flag as a 0/1
+            rhs.wrapping_sub(self.registers.flags().carry.into()),
+        );
+        self.registers.a = difference;
+        self.registers.set_flags(flags);
+        cycles
+    }
+
     /// Execute a `SUB` instruction
     ///
     /// Return the number of consumed CPU cycles
     pub(super) fn subtract(&mut self, rhs: Operand) -> usize {
         let (rhs, cycles) = self.operand(rhs);
-        let lhs = self.registers.a;
-        let (new, carry) = lhs.overflowing_sub(rhs);
-        self.registers.a = new;
-        self.registers.set_flags(Flags {
-            zero: new == 0,
-            subtract: true,
-            half_carry: (lhs & HALF8) < (rhs & HALF8),
-            carry,
-        });
+        let (difference, flags) = sub8(self.registers.a, rhs);
+        self.registers.a = difference;
+        self.registers.set_flags(flags);
         cycles
     }
 
@@ -149,7 +174,7 @@ impl GameBoy {
     }
 }
 
-/// Add two 8-bit numbers
+/// Add two 8-bit numbers, returning the sum and flags
 fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
     let (sum, carry) = lhs.overflowing_add(rhs);
     let flags = Flags {
@@ -159,6 +184,18 @@ fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
         carry,
     };
     (sum, flags)
+}
+
+/// Subtract two 8-bit numbers, return the difference and flags
+fn sub8(lhs: u8, rhs: u8) -> (u8, Flags) {
+    let (difference, carry) = lhs.overflowing_sub(rhs);
+    let flags = Flags {
+        zero: difference == 0,
+        subtract: true,
+        half_carry: (lhs & HALF8) < (rhs & HALF8),
+        carry,
+    };
+    (difference, flags)
 }
 
 #[cfg(test)]
