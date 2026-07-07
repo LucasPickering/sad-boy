@@ -127,8 +127,10 @@ impl GameBoy {
                 // TODO enable interrupts
                 4
             }
+            Instruction::Rst(address) => self.call(address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
             Instruction::Sub(rhs) => self.subtract(rhs),
+            Instruction::Swap(value) => self.swap(value),
             Instruction::Xor(rhs) => self.bitwise(u8::bitxor, rhs, false),
             _ => {
                 error!("Unknown instruction");
@@ -313,6 +315,26 @@ impl GameBoy {
             Some(_) => 2, // Condition false
             None => {
                 self.registers.pc = Address(self.pop());
+                4
+            }
+        }
+    }
+
+    /// Execute a `SWAP` instruction, swapping the upper 4 bits with the lower
+    ///
+    /// Return the number of consumed CPU cycles
+    fn swap(&mut self, value: Value8) -> usize {
+        fn swap(value: u8) -> u8 {
+            ((value & 0x0f) << 4) | ((value & 0xf0) >> 4)
+        }
+        match value {
+            Value8::Register(register) => {
+                let value = self.register8_mut(register);
+                *value = swap(*value);
+                2
+            }
+            Value8::Hl => {
+                self.set_hl_mem(swap(self.hl_mem()));
                 4
             }
         }
