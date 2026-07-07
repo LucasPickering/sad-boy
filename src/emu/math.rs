@@ -1,8 +1,8 @@
-//! Math-related instruction implementations for [GameBoy]
+//! Mathy and bitwise instruction implementations for [GameBoy]
 
 use crate::{
     emu::{Flags, GameBoy},
-    instruction::{Add, DecInc, Operand, Value8},
+    instruction::{Add, Bit, DecInc, Operand, Value8},
 };
 
 // Masks for the bottom half of 8/16-bit values
@@ -67,7 +67,7 @@ impl GameBoy {
         cycles
     }
 
-    /// Execute a bitwise instruction like `AND` or `XOR`, mutating `a`
+    /// Execute a binary bitwise instruction like `AND` or `XOR`, mutating `a`
     ///
     /// ## Params
     ///
@@ -78,7 +78,7 @@ impl GameBoy {
     /// ## Return
     ///
     /// Return the number of consumed CPU cycles
-    pub(super) fn bitwise(
+    pub(super) fn bit_binary(
         &mut self,
         operation: fn(u8, u8) -> u8,
         rhs: Operand,
@@ -92,6 +92,41 @@ impl GameBoy {
             subtract: false,
             half_carry,
             carry: false,
+        });
+        cycles
+    }
+
+    /// Execute a unary bitwise instruction like `SWAP` or `SRL`
+    ///
+    /// These instructions modify the `carry` flag. This will also set the
+    /// `zero` flag if the output is 0.
+    ///
+    /// ## Params
+    ///
+    /// - `operation`: Function taking the current value and `carry` flag,
+    ///   returning the new value and new `carry` flag
+    /// - `dest`: Value to modify
+    ///
+    /// ## Return
+    ///
+    /// Return the number of consumed CPU cycles
+    pub(super) fn bit_unary(
+        &mut self,
+        operation: fn(u8, bool) -> (u8, bool),
+        dest: Value8,
+    ) -> usize {
+        let carry = self.registers.flags().carry;
+        let (dest, cycles) = match dest {
+            Value8::Register(register) => (self.register8_mut(register), 2),
+            Value8::Hl => (self.hl_mem_mut(), 4),
+        };
+        let (new, carry) = operation(*dest, carry);
+        *dest = new;
+        self.registers.set_flags(Flags {
+            zero: new == 0,
+            subtract: false,
+            half_carry: false,
+            carry,
         });
         cycles
     }
@@ -132,6 +167,17 @@ impl GameBoy {
         }
     }
 
+    /// Execute a `SUB` instruction
+    ///
+    /// Return the number of consumed CPU cycles
+    pub(super) fn subtract(&mut self, rhs: Operand) -> usize {
+        let (rhs, cycles) = self.operand(rhs);
+        let (difference, flags) = sub8(self.registers.a, rhs);
+        self.registers.a = difference;
+        self.registers.set_flags(flags);
+        cycles
+    }
+
     /// Execute an `SBC` instruction
     ///
     /// This subtracts the (operand + carry flag) from `a`. The carry flag is
@@ -143,17 +189,6 @@ impl GameBoy {
             // Subtract the carry flag as a 0/1
             rhs.wrapping_sub(self.registers.flags().carry.into()),
         );
-        self.registers.a = difference;
-        self.registers.set_flags(flags);
-        cycles
-    }
-
-    /// Execute a `SUB` instruction
-    ///
-    /// Return the number of consumed CPU cycles
-    pub(super) fn subtract(&mut self, rhs: Operand) -> usize {
-        let (rhs, cycles) = self.operand(rhs);
-        let (difference, flags) = sub8(self.registers.a, rhs);
         self.registers.a = difference;
         self.registers.set_flags(flags);
         cycles
@@ -196,6 +231,19 @@ fn sub8(lhs: u8, rhs: u8) -> (u8, Flags) {
         carry,
     };
     (difference, flags)
+}
+
+impl Bit {
+    /// Get the value of a bit from a byte
+    pub fn get(self, value: u8) -> bool {
+        value & (0b1 << self.0) > 0
+    }
+
+    /// Set the value of a bit in a byte
+    pub fn set(self, value: u8, bit_value: bool) -> u8 {
+        let new = u8::from(bit_value) << self.0;
+        (value | new) & new
+    }
 }
 
 #[cfg(test)]

@@ -6,8 +6,8 @@ mod math;
 
 use crate::{
     instruction::{
-        Address, ConditionCode, Instruction, Jump, Load, Register8, Register16,
-        Register16Memory, Register16Stack, Value8,
+        Address, Bit, ConditionCode, Instruction, Jump, Load, Register8,
+        Register16, Register16Memory, Register16Stack, Value8,
     },
     memory::{self, MemoryMap},
     rom::Rom,
@@ -101,7 +101,7 @@ impl GameBoy {
         match instruction {
             Instruction::Adc(rhs) => self.add_carry(rhs),
             Instruction::Add(add) => self.add(add),
-            Instruction::And(rhs) => self.bitwise(u8::bitand, rhs, true),
+            Instruction::And(rhs) => self.bit_binary(u8::bitand, rhs, true),
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
@@ -111,7 +111,7 @@ impl GameBoy {
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
             Instruction::Nop => 1,
-            Instruction::Or(rhs) => self.bitwise(u8::bitor, rhs, false),
+            Instruction::Or(rhs) => self.bit_binary(u8::bitor, rhs, false),
             Instruction::Push(register) => {
                 let value = *self.register16_stack_mut(register);
                 self.push(value);
@@ -127,11 +127,52 @@ impl GameBoy {
                 // TODO enable interrupts
                 4
             }
+            Instruction::Rl(dest) => self.bit_unary(
+                |value, carry| {
+                    (Bit(0).set(value.rotate_left(1), carry), Bit(7).get(value))
+                },
+                dest,
+            ),
+            Instruction::Rlc(dest) => self.bit_unary(
+                |value, _| (value.rotate_left(1), Bit(7).get(value)),
+                dest,
+            ),
+            Instruction::Rr(dest) => self.bit_unary(
+                |value, carry| {
+                    (
+                        Bit(7).set(value.rotate_right(1), carry),
+                        Bit(0).get(value),
+                    )
+                },
+                dest,
+            ),
+            Instruction::Rrc(dest) => self.bit_unary(
+                |value, _| (value.rotate_right(1), Bit(0).get(value)),
+                dest,
+            ),
             Instruction::Rst(address) => self.call(address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
+            Instruction::Sla(dest) => {
+                self.bit_unary(|value, _| (value << 1, Bit(7).get(value)), dest)
+            }
+            Instruction::Sra(dest) => self.bit_unary(
+                |value, _| {
+                    // Don't modify bit 7
+                    (
+                        Bit(7).set(value >> 1, Bit(7).get(value)),
+                        Bit(0).get(value),
+                    )
+                },
+                dest,
+            ),
+            Instruction::Srl(dest) => {
+                self.bit_unary(|value, _| (value >> 1, Bit(0).get(value)), dest)
+            }
             Instruction::Sub(rhs) => self.subtract(rhs),
-            Instruction::Swap(value) => self.swap(value),
-            Instruction::Xor(rhs) => self.bitwise(u8::bitxor, rhs, false),
+            Instruction::Swap(dest) => {
+                self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
+            }
+            Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
             _ => {
                 error!("Unknown instruction");
                 1
@@ -320,26 +361,6 @@ impl GameBoy {
         }
     }
 
-    /// Execute a `SWAP` instruction, swapping the upper 4 bits with the lower
-    ///
-    /// Return the number of consumed CPU cycles
-    fn swap(&mut self, value: Value8) -> usize {
-        fn swap(value: u8) -> u8 {
-            ((value & 0x0f) << 4) | ((value & 0xf0) >> 4)
-        }
-        match value {
-            Value8::Register(register) => {
-                let value = self.register8_mut(register);
-                *value = swap(*value);
-                2
-            }
-            Value8::Hl => {
-                self.set_hl_mem(swap(self.hl_mem()));
-                4
-            }
-        }
-    }
-
     /// Evaluate a [ConditionCode]
     fn condition(&self, condition: ConditionCode) -> bool {
         let flags = self.registers.flags();
@@ -435,6 +456,13 @@ impl GameBoy {
     /// Get the byte of memory referenced by register `hl`
     fn hl_mem(&self) -> u8 {
         self.memory.get8(Address(self.registers.hl()))
+    }
+
+    /// TODO
+    fn hl_mem_mut(&mut self) -> &mut u8 {
+        self.memory
+            .get8_mut(Address(self.registers.hl()))
+            .expect("TODO")
     }
 
     /// Set the value of the byte of memory pointed to by register `hl`

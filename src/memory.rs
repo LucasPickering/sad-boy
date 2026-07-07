@@ -76,6 +76,13 @@ impl MemoryMap {
         *self.get_ref(address)
     }
 
+    /// Get a mutable reference to a 1-byte value in memory
+    ///
+    /// If the memory isn't writable, return `None`.
+    pub fn get8_mut(&mut self, address: Address) -> Option<&mut u8> {
+        self.get_ref_mut(address)
+    }
+
     /// Set a 1-byte value in memory
     ///
     /// If the memory isn't writable, this does nothing.
