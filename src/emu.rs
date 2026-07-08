@@ -106,7 +106,27 @@ impl GameBoy {
             Instruction::Call { address, condition } => {
                 self.call(address, condition)
             }
+            Instruction::Ccf => {
+                let flags = self.registers.flags();
+                self.registers.set_flags(Flags {
+                    subtract: false,
+                    half_carry: false,
+                    carry: !flags.carry,
+                    ..flags
+                });
+                1
+            }
             Instruction::Cp(rhs) => self.compare(rhs),
+            Instruction::Cpl => {
+                self.registers.a = !self.registers.a;
+                let flags = self.registers.flags();
+                self.registers.set_flags(Flags {
+                    subtract: true,
+                    half_carry: true,
+                    ..flags
+                });
+                1
+            }
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
@@ -135,10 +155,33 @@ impl GameBoy {
                 },
                 dest,
             ),
+            Instruction::Rla => {
+                let carry = self.registers.flags().carry;
+                let old = self.registers.a;
+                self.registers.a = Bit(0).set(old.rotate_left(1), carry);
+                self.registers.set_flags(Flags {
+                    zero: false,
+                    subtract: false,
+                    half_carry: false,
+                    carry: Bit(7).get(old),
+                });
+                1
+            }
             Instruction::Rlc(dest) => self.bit_unary(
                 |value, _| (value.rotate_left(1), Bit(7).get(value)),
                 dest,
             ),
+            Instruction::Rlca => {
+                let old = self.registers.a;
+                self.registers.a = old.rotate_left(1);
+                self.registers.set_flags(Flags {
+                    zero: false,
+                    subtract: false,
+                    half_carry: false,
+                    carry: Bit(7).get(old),
+                });
+                1
+            }
             Instruction::Rr(dest) => self.bit_unary(
                 |value, carry| {
                     (
@@ -148,12 +191,45 @@ impl GameBoy {
                 },
                 dest,
             ),
+            Instruction::Rra => {
+                let carry = self.registers.flags().carry;
+                let old = self.registers.a;
+                self.registers.a = Bit(7).set(old.rotate_right(1), carry);
+                self.registers.set_flags(Flags {
+                    zero: false,
+                    subtract: false,
+                    half_carry: false,
+                    carry: Bit(0).get(old),
+                });
+                1
+            }
             Instruction::Rrc(dest) => self.bit_unary(
                 |value, _| (value.rotate_right(1), Bit(0).get(value)),
                 dest,
             ),
+            Instruction::Rrca => {
+                let old = self.registers.a;
+                self.registers.a = old.rotate_right(1);
+                self.registers.set_flags(Flags {
+                    zero: false,
+                    subtract: false,
+                    half_carry: false,
+                    carry: Bit(0).get(old),
+                });
+                1
+            }
             Instruction::Rst(address) => self.call(address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
+            Instruction::Scf => {
+                let flags = self.registers.flags();
+                self.registers.set_flags(Flags {
+                    subtract: false,
+                    half_carry: false,
+                    carry: true,
+                    ..flags
+                });
+                1
+            }
             Instruction::Set(bit, dest) => self.bit_set(bit, dest, true),
             Instruction::Sla(dest) => {
                 self.bit_unary(|value, _| (value << 1, Bit(7).get(value)), dest)
