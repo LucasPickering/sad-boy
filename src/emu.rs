@@ -30,6 +30,8 @@ pub struct GameBoy {
     /// Virtual memory map
     #[debug(skip)]
     memory: MemoryMap,
+    /// IME flag
+    interrupts_enabled: bool,
 }
 
 impl GameBoy {
@@ -40,6 +42,7 @@ impl GameBoy {
         Ok(Self {
             registers: Registers::default(),
             memory,
+            interrupts_enabled: false, // IME flag is disabled by default
         })
     }
 
@@ -49,6 +52,7 @@ impl GameBoy {
         Self {
             registers: Registers::default(),
             memory: MemoryMap::new(Rom::empty()),
+            interrupts_enabled: false,
         }
     }
 
@@ -128,6 +132,14 @@ impl GameBoy {
                 1
             }
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
+            Instruction::Di => {
+                self.interrupts_enabled = false;
+                1
+            }
+            Instruction::Ei => {
+                self.interrupts_enabled = true;
+                1
+            }
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
@@ -146,7 +158,7 @@ impl GameBoy {
             Instruction::Ret(condition) => self.ret(condition),
             Instruction::Reti => {
                 self.ret(None);
-                // TODO enable interrupts
+                self.interrupts_enabled = true;
                 4
             }
             Instruction::Rl(dest) => self.bit_unary(
@@ -253,8 +265,6 @@ impl GameBoy {
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
             Instruction::Daa
-            | Instruction::Di
-            | Instruction::Ei
             | Instruction::Halt
             | Instruction::Jr { .. }
             | Instruction::Ldh(_)
