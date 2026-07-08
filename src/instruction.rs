@@ -109,6 +109,8 @@ pub enum Instruction {
     /// Swap the upper 4 bits of a register with the lower 4
     Swap(Value8),
     /// Enter CPU low power mode
+    ///
+    /// https://gbdev.io/pandocs/Reducing_Power_Consumption.html
     Stop,
     /// Bitwise XOR between `a` and another value (modifies `a`)
     Xor(Operand),

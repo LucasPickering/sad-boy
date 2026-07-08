@@ -140,6 +140,7 @@ impl GameBoy {
                 self.interrupts_enabled = true;
                 1
             }
+            Instruction::Halt => todo!("HALT"),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Ld(load) => self.load(load),
@@ -259,16 +260,15 @@ impl GameBoy {
             Instruction::Srl(dest) => {
                 self.bit_unary(|value, _| (value >> 1, Bit(0).get(value)), dest)
             }
+            // STOP is hard
+            // https://gbdev.io/pandocs/Reducing_Power_Consumption.html
+            Instruction::Stop => unimplemented!("STOP"),
             Instruction::Sub(rhs) => self.subtract(rhs),
             Instruction::Swap(dest) => {
                 self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
-            Instruction::Daa
-            | Instruction::Halt
-            | Instruction::Jr { .. }
-            | Instruction::Ldh(_)
-            | Instruction::Stop => {
+            Instruction::Daa | Instruction::Jr { .. } | Instruction::Ldh(_) => {
                 error!("Unknown instruction");
                 1
             }
