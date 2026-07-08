@@ -120,6 +120,7 @@ impl GameBoy {
                 });
                 1
             }
+            Instruction::Daa => self.daa(),
             Instruction::Cp(rhs) => self.compare(rhs),
             Instruction::Cpl => {
                 self.registers.a = !self.registers.a;
@@ -272,10 +273,6 @@ impl GameBoy {
                 self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
-            Instruction::Daa => {
-                error!("Unknown instruction");
-                1
-            }
             Instruction::Invalid => {
                 error!("Invalid instruction");
                 0

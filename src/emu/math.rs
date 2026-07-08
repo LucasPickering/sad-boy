@@ -180,6 +180,55 @@ impl GameBoy {
         cycles
     }
 
+    /// Decimal Adjust Accumulator
+    ///
+    /// Adjust register `a` after an arithmetic instruction on a Binary-Coded
+    /// Decimal value.
+    ///
+    /// https://blog.ollien.com/posts/gb-daa/
+    pub(super) fn daa(&mut self) -> usize {
+        let a = self.registers.a;
+        let Flags {
+            subtract,
+            half_carry,
+            carry,
+            ..
+        } = self.registers.flags();
+
+        // Seriously, just read the blog post. It's a bit confusing.
+        let mut offset = 0_u8;
+        let (a, carry) = if subtract {
+            if half_carry {
+                offset |= 0x06;
+            }
+            if carry {
+                offset |= 0x60;
+            }
+            (a.wrapping_sub(offset), carry)
+        } else {
+            let mut cy = false;
+            if a & 0xF > 0x09 || half_carry {
+                offset |= 0x06;
+            }
+            if a > 0x99 || carry {
+                offset |= 0x60;
+                cy = true;
+            }
+
+            (a.wrapping_add(offset), cy)
+        };
+
+        self.registers.a = a;
+        self.registers.set_flags(Flags {
+            zero: a == 0,
+            subtract,
+            half_carry: false,
+            carry,
+        });
+
+        1
+    }
+
     /// Execute a `DEC` or `INC` instruction
     ///
     /// `delta` should be `-1` for `DEC`, `1` for `INC` Return the number of
