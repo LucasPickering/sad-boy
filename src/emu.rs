@@ -143,6 +143,9 @@ impl GameBoy {
             Instruction::Halt => todo!("HALT"),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
             Instruction::Jp(jump) => self.jump(jump),
+            Instruction::Jr { offset, condition } => {
+                self.jump_relative(offset, condition)
+            }
             Instruction::Ld(load) => self.load(load),
             Instruction::Nop => 1,
             Instruction::Or(rhs) => self.bit_binary(u8::bitor, rhs, false),
@@ -268,7 +271,7 @@ impl GameBoy {
                 self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
-            Instruction::Daa | Instruction::Jr { .. } | Instruction::Ldh(_) => {
+            Instruction::Daa | Instruction::Ldh(_) => {
                 error!("Unknown instruction");
                 1
             }
@@ -318,6 +321,23 @@ impl GameBoy {
                 self.registers.pc = Address(self.registers.hl());
                 1
             }
+        }
+    }
+
+    /// Execute a `JR` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn jump_relative(
+        &mut self,
+        offset: i8,
+        condition: Option<ConditionCode>,
+    ) -> usize {
+        if condition.is_none_or(|cond| self.condition(cond)) {
+            self.registers.pc.0 =
+                self.registers.pc.0.strict_add_signed(offset.into());
+            3
+        } else {
+            2 // Quick exit
         }
     }
 
