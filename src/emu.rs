@@ -252,9 +252,19 @@ impl GameBoy {
                 self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
-            _ => {
+            Instruction::Daa
+            | Instruction::Di
+            | Instruction::Ei
+            | Instruction::Halt
+            | Instruction::Jr { .. }
+            | Instruction::Ldh(_)
+            | Instruction::Stop => {
                 error!("Unknown instruction");
                 1
+            }
+            Instruction::Invalid => {
+                error!("Invalid instruction");
+                0
             }
         }
     }
