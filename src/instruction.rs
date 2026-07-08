@@ -52,6 +52,8 @@ pub enum Instruction {
     /// Move a value
     Ld(Load),
     /// Move a value, but different
+    ///
+    /// See [LoadHigh]
     Ldh(LoadHigh),
     /// No op
     Nop,
@@ -215,7 +217,9 @@ pub enum Load {
 
 /// Variations of the `LDH` (load high) instruction
 ///
-/// This moves values in/out of the `$FF00-$FFFF` space of memory.
+/// This is a faster version of `LD` that can only access memory in the range
+/// `[0xFF00, 0xFFFF]`. The load address is specified as just the low byte, and
+/// the high byte is assumed to be `0xFF`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum LoadHigh {
     /// Copy the byte at address `$FF00+c` into register `a`

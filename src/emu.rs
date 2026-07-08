@@ -6,8 +6,8 @@ mod math;
 
 use crate::{
     instruction::{
-        Address, Bit, ConditionCode, Instruction, Jump, Load, Register8,
-        Register16, Register16Memory, Register16Stack, Value8,
+        Address, Bit, ConditionCode, Instruction, Jump, Load, LoadHigh,
+        Register8, Register16, Register16Memory, Register16Stack, Value8,
     },
     memory::{self, MemoryMap},
     rom::Rom,
@@ -147,6 +147,7 @@ impl GameBoy {
                 self.jump_relative(offset, condition)
             }
             Instruction::Ld(load) => self.load(load),
+            Instruction::Ldh(load) => self.load_high(load),
             Instruction::Nop => 1,
             Instruction::Or(rhs) => self.bit_binary(u8::bitor, rhs, false),
             Instruction::Push(register) => {
@@ -271,7 +272,7 @@ impl GameBoy {
                 self.bit_unary(|value, _| (value.rotate_right(4), false), dest)
             }
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
-            Instruction::Daa | Instruction::Ldh(_) => {
+            Instruction::Daa => {
                 error!("Unknown instruction");
                 1
             }
@@ -428,6 +429,34 @@ impl GameBoy {
                 let source = Address(self.register16_mem(source));
                 self.registers.a = self.memory.get8(source);
                 2
+            }
+        }
+    }
+
+    /// Execute an `LDH` instruction
+    ///
+    /// Return the number of consumed CPU cycles.
+    fn load_high(&mut self, load: LoadHigh) -> usize {
+        fn addr(low: u8) -> Address {
+            Address(0xFF00 + u16::from(low))
+        }
+
+        match load {
+            LoadHigh::AC => {
+                self.registers.a = self.memory.get8(addr(self.registers.c));
+                2
+            }
+            LoadHigh::AConst(source) => {
+                self.registers.a = self.memory.get8(addr(source));
+                3
+            }
+            LoadHigh::CA => {
+                self.memory.set8(addr(self.registers.c), self.registers.a);
+                2
+            }
+            LoadHigh::ConstA(dest) => {
+                self.memory.set8(addr(dest), self.registers.a);
+                3
             }
         }
     }
