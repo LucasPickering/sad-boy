@@ -1,9 +1,9 @@
 mod emu;
-#[expect(dead_code)] // TODO remove this
-mod gfx;
 mod instruction;
 mod memory;
 mod rom;
+#[expect(dead_code)] // TODO remove this
+mod screen;
 
 use crate::emu::GameBoy;
 use color_eyre::eyre::{self, eyre};
