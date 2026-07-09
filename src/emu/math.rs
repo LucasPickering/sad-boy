@@ -336,7 +336,7 @@ impl Bit {
 mod tests {
     use super::*;
     use crate::instruction::Instruction;
-    use quickcheck_macros::quickcheck;
+    use proptest::property_test;
     use rstest::rstest;
 
     /// Test addition to register `a` (`ADD A,n8`)
@@ -398,7 +398,7 @@ mod tests {
     ///
     /// The goal of this is to take a different angle to flag calculation to
     /// give another level of insurance.
-    #[quickcheck]
+    #[property_test]
     fn add8_prop(lhs: u8, rhs: u8) {
         let (sum, flags) = add8(lhs, rhs);
 

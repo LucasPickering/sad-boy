@@ -804,7 +804,7 @@ impl Error for BitParameterError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickcheck_macros::quickcheck;
+    use proptest::property_test;
     use rstest::rstest;
 
     /// Pass-through bit param parsing for testing
@@ -929,8 +929,8 @@ mod tests {
     /// - Any input of 3 bytes or more parses to *something*
     /// - Parsed instruction is only `Invalid` if it's one of the 11 invalid
     ///   opcodes
-    #[quickcheck]
-    fn instruction_prop(bytes: [u8; 3]) -> bool {
+    #[property_test]
+    fn instruction_prop(bytes: [u8; 3]) {
         const INVALID_CODES: &[u8] = &[
             0b1101_0011, // $D3
             0b1101_1011, // $DB
@@ -945,11 +945,10 @@ mod tests {
             0b1111_1101, // $FD
         ];
         let input = &mut bytes.as_slice();
-        match parse_instruction(input) {
-            // Accept Invalid only if it was a known invalid code
-            Ok(Instruction::Invalid) => INVALID_CODES.contains(&bytes[0]),
-            Ok(_) => true,
-            Err(_) => false,
+        let instruction = parse_instruction(input).unwrap();
+        // Accept Invalid only if it was a known invalid code
+        if instruction == Instruction::Invalid {
+            assert!(INVALID_CODES.contains(&bytes[0]));
         }
     }
 }
