@@ -187,45 +187,9 @@ impl GameBoy {
     ///
     /// https://blog.ollien.com/posts/gb-daa/
     pub(super) fn daa(&mut self) -> usize {
-        let a = self.registers.a;
-        let Flags {
-            subtract,
-            half_carry,
-            carry,
-            ..
-        } = self.registers.flags();
-
-        // Seriously, just read the blog post. It's a bit confusing.
-        let mut offset = 0_u8;
-        let (a, carry) = if subtract {
-            if half_carry {
-                offset |= 0x06;
-            }
-            if carry {
-                offset |= 0x60;
-            }
-            (a.wrapping_sub(offset), carry)
-        } else {
-            let mut cy = false;
-            if a & 0xF > 0x09 || half_carry {
-                offset |= 0x06;
-            }
-            if a > 0x99 || carry {
-                offset |= 0x60;
-                cy = true;
-            }
-
-            (a.wrapping_add(offset), cy)
-        };
-
+        let (a, flags) = daa(self.registers.a, self.registers.flags());
         self.registers.a = a;
-        self.registers.set_flags(Flags {
-            zero: a == 0,
-            subtract,
-            half_carry: false,
-            carry,
-        });
-
+        self.registers.set_flags(flags);
         1
     }
 
@@ -307,6 +271,55 @@ fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
     (sum, flags)
 }
 
+/// Inner implementation for [GameBoy::daa]
+///
+/// This is separate for testing.
+fn daa(a: u8, flags: Flags) -> (u8, Flags) {
+    let Flags {
+        subtract,
+        half_carry,
+        mut carry,
+        ..
+    } = flags;
+
+    // Seriously, just read the blog post. It's a bit confusing.
+    // https://blog.ollien.com/posts/gb-daa/
+    let a = if subtract {
+        let mut offset = 0;
+        if half_carry {
+            offset |= 0x06;
+        }
+        if carry {
+            offset |= 0x60;
+        }
+        a.wrapping_sub(offset)
+    } else {
+        let mut offset = 0;
+        if a & 0xF > 0x09 || half_carry {
+            offset |= 0x06;
+        }
+        if a > 0x99 || carry {
+            offset |= 0x60;
+            carry = true;
+        }
+
+        a.wrapping_add(offset)
+    };
+
+    (
+        a,
+        Flags {
+            zero: a == 0,
+            subtract,
+            half_carry: false,
+            // Retaining `carry` disagrees with the blog post, but it's what
+            // the asm guide says to do
+            // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#DAA
+            carry,
+        },
+    )
+}
+
 /// Subtract two 8-bit numbers, return the difference and flags
 fn sub8(lhs: u8, rhs: u8) -> (u8, Flags) {
     let (difference, carry) = lhs.overflowing_sub(rhs);
@@ -336,7 +349,7 @@ impl Bit {
 mod tests {
     use super::*;
     use crate::instruction::Instruction;
-    use proptest::property_test;
+    use proptest::{prelude::Strategy, property_test};
     use rstest::rstest;
 
     /// Test addition to register `a` (`ADD A,n8`)
@@ -371,7 +384,7 @@ mod tests {
         half_carry: true,
         carry: true,
     })]
-    #[case::todo(0x50, 0xb0, 0x00, Flags {
+    #[case::carry_zero(0x50, 0xb0, 0x00, Flags {
         zero: true,
         subtract: false,
         half_carry: false,
@@ -394,7 +407,7 @@ mod tests {
     /// - Sum is always `lhs+rhs % 256`
     /// - Zero flag is set if sum is 0
     /// - Carry flag is set if `lhs+rhs > 255`
-    /// - Half carry flag is set if TODO
+    /// - Half carry flag is set if the add would overflow the bottom nibble
     ///
     /// The goal of this is to take a different angle to flag calculation to
     /// give another level of insurance.
@@ -419,5 +432,47 @@ mod tests {
             },
             "flags"
         );
+    }
+
+    /// Property test for [daa]
+    ///
+    /// Start with a valid BCD number in `a`. Apply a random add or subtract,
+    /// then run `DAA`. Afterwards, these properties must be true:
+    /// - Neither hex digit is ever greater than 9
+    /// - Zero flag is set iff the output is 0
+    /// - Subtract flag is retained (from the add/sub operation)
+    /// - Half Carry flag is unset
+    /// - Carry flag is retained, or set if addition overflowed
+    #[property_test]
+    fn daa_prop(
+        #[strategy = bcd()] lhs: u8,
+        #[strategy = bcd()] rhs: u8,
+        subtract: bool,
+    ) {
+        let op = if subtract { sub8 } else { add8 };
+        let (a, flags) = op(lhs, rhs);
+        let carry = flags.carry; // Retain this for later
+        let (a_out, flags) = daa(a, flags);
+        assert!(a_out & 0xF <= 0x9, "lower digit must be <= 9: {a_out:X}");
+        assert!(a_out & 0xF0 <= 0x90, "upper digit must be <= 9: {a_out:X}");
+        assert_eq!(
+            flags,
+            Flags {
+                zero: a_out == 0,
+                subtract,
+                half_carry: false,
+                // Carry flag can either be retained or set, can never be reset
+                carry: carry || (!subtract && a > 0x99)
+            },
+            "flags"
+        );
+    }
+
+    /// Proptest strategy to generate a Binary-Coded Decimal number
+    ///
+    /// This is any number where both hex digits are <= 9.
+    fn bcd() -> impl Strategy<Value = u8> {
+        // Generate digits separately
+        (0u8..=9, 0u8..=9).prop_map(|(high, low)| (high << 4) | low)
     }
 }

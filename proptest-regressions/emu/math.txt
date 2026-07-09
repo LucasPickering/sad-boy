@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 87543e1430c6beee0a33521bcf17ee7cd6d4295f9638472c0611a7887761944c # shrinks to DaaPropArgs = DaaPropArgs { lhs: 0, rhs: 0, subtract: false }
+cc 88c41b9009e07da98bd324ddeffee6dd575afcef320f52bedffd522ec744c069 # shrinks to DaaPropArgs = DaaPropArgs { lhs: 10, rhs: 10, subtract: false }
