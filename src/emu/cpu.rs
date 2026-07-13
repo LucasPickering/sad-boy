@@ -29,13 +29,13 @@ pub struct Cpu {
 
 impl Cpu {
     /// Run CPU instructions until we hit the cycle budget
-    pub fn run(&mut self, memory: &mut MemoryMap, mut cycle_budget: usize) {
-        while cycle_budget > 0 {
+    pub fn run(&mut self, memory: &mut MemoryMap, mut cycle_budget: Cycles) {
+        while cycle_budget.0 > 0 {
             let (instruction, num_bytes) =
                 memory.get_instruction(self.registers.pc);
             let pc = self.registers.pc;
             let cycles = self.execute(memory, instruction);
-            cycle_budget = cycle_budget.saturating_sub(cycles);
+            cycle_budget.deduct(cycles);
             // If the instruction didn't modify the PC (e.g. jumps), then
             // advance it automatically
             if self.registers.pc == pc {
@@ -44,12 +44,12 @@ impl Cpu {
         }
     }
 
-    /// Execute an instruction, returning the number of consumed CPU cycles
+    /// Execute a CPU instruction, returning the number of consumed CPU cycles
     fn execute(
         &mut self,
         memory: &mut MemoryMap,
         instruction: Instruction,
-    ) -> usize {
+    ) -> Cycles {
         CpuExe {
             registers: &mut self.registers,
             interrupts_enabled: &mut self.interrupts_enabled,
@@ -72,7 +72,7 @@ struct CpuExe<'a> {
 impl CpuExe<'_> {
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
-    fn execute(&mut self, instruction: Instruction) -> usize {
+    fn execute(&mut self, instruction: Instruction) -> Cycles {
         let _span = info_span!(
             "Instruction",
             ?instruction,
@@ -96,7 +96,7 @@ impl CpuExe<'_> {
                     carry: !flags.carry,
                     ..flags
                 });
-                1
+                1.into()
             }
             Instruction::Daa => self.daa(),
             Instruction::Cp(rhs) => self.compare(rhs),
@@ -108,16 +108,16 @@ impl CpuExe<'_> {
                     half_carry: true,
                     ..flags
                 });
-                1
+                1.into()
             }
             Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
             Instruction::Di => {
                 *self.interrupts_enabled = false;
-                1
+                1.into()
             }
             Instruction::Ei => {
                 *self.interrupts_enabled = true;
-                1
+                1.into()
             }
             Instruction::Halt => todo!("HALT"),
             Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
@@ -127,23 +127,23 @@ impl CpuExe<'_> {
             }
             Instruction::Ld(load) => self.load(load),
             Instruction::Ldh(load) => self.load_high(load),
-            Instruction::Nop => 1,
+            Instruction::Nop => 1.into(),
             Instruction::Or(rhs) => self.bit_binary(u8::bitor, rhs, false),
             Instruction::Push(register) => {
                 let value = *self.register16_stack_mut(register);
                 self.push(value);
-                4
+                4.into()
             }
             Instruction::Pop(register) => {
                 *self.register16_stack_mut(register) = self.pop();
-                3
+                3.into()
             }
             Instruction::Res(bit, dest) => self.bit_set(bit, dest, false),
             Instruction::Ret(condition) => self.ret(condition),
             Instruction::Reti => {
                 self.ret(None);
                 *self.interrupts_enabled = true;
-                4
+                4.into()
             }
             Instruction::Rl(dest) => self.bit_unary(
                 |value, carry| {
@@ -161,7 +161,7 @@ impl CpuExe<'_> {
                     half_carry: false,
                     carry: Bit(7).get(old),
                 });
-                1
+                1.into()
             }
             Instruction::Rlc(dest) => self.bit_unary(
                 |value, _| (value.rotate_left(1), Bit(7).get(value)),
@@ -176,7 +176,7 @@ impl CpuExe<'_> {
                     half_carry: false,
                     carry: Bit(7).get(old),
                 });
-                1
+                1.into()
             }
             Instruction::Rr(dest) => self.bit_unary(
                 |value, carry| {
@@ -197,7 +197,7 @@ impl CpuExe<'_> {
                     half_carry: false,
                     carry: Bit(0).get(old),
                 });
-                1
+                1.into()
             }
             Instruction::Rrc(dest) => self.bit_unary(
                 |value, _| (value.rotate_right(1), Bit(0).get(value)),
@@ -212,7 +212,7 @@ impl CpuExe<'_> {
                     half_carry: false,
                     carry: Bit(0).get(old),
                 });
-                1
+                1.into()
             }
             Instruction::Rst(address) => self.call(address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
@@ -224,7 +224,7 @@ impl CpuExe<'_> {
                     carry: true,
                     ..flags
                 });
-                1
+                1.into()
             }
             Instruction::Set(bit, dest) => self.bit_set(bit, dest, true),
             Instruction::Sla(dest) => {
@@ -253,87 +253,79 @@ impl CpuExe<'_> {
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
             Instruction::Invalid => {
                 error!("Invalid instruction");
-                0
+                0.into()
             }
         }
     }
 
     /// Execute a function call
-    ///
-    /// Return the number of consumed CPU cycles
     fn call(
         &mut self,
 
         address: Address,
         condition: Option<ConditionCode>,
-    ) -> usize {
+    ) -> Cycles {
         if condition.is_none_or(|cond| self.condition(cond)) {
             // Push the address of the instruction *after* this one
             self.push(self.registers.pc.next().0);
             self.registers.pc = address;
-            6
+            6.into()
         } else {
-            3 // Quick exit
+            3.into() // Quick exit
         }
     }
 
     /// Execute a `JP` instruction
-    ///
-    /// Return the number of consumed CPU cycles.
-    fn jump(&mut self, jump: Jump) -> usize {
+    fn jump(&mut self, jump: Jump) -> Cycles {
         match jump {
             Jump::Address(address) => {
                 self.registers.pc = address;
-                4
+                4.into()
             }
             Jump::AddressCc(condition, address) => {
                 if self.condition(condition) {
                     self.registers.pc = address;
-                    4
+                    4.into()
                 } else {
-                    3
+                    3.into()
                 }
             }
             Jump::Hl => {
                 self.registers.pc = Address(self.registers.hl());
-                1
+                1.into()
             }
         }
     }
 
     /// Execute a `JR` instruction
-    ///
-    /// Return the number of consumed CPU cycles.
     fn jump_relative(
         &mut self,
         offset: i8,
         condition: Option<ConditionCode>,
-    ) -> usize {
+    ) -> Cycles {
         if condition.is_none_or(|cond| self.condition(cond)) {
             self.registers.pc.0 =
                 self.registers.pc.0.strict_add_signed(offset.into());
-            3
+            3.into()
         } else {
-            2 // Quick exit
+            2.into() // Quick exit
         }
     }
 
     /// Execute an `LD` instruction
-    ///
-    /// Return the number of consumed CPU cycles.
-    fn load(&mut self, load: Load) -> usize {
+    fn load(&mut self, load: Load) -> Cycles {
         match load {
             Load::AddressA { dest } => {
                 self.memory.set8(dest, self.registers.a);
-                4
+                4.into()
             }
             Load::AAddress { source } => {
                 self.registers.a = self.memory.get8(source);
-                4
+                4.into()
             }
             Load::AddressSp { dest } => {
                 self.memory.set16(dest, self.registers.sp.0);
-                5
+                5.into()
             }
             Load::HlSpOffset { offset } => {
                 let value =
@@ -341,11 +333,11 @@ impl CpuExe<'_> {
                 *self.registers.hl_mut() = value;
                 // TODO set flags here
                 // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#LD_HL,SP+e8
-                3
+                3.into()
             }
             Load::SpHl => {
                 self.registers.sp = Address(self.registers.hl());
-                2
+                2.into()
             }
             // LD r8,n8
             Load::V8Const {
@@ -353,7 +345,7 @@ impl CpuExe<'_> {
                 source,
             } => {
                 *self.register8_mut(dest) = source;
-                2
+                2.into()
             }
             // LD [HL],n8
             Load::V8Const {
@@ -361,7 +353,7 @@ impl CpuExe<'_> {
                 source,
             } => {
                 self.set_hl_mem(source);
-                2
+                2.into()
             }
             // LD r8,r8
             Load::V8V8 {
@@ -369,7 +361,7 @@ impl CpuExe<'_> {
                 source: Value8::Register(source),
             } => {
                 *self.register8_mut(dest) = self.register8(source);
-                1
+                1.into()
             }
             // LD [HL],r8
             Load::V8V8 {
@@ -377,7 +369,7 @@ impl CpuExe<'_> {
                 source: Value8::Register(source),
             } => {
                 self.set_hl_mem(self.register8(source));
-                2
+                2.into()
             }
             // LD r8,[HL]
             Load::V8V8 {
@@ -385,7 +377,7 @@ impl CpuExe<'_> {
                 source: Value8::Hl,
             } => {
                 *self.register8_mut(dest) = self.hl_mem();
-                2
+                2.into()
             }
             // LD [HL],[HL] is not valid - that's the opcode for HALT
             Load::V8V8 {
@@ -394,25 +386,23 @@ impl CpuExe<'_> {
             } => unreachable!("LD [HL],[HL] should parse as HALT"),
             Load::R16Const { dest, source } => {
                 *self.register16_mut(dest) = source;
-                3
+                3.into()
             }
             Load::R16MemA { dest } => {
                 let dest = Address(self.register16_mem(dest));
                 self.memory.set8(dest, self.registers.a);
-                2
+                2.into()
             }
             Load::AR16Mem { source } => {
                 let source = Address(self.register16_mem(source));
                 self.registers.a = self.memory.get8(source);
-                2
+                2.into()
             }
         }
     }
 
     /// Execute an `LDH` instruction
-    ///
-    /// Return the number of consumed CPU cycles.
-    fn load_high(&mut self, load: LoadHigh) -> usize {
+    fn load_high(&mut self, load: LoadHigh) -> Cycles {
         fn addr(low: u8) -> Address {
             Address(0xFF00 + u16::from(low))
         }
@@ -420,19 +410,19 @@ impl CpuExe<'_> {
         match load {
             LoadHigh::AC => {
                 self.registers.a = self.memory.get8(addr(self.registers.c));
-                2
+                2.into()
             }
             LoadHigh::AConst(source) => {
                 self.registers.a = self.memory.get8(addr(source));
-                3
+                3.into()
             }
             LoadHigh::CA => {
                 self.memory.set8(addr(self.registers.c), self.registers.a);
-                2
+                2.into()
             }
             LoadHigh::ConstA(dest) => {
                 self.memory.set8(addr(dest), self.registers.a);
-                3
+                3.into()
             }
         }
     }
@@ -469,18 +459,16 @@ impl CpuExe<'_> {
     }
 
     /// Return from the current function
-    ///
-    /// Return the number of consumed CPU cycles.
-    fn ret(&mut self, condition: Option<ConditionCode>) -> usize {
+    fn ret(&mut self, condition: Option<ConditionCode>) -> Cycles {
         match condition {
             Some(cond) if self.condition(cond) => {
                 self.registers.pc = Address(self.pop());
-                5
+                5.into()
             }
-            Some(_) => 2, // Condition false
+            Some(_) => 2.into(), // Condition false
             None => {
                 self.registers.pc = Address(self.pop());
-                4
+                4.into()
             }
         }
     }
@@ -786,6 +774,28 @@ impl Flags {
             | bit(self.subtract, Self::SUBTRACT)
             | bit(self.half_carry, Self::HALF_CARRY)
             | bit(self.carry, Self::CARRY)
+    }
+}
+
+/// Newtype for a number of CPU cycles
+///
+/// This makes it clearer what a value is, instead of passing around `usize`
+/// everywhere. Every executed instruction returns this value so the CPU can
+/// report how many cycles were consumed from the budget.
+pub struct Cycles(pub usize);
+
+impl Cycles {
+    /// Deduct a number of cycles from a cycle budget
+    ///
+    /// If `cycles` is less than `self`, `self` will be set to `0`.
+    fn deduct(&mut self, cycles: Self) {
+        self.0 = self.0.saturating_sub(cycles.0);
+    }
+}
+
+impl From<usize> for Cycles {
+    fn from(value: usize) -> Self {
+        Self(value)
     }
 }
 

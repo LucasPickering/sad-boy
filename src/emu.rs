@@ -7,7 +7,11 @@ mod instruction;
 mod memory;
 mod rom;
 
-use crate::emu::{cpu::Cpu, memory::MemoryMap, rom::Rom};
+use crate::emu::{
+    cpu::{Cpu, Cycles},
+    memory::MemoryMap,
+    rom::Rom,
+};
 use color_eyre::eyre;
 use std::{
     path::Path,
@@ -38,7 +42,7 @@ impl GameBoy {
     /// Keep running until the CPU is halted
     pub fn run(&mut self) {
         /// https://josaphat.co/posts/gameboy-emulator/
-        const CYCLES_PER_FRAME: usize = 70224;
+        const CYCLES_PER_FRAME: Cycles = Cycles(70224);
         let frame_time = Duration::from_secs_f64(1.0 / 60.0);
 
         loop {
