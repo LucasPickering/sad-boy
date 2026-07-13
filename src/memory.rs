@@ -14,6 +14,8 @@ pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
 /// Address range for additional general-purpose writable RAM
 const HIGH_RAM: AddressRange = AddressRange::new("High RAM", 0xFF80, 0xFFFE);
+/// Video RAM
+const VRAM: AddressRange = AddressRange::new("VRAM", 0x8000, 0x9FFF);
 
 // Extra consts for pattern matching
 const RAM_START: u16 = RAM.start();
@@ -22,6 +24,8 @@ const ECHO_RAM_START: u16 = ECHO_RAM.start();
 const ECHO_RAM_END: u16 = ECHO_RAM.end();
 const HIGH_RAM_START: u16 = HIGH_RAM.start();
 const HIGH_RAM_END: u16 = HIGH_RAM.end();
+const VRAM_START: u16 = VRAM.start();
+const VRAM_END: u16 = VRAM.end();
 
 /// Virtual memory map pointing to the various addressable components
 ///
@@ -39,6 +43,8 @@ pub struct MemoryMap {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     high_ram: Box<[u8; HIGH_RAM.len()]>,
+    /// Video RAM, containing tiles and background maps
+    vram: Box<[u8; VRAM.len()]>,
 }
 
 impl MemoryMap {
@@ -48,6 +54,7 @@ impl MemoryMap {
             rom,
             ram: Box::new([0; RAM.len()]),
             high_ram: Box::new([0; HIGH_RAM.len()]),
+            vram: Box::new([0; VRAM.len()]),
         }
     }
 
@@ -130,13 +137,11 @@ impl MemoryMap {
                 error!("TODO: Game ROM bank N read");
                 &0
             }
-            0x8000..=0x97FF => {
-                error!("TODO: Tile RAM read");
-                &0
-            }
-            0x9800..=0x9FFF => {
-                error!("TODO: Background Map read");
-                &0
+            VRAM_START..=VRAM_END => {
+                // Safety: self.vram is initialized to the same length as
+                // this range
+                let index: usize = address.0.into();
+                &self.vram[index]
             }
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -182,7 +187,13 @@ impl MemoryMap {
     fn get_ref_mut(&mut self, address: Address) -> Option<&mut u8> {
         // TODO dedupe this with get_ref()
         match address.0 {
-            0x0000..=0x9FFF => None, // Cartridge ROM
+            0x0000..=0x7FFF => None, // Cartridge ROM
+            VRAM_START..=VRAM_END => {
+                // Safety: self.vram is initialized to the same length as
+                // this range
+                let index: usize = address.0.into();
+                Some(&mut self.vram[index])
+            }
             0xA000..=0xBFFF => todo!("Cartridge RAM"),
             RAM_START..=RAM_END => {
                 // Safety: self.ram is initialized to the same length as
