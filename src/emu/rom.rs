@@ -1,6 +1,6 @@
 //! ROM loading and parsing
 
-use crate::instruction::{
+use crate::emu::instruction::{
     Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
     LoadHigh, Operand, Register8, Register16, Register16Memory,
     Register16Stack, Value8,

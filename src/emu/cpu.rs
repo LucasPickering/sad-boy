@@ -2,7 +2,7 @@
 
 mod math;
 
-use crate::{
+use crate::emu::{
     instruction::{
         Address, Bit, ConditionCode, Instruction, Jump, Load, LoadHigh,
         Register8, Register16, Register16Memory, Register16Stack, Value8,

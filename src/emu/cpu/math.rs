@@ -1,6 +1,6 @@
 //! Mathy and bitwise instruction implementations for [GameBoy]
 
-use crate::{
+use crate::emu::{
     cpu::{CpuExe, Flags},
     instruction::{Add, Bit, DecInc, Operand, Value8},
 };
@@ -348,7 +348,9 @@ impl Bit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cpu::Cpu, instruction::Instruction, memory::MemoryMap};
+    use crate::emu::{
+        cpu::Cpu, instruction::Instruction, memory::MemoryMap, rom::Rom,
+    };
     use proptest::{prelude::Strategy, property_test};
     use rstest::rstest;
 
@@ -396,8 +398,6 @@ mod tests {
         #[case] expected_value: u8,
         #[case] expected_flags: Flags,
     ) {
-        use crate::rom::Rom;
-
         let mut cpu = Cpu::default();
         let mut memory = MemoryMap::new(Rom::empty());
         cpu.registers.a = lhs;

@@ -1,4 +1,4 @@
-use crate::{
+use crate::emu::{
     instruction::{Address, Instruction},
     rom::Rom,
 };

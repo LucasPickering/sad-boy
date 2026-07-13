@@ -2,7 +2,12 @@
 //!
 //! https://rylev.github.io/DMG-01/public/book/introduction.html
 
-use crate::{cpu::Cpu, memory::MemoryMap, rom::Rom};
+mod cpu;
+mod instruction;
+mod memory;
+mod rom;
+
+use crate::emu::{cpu::Cpu, memory::MemoryMap, rom::Rom};
 use color_eyre::eyre;
 use std::{
     path::Path,

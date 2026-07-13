@@ -1,8 +1,4 @@
-mod cpu;
 mod emu;
-mod instruction;
-mod memory;
-mod rom;
 #[expect(dead_code)] // TODO remove this
 mod screen;
 
