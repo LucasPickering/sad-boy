@@ -447,7 +447,7 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
 ///
 /// There's a lot of `u8`s floating around in this file, so this helps keep them
 /// all straight.
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy)]
 struct Mask(u8);
 
 impl Mask {

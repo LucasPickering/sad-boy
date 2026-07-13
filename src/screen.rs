@@ -51,7 +51,7 @@ impl Screen {
 }
 
 /// RGB pixel
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)] // We treat this as raw bytes when sending pixels over
 pub struct Pixel {
     red: u8,

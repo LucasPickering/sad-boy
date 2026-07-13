@@ -5,7 +5,7 @@ use std::fmt::Display;
 /// CPU instruction
 ///
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Instruction {
     /// Add a value plus the carry flag to `a`
     Adc(Operand),
@@ -131,7 +131,7 @@ impl Instruction {
 }
 
 /// Right-hand side of a math instruction (`r8` or `imm8`)
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Operand {
     /// Value in a register or memory
     V8(Value8),
@@ -154,7 +154,7 @@ impl From<Register8> for Operand {
 /// Variations of the `ADD` instruction
 ///
 /// Most add variants of `ADD` are handled by [Instruction::Math].
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Add {
     /// Add an 8-bit value to `a`
     A(Operand),
@@ -165,7 +165,7 @@ pub enum Add {
 }
 
 /// Variations of the `DEC` (decrement) and `INC` (increment) instructions
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DecInc {
     /// Increment an 8-bit value
     V8(Value8),
@@ -180,7 +180,7 @@ impl From<Register8> for DecInc {
 }
 
 /// Variations of the `JP` (jump) instruction
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Jump {
     /// Jump to a specific memory address
     Address(Address),
@@ -191,7 +191,7 @@ pub enum Jump {
 }
 
 /// Variations of the `LD` (load) instruction
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Load {
     /// Load from `a` to a memory address
     AddressA { dest: Address },
@@ -220,7 +220,7 @@ pub enum Load {
 /// This is a faster version of `LD` that can only access memory in the range
 /// `[0xFF00, 0xFFFF]`. The load address is specified as just the low byte, and
 /// the high byte is assumed to be `0xFF`.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LoadHigh {
     /// Copy the byte at address `$FF00+c` into register `a`
     AC,
@@ -235,7 +235,7 @@ pub enum LoadHigh {
 /// Source of an 8-bit value
 ///
 /// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value8 {
     /// Value from a register
     Register(Register8),
@@ -254,7 +254,7 @@ impl From<Register8> for Value8 {
 ///
 /// This is *not* equivalent to `r8` on
 /// https://gbdev.io/pandocs/CPU_Instruction_Set.html. See [Value8] instead.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Register8 {
     A,
     B,
@@ -268,7 +268,7 @@ pub enum Register8 {
 /// Name of a 16-bit register
 ///
 /// `r16` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Register16 {
     /// Value in register `bc`
     Bc,
@@ -286,7 +286,7 @@ pub enum Register16 {
 /// `sp`.
 ///
 /// `r16stk` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Register16Stack {
     /// Value in register `af`
     Af,
@@ -302,7 +302,7 @@ pub enum Register16Stack {
 ///
 /// Most instructions use [Register16], but `LD` uses `hli` and `hld` (AKA `hl+`
 /// and `hl-`). `r16mem` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Register16Memory {
     /// Value in register `bc`
     Bc,
@@ -315,7 +315,7 @@ pub enum Register16Memory {
 }
 
 /// Condition for a conditional jump or call
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConditionCode {
     /// Execute if `zero` flag is set
     Z,
@@ -330,14 +330,14 @@ pub enum ConditionCode {
 /// Index of a single bit in a byte
 ///
 /// Value can be `0-7`
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bit(pub u8);
 
 /// Address of a byte of memory
 ///
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
 #[derive(
-    Copy, Clone, derive_more::Debug, Default, Eq, Ord, PartialEq, PartialOrd,
+    Clone, Copy, derive_more::Debug, Default, Eq, Ord, PartialEq, PartialOrd,
 )]
 #[debug("{self}")]
 pub struct Address(pub u16);

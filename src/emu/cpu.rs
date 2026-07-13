@@ -28,20 +28,21 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    /// Run CPU instructions until we hit the cycle budget
-    pub fn run(&mut self, memory: &mut MemoryMap, mut cycle_budget: Cycles) {
-        while cycle_budget.0 > 0 {
-            let (instruction, num_bytes) =
-                memory.get_instruction(self.registers.pc);
-            let pc = self.registers.pc;
-            let cycles = self.execute(memory, instruction);
-            cycle_budget.deduct(cycles);
-            // If the instruction didn't modify the PC (e.g. jumps), then
-            // advance it automatically
-            if self.registers.pc == pc {
-                self.registers.pc.0 += num_bytes as u16;
-            }
+    /// Execute the next CPU instruction, returning the number of consumed CPU
+    /// cycles (dots)
+    pub fn execute_one(&mut self, memory: &mut MemoryMap) -> Cycles {
+        let (instruction, num_bytes) =
+            memory.get_instruction(self.registers.pc);
+        let pc = self.registers.pc;
+        let cycles = self.execute(memory, instruction);
+
+        // If the instruction didn't modify the PC (e.g. jumps), then
+        // advance it automatically
+        if self.registers.pc == pc {
+            self.registers.pc.0 += num_bytes as u16;
         }
+
+        cycles
     }
 
     /// Execute a CPU instruction, returning the number of consumed CPU cycles
@@ -733,7 +734,7 @@ impl Registers {
 /// Use [Registers::flags] to get this value.
 ///
 /// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[expect(clippy::struct_excessive_bools)]
 struct Flags {
     /// Was the result of the operation zero?
@@ -779,22 +780,23 @@ impl Flags {
 
 /// Newtype for a number of CPU cycles
 ///
-/// This makes it clearer what a value is, instead of passing around `usize`
+/// This makes it clearer what a value is, instead of passing around `u32`
 /// everywhere. Every executed instruction returns this value so the CPU can
 /// report how many cycles were consumed from the budget.
-pub struct Cycles(pub usize);
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Cycles(pub u32);
 
 impl Cycles {
     /// Deduct a number of cycles from a cycle budget
     ///
     /// If `cycles` is less than `self`, `self` will be set to `0`.
-    fn deduct(&mut self, cycles: Self) {
+    pub fn deduct(&mut self, cycles: Self) {
         self.0 = self.0.saturating_sub(cycles.0);
     }
 }
 
-impl From<usize> for Cycles {
-    fn from(value: usize) -> Self {
+impl From<u32> for Cycles {
+    fn from(value: u32) -> Self {
         Self(value)
     }
 }
