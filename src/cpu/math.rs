@@ -1,7 +1,7 @@
 //! Mathy and bitwise instruction implementations for [GameBoy]
 
 use crate::{
-    emu::{Flags, GameBoy},
+    cpu::{CpuExe, Flags},
     instruction::{Add, Bit, DecInc, Operand, Value8},
 };
 
@@ -9,7 +9,7 @@ use crate::{
 const HALF8: u8 = 0xf;
 const HALF16: u16 = 0xff;
 
-impl GameBoy {
+impl CpuExe<'_> {
     /// Execute an `ADD` instruction
     ///
     /// Return the number of consumed CPU cycles
@@ -348,7 +348,7 @@ impl Bit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instruction::Instruction;
+    use crate::{cpu::Cpu, instruction::Instruction, memory::MemoryMap};
     use proptest::{prelude::Strategy, property_test};
     use rstest::rstest;
 
@@ -396,11 +396,14 @@ mod tests {
         #[case] expected_value: u8,
         #[case] expected_flags: Flags,
     ) {
-        let mut game_boy = GameBoy::empty();
-        game_boy.registers.a = lhs;
-        game_boy.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
-        assert_eq!(game_boy.registers.a, expected_value, "sum");
-        assert_eq!(game_boy.registers.flags(), expected_flags, "flags");
+        use crate::rom::Rom;
+
+        let mut cpu = Cpu::default();
+        let mut memory = MemoryMap::new(Rom::empty());
+        cpu.registers.a = lhs;
+        cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
+        assert_eq!(cpu.registers.a, expected_value, "sum");
+        assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }
 
     /// Property test for [add8]

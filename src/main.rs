@@ -1,3 +1,4 @@
+mod cpu;
 mod emu;
 mod instruction;
 mod memory;
