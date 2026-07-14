@@ -1,6 +1,6 @@
 //! Game Boy CPU instructions
 
-use std::fmt::Display;
+use std::fmt::{self, Debug, Display};
 
 /// CPU instruction
 ///
@@ -336,10 +336,7 @@ pub struct Bit(pub u8);
 /// Address of a byte of memory
 ///
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
-#[derive(
-    Clone, Copy, derive_more::Debug, Default, Eq, Ord, PartialEq, PartialOrd,
-)]
-#[debug("{self}")]
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
 
 impl Address {
@@ -352,8 +349,14 @@ impl Address {
     }
 }
 
+impl Debug for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}") // Defer to Display
+    }
+}
+
 impl Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const ADDRESS_WIDTH: usize = 4;
         write!(f, "0x{:0>ADDRESS_WIDTH$X}", self.0)
     }

@@ -2,8 +2,10 @@ use crate::emu::{
     instruction::{Address, Instruction},
     rom::Rom,
 };
-use derive_more::Display;
-use std::ops::RangeInclusive;
+use std::{
+    fmt::{self, Debug, Display},
+    ops::{Deref, DerefMut, RangeInclusive},
+};
 use tracing::error;
 
 /// Range of CPU instructions and data from a game cartridge
@@ -17,15 +19,18 @@ const HIGH_RAM: AddressRange = AddressRange::new("High RAM", 0xFF80, 0xFFFE);
 /// Video RAM
 const VRAM: AddressRange = AddressRange::new("VRAM", 0x8000, 0x9FFF);
 
-// Extra consts for pattern matching
+// Extra consts for where expressions aren't allowed
 const RAM_START: u16 = RAM.start();
 const RAM_END: u16 = RAM.end();
+const RAM_LEN: usize = RAM.len();
 const ECHO_RAM_START: u16 = ECHO_RAM.start();
 const ECHO_RAM_END: u16 = ECHO_RAM.end();
 const HIGH_RAM_START: u16 = HIGH_RAM.start();
 const HIGH_RAM_END: u16 = HIGH_RAM.end();
+const HIGH_RAM_LEN: usize = HIGH_RAM.len();
 const VRAM_START: u16 = VRAM.start();
 const VRAM_END: u16 = VRAM.end();
+const VRAM_LEN: usize = VRAM.len();
 
 /// Virtual memory map pointing to the various addressable components
 ///
@@ -37,14 +42,14 @@ pub struct MemoryMap {
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: Box<[u8; RAM.len()]>,
+    ram: Memory<RAM_LEN>,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    high_ram: Box<[u8; HIGH_RAM.len()]>,
+    high_ram: Memory<HIGH_RAM_LEN>,
     /// Video RAM, containing tiles and background maps
-    vram: Box<[u8; VRAM.len()]>,
+    vram: Memory<VRAM_LEN>,
 }
 
 impl MemoryMap {
@@ -52,9 +57,9 @@ impl MemoryMap {
     pub fn new(rom: Rom) -> Self {
         Self {
             rom,
-            ram: Box::new([0; RAM.len()]),
-            high_ram: Box::new([0; HIGH_RAM.len()]),
-            vram: Box::new([0; VRAM.len()]),
+            ram: Memory::default(),
+            high_ram: Memory::default(),
+            vram: Memory::default(),
         }
     }
 
@@ -227,8 +232,7 @@ impl MemoryMap {
 }
 
 /// A range of memory addresses
-#[derive(Debug, Display)]
-#[display("{name} [{}, {}]", range.start(), range.end())]
+#[derive(Debug)]
 pub struct AddressRange {
     name: &'static str,
     range: RangeInclusive<Address>,
@@ -259,5 +263,43 @@ impl AddressRange {
 
     pub fn contains(&self, address: Address) -> bool {
         self.range.contains(&address)
+    }
+}
+
+impl Display for AddressRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let range = &self.range;
+        write!(f, "{} [{}, {}]", self.name, range.start(), range.end())
+    }
+}
+
+/// A fixed-length block of memory
+///
+/// This is a newtype for a byte array. It provides better debug formatting.
+struct Memory<const N: usize>(Box<[u8; N]>);
+
+impl<const N: usize> Default for Memory<N> {
+    fn default() -> Self {
+        Self(Box::new([0; N]))
+    }
+}
+
+impl<const N: usize> Debug for Memory<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Memory").field(&self.0).finish()
+    }
+}
+
+impl<const N: usize> Deref for Memory<N> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<const N: usize> DerefMut for Memory<N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
     }
 }

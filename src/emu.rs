@@ -42,11 +42,10 @@ const FRAME_DURATION: Duration = Duration::from_nanos_u128(
 );
 
 /// Game Boy emulator
-#[derive(derive_more::Debug)]
+#[derive(Debug)]
 pub struct GameBoy {
     cpu: Cpu,
     /// Virtual memory map
-    #[debug(skip)]
     memory: MemoryMap,
     ppu: Ppu,
 }

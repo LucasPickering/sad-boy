@@ -19,7 +19,7 @@ use tracing::{error, info_span, trace};
 /// Central Processing Unit for a Game Boy
 ///
 /// This holds the CPU registers and executes instructions.
-#[derive(derive_more::Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Cpu {
     /// Mutable values directly in the CPU
     registers: Registers,
