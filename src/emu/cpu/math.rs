@@ -9,7 +9,7 @@ use crate::emu::{
 const HALF8: u8 = 0xf;
 const HALF16: u16 = 0xff;
 
-impl CpuExe<'_> {
+impl CpuExe<'_, '_> {
     /// Execute an `ADD` instruction
     pub(super) fn add(&mut self, add: Add) -> Cycles {
         let (flags, cycles) = match add {
@@ -342,7 +342,7 @@ impl Bit {
 mod tests {
     use super::*;
     use crate::emu::{
-        cpu::Cpu, instruction::Instruction, memory::MemoryMap, rom::Rom,
+        cpu::Cpu, instruction::Instruction, memory::MemoryBus, rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
     use rstest::rstest;
@@ -391,8 +391,15 @@ mod tests {
         #[case] expected_value: u8,
         #[case] expected_flags: Flags,
     ) {
+        use crate::emu::memory::Memory;
+
         let mut cpu = Cpu::default();
-        let mut memory = MemoryMap::new(Rom::empty());
+        let mut memory = MemoryBus {
+            rom: &Rom::empty(),
+            ram: &mut Memory::default(),
+            high_ram: &mut Memory::default(),
+            vram: &mut Memory::default(),
+        };
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");

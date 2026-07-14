@@ -25,47 +25,42 @@ const VRAM: AddressRange = AddressRange::new("VRAM", 0x8000, 0x9FFF);
 // Extra consts for where expressions aren't allowed
 const RAM_START: u16 = RAM.start();
 const RAM_END: u16 = RAM.end();
-const RAM_LEN: usize = RAM.len();
+pub const RAM_LEN: usize = RAM.len();
 const ECHO_RAM_START: u16 = ECHO_RAM.start();
 const ECHO_RAM_END: u16 = ECHO_RAM.end();
 const HIGH_RAM_START: u16 = HIGH_RAM.start();
 const HIGH_RAM_END: u16 = HIGH_RAM.end();
-const HIGH_RAM_LEN: usize = HIGH_RAM.len();
+pub const HIGH_RAM_LEN: usize = HIGH_RAM.len();
 const VRAM_START: u16 = VRAM.start();
 const VRAM_END: u16 = VRAM.end();
-const VRAM_LEN: usize = VRAM.len();
+pub const VRAM_LEN: usize = VRAM.len();
 
-/// Virtual memory map pointing to the various addressable components
+/// An abstraction over the addessable range of memory
 ///
-/// https://rylev.github.io/DMG-01/public/book/memory_map.html
+/// This holds references to all the parts of memory that can be access, and
+/// aliases to each component based on given memory addresses. This allows each
+/// component of memory/registers/etc. to be owned by its relevant module and
+/// handed out to the CPU only as needed.
+///
+/// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
-pub struct MemoryMap {
+pub struct MemoryBus<'a> {
     /// Read-only memory from the cartridge
-    rom: Rom,
+    pub rom: &'a Rom,
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: Memory<RAM_LEN>,
+    pub ram: &'a mut Memory<RAM_LEN>,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    high_ram: Memory<HIGH_RAM_LEN>,
+    pub high_ram: &'a mut Memory<HIGH_RAM_LEN>,
     /// Video RAM, containing tiles and background maps
-    vram: Memory<VRAM_LEN>,
+    pub vram: &'a mut Memory<VRAM_LEN>,
 }
 
-impl MemoryMap {
-    /// Initialize the memory map
-    pub fn new(rom: Rom) -> Self {
-        Self {
-            rom,
-            ram: Memory::default(),
-            high_ram: Memory::default(),
-            vram: Memory::default(),
-        }
-    }
-
+impl MemoryBus<'_> {
     /// Load the CPU instruction at the given address
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
@@ -279,7 +274,7 @@ impl Display for AddressRange {
 /// A fixed-length block of memory
 ///
 /// This is a newtype for a byte array. It provides better debug formatting.
-struct Memory<const N: usize>(Box<[u8; N]>);
+pub struct Memory<const N: usize>(Box<[u8; N]>);
 
 impl<const N: usize> Default for Memory<N> {
     fn default() -> Self {

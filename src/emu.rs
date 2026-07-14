@@ -12,7 +12,7 @@ use crate::{
     emu::{
         cpu::{Cpu, Cycles},
         gpu::Ppu,
-        memory::MemoryMap,
+        memory::{HIGH_RAM_LEN, Memory, MemoryBus, RAM_LEN, VRAM_LEN},
         rom::Rom,
     },
     screen::Screen,
@@ -49,20 +49,34 @@ const FRAME_DURATION: Duration = Duration::from_nanos_u128(
 #[derive(Debug)]
 pub struct GameBoy {
     cpu: Cpu,
-    /// Virtual memory map
-    memory: MemoryMap,
     ppu: Ppu,
+
+    /// Read-only memory from the cartridge
+    rom: Rom,
+    /// General-purpose writable memory
+    ///
+    /// This is boxed because 8KiB is too big to reasonably put on the stack.
+    ram: Memory<RAM_LEN>,
+    /// Additional general-purpose writable memory
+    ///
+    /// This is most commonly used when accessed by the `LD HL, SP+imm8`
+    /// instruction.
+    high_ram: Memory<HIGH_RAM_LEN>,
+    /// Video RAM, containing tiles and background maps
+    vram: Memory<VRAM_LEN>,
 }
 
 impl GameBoy {
     /// Boot the Game Boy and load the ROM from a file
     pub fn boot(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
-        let memory = MemoryMap::new(rom);
         Ok(Self {
             cpu: Cpu::default(),
-            memory,
             ppu: Ppu::default(),
+            rom,
+            ram: Memory::default(),
+            high_ram: Memory::default(),
+            vram: Memory::default(),
         })
     }
 
@@ -86,7 +100,13 @@ impl GameBoy {
             // - VRAM behavior based on PPU mode
             // - LCD registers can be modified mid-frame to change rendering
             while cycle_budget.0 > 0 {
-                let cycles = self.cpu.execute_one(&mut self.memory);
+                let mut memory = MemoryBus {
+                    rom: &self.rom,
+                    ram: &mut self.ram,
+                    high_ram: &mut self.high_ram,
+                    vram: &mut self.vram,
+                };
+                let cycles = self.cpu.execute_next(&mut memory);
                 self.ppu.execute(cycles);
                 cycle_budget.deduct(cycles);
             }

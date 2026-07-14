@@ -7,7 +7,7 @@ use crate::emu::{
         Address, Bit, ConditionCode, Instruction, Jump, Load, LoadHigh,
         Register8, Register16, Register16Memory, Register16Stack, Value8,
     },
-    memory::{self, MemoryMap},
+    memory::{self, MemoryBus},
 };
 use static_assertions::assert_cfg;
 use std::{
@@ -30,7 +30,10 @@ pub struct Cpu {
 impl Cpu {
     /// Execute the next CPU instruction, returning the number of consumed CPU
     /// cycles (dots)
-    pub fn execute_one(&mut self, memory: &mut MemoryMap) -> Cycles {
+    pub fn execute_next<'a>(
+        &'a mut self,
+        memory: &'a mut MemoryBus<'_>,
+    ) -> Cycles {
         let (instruction, num_bytes) =
             memory.get_instruction(self.registers.pc);
         let pc = self.registers.pc;
@@ -46,9 +49,9 @@ impl Cpu {
     }
 
     /// Execute a CPU instruction, returning the number of consumed CPU cycles
-    fn execute(
-        &mut self,
-        memory: &mut MemoryMap,
+    fn execute<'a>(
+        &'a mut self,
+        memory: &'a mut MemoryBus<'_>,
         instruction: Instruction,
     ) -> Cycles {
         CpuExe {
@@ -64,13 +67,13 @@ impl Cpu {
 ///
 /// This wraps all state together so it can be accessed easily by all execution
 /// functions.
-struct CpuExe<'a> {
+struct CpuExe<'a, 'm> {
     registers: &'a mut Registers,
     interrupts_enabled: &'a mut bool,
-    memory: &'a mut MemoryMap,
+    memory: &'a mut MemoryBus<'m>,
 }
 
-impl CpuExe<'_> {
+impl CpuExe<'_, '_> {
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
     fn execute(&mut self, instruction: Instruction) -> Cycles {
