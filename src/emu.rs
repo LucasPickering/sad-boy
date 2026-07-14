@@ -8,11 +8,14 @@ mod instruction;
 mod memory;
 mod rom;
 
-use crate::emu::{
-    cpu::{Cpu, Cycles},
-    gpu::Ppu,
-    memory::MemoryMap,
-    rom::Rom,
+use crate::{
+    emu::{
+        cpu::{Cpu, Cycles},
+        gpu::Ppu,
+        memory::MemoryMap,
+        rom::Rom,
+    },
+    screen::Screen,
 };
 use color_eyre::eyre;
 use std::{
@@ -20,6 +23,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tracing::error;
 
 /// Number of dots (CPU cycles) in a single frame
 ///
@@ -63,9 +67,10 @@ impl GameBoy {
     }
 
     /// Keep running until the CPU is halted
-    pub fn run(&mut self) {
+    pub fn run(&mut self, screen: &mut Screen) {
         // Each iteration of this loop is a single frame
         loop {
+            screen.reset();
             let frame_start = Instant::now();
             let mut cycle_budget = DOTS_PER_FRAME;
 
@@ -84,6 +89,9 @@ impl GameBoy {
                 let cycles = self.cpu.execute_one(&mut self.memory);
                 self.ppu.execute(cycles);
                 cycle_budget.deduct(cycles);
+            }
+            if let Err(error) = screen.draw() {
+                error!(%error, "Error drawing to screen");
             }
 
             // Sleep for the rest of the frame

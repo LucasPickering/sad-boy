@@ -45,10 +45,16 @@ impl Screen {
         Self::new(pixels)
     }
 
-    /// Draw the screen to the terminal
-    pub fn draw(&self, mut out: impl Write) -> io::Result<()> {
+    /// Reset all pixels to black
+    pub fn reset(&mut self) {
+        self.pixels.fill(Pixel::default());
+    }
+
+    /// Draw the current screen buffer to the terminal
+    pub fn draw(&self) -> io::Result<()> {
         // https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
         const ESCAPE: &[u8] = b"\x1b";
+        let mut out = io::stdout();
 
         // Everything other than the escape code is ASCII
         out.write_all(ESCAPE)?;
@@ -57,8 +63,7 @@ impl Screen {
             "_Ga=T,f=24,s={WIDTH_PIXELS},v={HEIGHT_PIXELS},c={WIDTH_TERM};"
         )?;
 
-        // Read the pixels as raw bytes and encode as base64
-        debug_assert_eq!(mem::size_of::<Pixel>(), 3, "Pixel must be 3 bytes");
+        // Cast the pixels to raw bytes
         let ptr: *const [Pixel] = &raw const *self.pixels;
         // SAFETY:
         // - Pointer is always valid because we construct it safely above
@@ -70,6 +75,7 @@ impl Screen {
                 self.pixels.len() * mem::size_of::<Pixel>(),
             )
         };
+        // Encode and write as base64
         let mut b64_writer = EncoderWriter::new(&mut out, &STANDARD);
         b64_writer.write_all(pixel_bytes)?;
         drop(b64_writer);
@@ -82,7 +88,7 @@ impl Screen {
 }
 
 /// RGB pixel
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // We treat this as raw bytes when sending pixels over
 pub struct Pixel {
     red: u8,

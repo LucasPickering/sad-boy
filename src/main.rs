@@ -17,9 +17,6 @@ use tracing_subscriber::{
 struct Args {
     /// Path to the ROM file to load
     rom: PathBuf,
-    /// TODO remove this
-    #[clap(long)]
-    draw: bool,
 }
 
 fn main() -> eyre::Result<()> {
@@ -27,14 +24,9 @@ fn main() -> eyre::Result<()> {
     initialize_tracing();
     let args = Args::parse();
 
-    // Test the screen
-    if args.draw {
-        let screen = Screen::test();
-        screen.draw(io::stdout())?;
-    }
-
+    let mut screen = Screen::test();
     let mut game_boy = GameBoy::boot(&args.rom)?;
-    game_boy.run();
+    game_boy.run(&mut screen);
     Ok(())
 }
 
