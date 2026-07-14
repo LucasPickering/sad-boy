@@ -1,5 +1,6 @@
 use crate::{
     emu::{
+        gpu::Gpu,
         instruction::{Address, Instruction},
         rom::Rom,
     },
@@ -56,8 +57,8 @@ pub struct MemoryBus<'a> {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     pub high_ram: &'a mut Memory<HIGH_RAM_LEN>,
-    /// Video RAM, containing tiles and background maps
-    pub vram: &'a mut Memory<VRAM_LEN>,
+    /// GPU holds VRAM and graphics registers
+    pub gpu: &'a mut Gpu,
 }
 
 impl MemoryBus<'_> {
@@ -144,7 +145,7 @@ impl MemoryBus<'_> {
                 // Safety: self.vram is initialized to the same length as
                 // this range
                 let index: usize = address.0.into();
-                &self.vram[index]
+                &self.gpu.vram()[index]
             }
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -195,7 +196,7 @@ impl MemoryBus<'_> {
                 // Safety: self.vram is initialized to the same length as
                 // this range
                 let index: usize = address.0.into();
-                Some(&mut self.vram[index])
+                Some(&mut self.gpu.vram_mut()[index])
             }
             0xA000..=0xBFFF => todo!("Cartridge RAM"),
             RAM_START..=RAM_END => {

@@ -731,8 +731,8 @@ impl Registers {
     }
 }
 
-/// The `f` register can be interpreted as a set of 4 flags providing feedback
-/// about the previous operation
+/// The `f` register holds a set of 4 flags providing feedback about the
+/// previous operation
 ///
 /// Use [Registers::flags] to get this value.
 ///

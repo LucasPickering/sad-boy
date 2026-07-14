@@ -11,8 +11,8 @@ mod rom;
 use crate::{
     emu::{
         cpu::{Cpu, Cycles},
-        gpu::Ppu,
-        memory::{HIGH_RAM_LEN, Memory, MemoryBus, RAM_LEN, VRAM_LEN},
+        gpu::Gpu,
+        memory::{HIGH_RAM_LEN, Memory, MemoryBus, RAM_LEN},
         rom::Rom,
     },
     screen::Screen,
@@ -49,7 +49,7 @@ const FRAME_DURATION: Duration = Duration::from_nanos_u128(
 #[derive(Debug)]
 pub struct GameBoy {
     cpu: Cpu,
-    ppu: Ppu,
+    gpu: Gpu,
 
     /// Read-only memory from the cartridge
     rom: Rom,
@@ -62,8 +62,6 @@ pub struct GameBoy {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     high_ram: Memory<HIGH_RAM_LEN>,
-    /// Video RAM, containing tiles and background maps
-    vram: Memory<VRAM_LEN>,
 }
 
 impl GameBoy {
@@ -72,11 +70,10 @@ impl GameBoy {
         let rom = Rom::load(path)?;
         Ok(Self {
             cpu: Cpu::default(),
-            ppu: Ppu::default(),
+            gpu: Gpu::default(),
             rom,
             ram: Memory::default(),
             high_ram: Memory::default(),
-            vram: Memory::default(),
         })
     }
 
@@ -104,10 +101,10 @@ impl GameBoy {
                     rom: &self.rom,
                     ram: &mut self.ram,
                     high_ram: &mut self.high_ram,
-                    vram: &mut self.vram,
+                    gpu: &mut self.gpu,
                 };
                 let cycles = self.cpu.execute_next(&mut memory);
-                self.ppu.execute(cycles);
+                self.gpu.execute(cycles);
                 cycle_budget.deduct(cycles);
             }
             if let Err(error) = screen.draw() {

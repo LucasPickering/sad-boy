@@ -342,7 +342,11 @@ impl Bit {
 mod tests {
     use super::*;
     use crate::emu::{
-        cpu::Cpu, instruction::Instruction, memory::MemoryBus, rom::Rom,
+        cpu::Cpu,
+        gpu::Gpu,
+        instruction::Instruction,
+        memory::{Memory, MemoryBus},
+        rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
     use rstest::rstest;
@@ -391,14 +395,12 @@ mod tests {
         #[case] expected_value: u8,
         #[case] expected_flags: Flags,
     ) {
-        use crate::emu::memory::Memory;
-
         let mut cpu = Cpu::default();
         let mut memory = MemoryBus {
             rom: &Rom::empty(),
             ram: &mut Memory::default(),
             high_ram: &mut Memory::default(),
-            vram: &mut Memory::default(),
+            gpu: &mut Gpu::default(),
         };
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
