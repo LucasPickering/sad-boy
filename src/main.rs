@@ -1,10 +1,10 @@
 mod emu;
-#[expect(dead_code)] // TODO remove this
 mod screen;
 mod util;
 
-use crate::emu::GameBoy;
-use color_eyre::eyre::{self, eyre};
+use crate::{emu::GameBoy, screen::Screen};
+use clap::Parser;
+use color_eyre::eyre;
 use std::{env, io, path::PathBuf, str::FromStr};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{
@@ -12,13 +12,28 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
 };
 
+/// TODO
+#[derive(Parser)]
+struct Args {
+    /// Path to the ROM file to load
+    rom: PathBuf,
+    /// TODO remove this
+    #[clap(long)]
+    draw: bool,
+}
+
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     initialize_tracing();
+    let args = Args::parse();
 
-    let rom_path =
-        PathBuf::from(env::args().nth(1).ok_or(eyre!("Missing ROM path"))?);
-    let mut game_boy = GameBoy::boot(&rom_path)?;
+    // Test the screen
+    if args.draw {
+        let screen = Screen::test();
+        screen.draw(io::stdout())?;
+    }
+
+    let mut game_boy = GameBoy::boot(&args.rom)?;
     game_boy.run();
     Ok(())
 }
