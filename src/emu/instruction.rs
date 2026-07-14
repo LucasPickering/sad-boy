@@ -351,7 +351,7 @@ impl Address {
 
 impl Debug for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self}") // Defer to Display
+        Display::fmt(&self, f) // Defer to Display
     }
 }
 

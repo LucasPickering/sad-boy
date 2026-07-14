@@ -1,6 +1,9 @@
-use crate::emu::{
-    instruction::{Address, Instruction},
-    rom::Rom,
+use crate::{
+    emu::{
+        instruction::{Address, Instruction},
+        rom::Rom,
+    },
+    util::BytesDisplay,
 };
 use std::{
     fmt::{self, Debug, Display},
@@ -286,7 +289,7 @@ impl<const N: usize> Default for Memory<N> {
 
 impl<const N: usize> Debug for Memory<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Memory").field(&self.0).finish()
+        Debug::fmt(&BytesDisplay::hex(&*self.0), f)
     }
 }
 

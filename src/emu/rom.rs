@@ -1,9 +1,12 @@
 //! ROM loading and parsing
 
-use crate::emu::instruction::{
-    Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
-    LoadHigh, Operand, Register8, Register16, Register16Memory,
-    Register16Stack, Value8,
+use crate::{
+    emu::instruction::{
+        Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
+        LoadHigh, Operand, Register8, Register16, Register16Memory,
+        Register16Stack, Value8,
+    },
+    util::BytesDisplay,
 };
 use color_eyre::eyre::{self, Context};
 use std::{
@@ -33,7 +36,7 @@ use winnow::{
 /// - [Instructions](https://gbdev.io/pandocs/CPU_Instruction_Set.html)
 ///
 /// The header begins at `0x100`; instructions begin at
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Rom {
     /// The entire ROM binary data
     data: Vec<u8>,
@@ -83,7 +86,7 @@ impl Rom {
         let offset = input.offset_from(&start);
         trace!(
             ?instruction,
-            bytes = %BytesDisplay(taken),
+            bytes = %BytesDisplay::binary(taken),
             %address,
             "Parsed instruction",
         );
@@ -93,6 +96,14 @@ impl Rom {
     /// Get the raw ROM bytes
     pub fn bytes(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl Debug for Rom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Rom")
+            .field("data", &BytesDisplay::hex(&self.data)) // Truncate data
+            .finish()
     }
 }
 
@@ -151,7 +162,7 @@ impl Display for RomParseError {
                 f,
                 "{} | {}",
                 Address(offset as u16), // TODO is cast safe?
-                BytesDisplay(bytes),
+                BytesDisplay::binary(bytes),
             )?;
             writeln!(f)?;
 
@@ -168,21 +179,6 @@ impl Display for RomParseError {
 }
 
 impl Error for RomParseError {}
-
-/// Wrapper to pretty print a byte slice
-struct BytesDisplay<'a>(&'a [u8]);
-
-impl Display for BytesDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, byte) in self.0.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{byte:0>8b}")?;
-        }
-        Ok(())
-    }
-}
 
 type ParseError = ErrMode<ContextError>;
 
