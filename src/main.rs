@@ -12,6 +12,7 @@ use tracing_subscriber::{
 };
 
 fn main() -> eyre::Result<()> {
+    color_eyre::install()?;
     initialize_tracing();
 
     let rom_path =
