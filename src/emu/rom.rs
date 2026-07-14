@@ -2,11 +2,11 @@
 
 use crate::{
     emu::instruction::{
-        Add, Address, Bit, ConditionCode, DecInc, Instruction, Jump, Load,
-        LoadHigh, Operand, Register8, Register16, Register16Memory,
-        Register16Stack, Value8,
+        Add, Address, ConditionCode, DecInc, Instruction, Jump, Load, LoadHigh,
+        Operand, Register8, Register16, Register16Memory, Register16Stack,
+        Value8,
     },
-    util::BytesDisplay,
+    util::{Bit, BytesDisplay},
 };
 use color_eyre::eyre::{self, Context};
 use std::{
@@ -185,7 +185,7 @@ type ParseError = ErrMode<ContextError>;
 /// A version of winnow's `alt` combinator that takes any number of branches
 macro_rules! alt {
     ($($parser:expr),*, $(,)?) => {
-        |input: &mut &[u8]| -> ModalResult<Instruction> {
+        (|input: &mut &[u8]| -> ModalResult<Instruction> {
             use winnow::stream::Stream;
             use winnow::Parser;
 
@@ -202,12 +202,11 @@ macro_rules! alt {
             })*
 
             Err(ParseError::from_input(input))
-        }
+        })
     };
 }
 
 /// Parse the next CPU instruction
-#[expect(clippy::precedence)] // TODO fix this
 fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.

@@ -2,12 +2,15 @@
 
 mod math;
 
-use crate::emu::{
-    instruction::{
-        Address, Bit, ConditionCode, Instruction, Jump, Load, LoadHigh,
-        Register8, Register16, Register16Memory, Register16Stack, Value8,
+use crate::{
+    emu::{
+        instruction::{
+            Address, ConditionCode, Instruction, Jump, Load, LoadHigh,
+            Register8, Register16, Register16Memory, Register16Stack, Value8,
+        },
+        memory::{self, MemoryBus},
     },
-    memory::{self, MemoryBus},
+    util::Bit,
 };
 use static_assertions::assert_cfg;
 use std::{
@@ -738,7 +741,6 @@ impl Registers {
 ///
 /// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[expect(clippy::struct_excessive_bools)]
 struct Flags {
     /// Was the result of the operation zero?
     zero: bool,
@@ -752,32 +754,30 @@ struct Flags {
 
 impl Flags {
     /// Last operation resulted in a `0`
-    const ZERO: u8 = 0b1 << 7;
+    const ZERO: Bit = Bit(7);
     /// Last operation was a subtraction
-    const SUBTRACT: u8 = 0b1 << 6;
+    const SUBTRACT: Bit = Bit(6);
     /// The bottom 4 bits overflowed into the top 4 in the last operation
-    const HALF_CARRY: u8 = 0b1 << 5;
+    const HALF_CARRY: Bit = Bit(5);
     /// Last operation overflowed (wrapped)
-    const CARRY: u8 = 0b1 << 4;
+    const CARRY: Bit = Bit(4);
 
     /// Read individual flags from the top 4 bits of the byte
     fn from_bits(bits: u8) -> Self {
-        let flag = |bit: u8| bits & bit != 0;
         Flags {
-            zero: flag(Flags::ZERO),
-            subtract: flag(Flags::SUBTRACT),
-            half_carry: flag(Flags::HALF_CARRY),
-            carry: flag(Flags::CARRY),
+            zero: Flags::ZERO.get(bits),
+            subtract: Flags::SUBTRACT.get(bits),
+            half_carry: Flags::HALF_CARRY.get(bits),
+            carry: Flags::CARRY.get(bits),
         }
     }
 
     /// Convert individual flags into bitflags
     fn into_bits(self) -> u8 {
-        let bit = |flag: bool, bit: u8| if flag { bit } else { 0 };
-        bit(self.zero, Self::ZERO)
-            | bit(self.subtract, Self::SUBTRACT)
-            | bit(self.half_carry, Self::HALF_CARRY)
-            | bit(self.carry, Self::CARRY)
+        Self::ZERO.bit(self.zero)
+            | Self::SUBTRACT.bit(self.subtract)
+            | Self::HALF_CARRY.bit(self.half_carry)
+            | Self::CARRY.bit(self.carry)
     }
 }
 

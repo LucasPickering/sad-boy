@@ -1,5 +1,6 @@
 //! Game Boy CPU instructions
 
+use crate::util::Bit;
 use std::fmt::{self, Debug, Display};
 
 /// CPU instruction
@@ -326,12 +327,6 @@ pub enum ConditionCode {
     /// Execute if `carry` flag is not set
     Nc,
 }
-
-/// Index of a single bit in a byte
-///
-/// Value can be `0-7`
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Bit(pub u8);
 
 /// Address of a byte of memory
 ///

@@ -1,8 +1,11 @@
 //! Mathy and bitwise instruction implementations for [GameBoy]
 
-use crate::emu::{
-    cpu::{CpuExe, Cycles, Flags},
-    instruction::{Add, Bit, DecInc, Operand, Value8},
+use crate::{
+    emu::{
+        cpu::{CpuExe, Cycles, Flags},
+        instruction::{Add, DecInc, Operand, Value8},
+    },
+    util::Bit,
 };
 
 // Masks for the bottom half of 8/16-bit values
@@ -323,19 +326,6 @@ fn sub8(lhs: u8, rhs: u8) -> (u8, Flags) {
         carry,
     };
     (difference, flags)
-}
-
-impl Bit {
-    /// Get the value of a bit from a byte
-    pub fn get(self, value: u8) -> bool {
-        value & (0b1 << self.0) > 0
-    }
-
-    /// Set the value of a bit in a byte
-    pub fn set(self, value: u8, bit_value: bool) -> u8 {
-        let new = u8::from(bit_value) << self.0;
-        (value | new) & new
-    }
 }
 
 #[cfg(test)]

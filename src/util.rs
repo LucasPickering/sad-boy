@@ -1,5 +1,29 @@
 use std::fmt::{self, Debug, Display};
 
+/// Index of a single bit in a byte
+///
+/// Value can be `0-7`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bit(pub u8);
+
+impl Bit {
+    /// Get the value of a bit from a byte as a bool
+    pub fn get(self, value: u8) -> bool {
+        value & (0b1 << self.0) > 0
+    }
+
+    /// Convert a boolean flag to a 0/1 in this bit position
+    pub fn bit(self, value: bool) -> u8 {
+        u8::from(value) << self.0
+    }
+
+    /// Set the value of a bit in a byte
+    pub fn set(self, value: u8, bit_value: bool) -> u8 {
+        let new = u8::from(bit_value) << self.0;
+        (value | new) & new
+    }
+}
+
 /// Wrapper to pretty print a byte slice
 ///
 /// By default this will print a truncated slice, up to 8 bytes. To print the
