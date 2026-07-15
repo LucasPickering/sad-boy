@@ -21,18 +21,18 @@ pub struct Gpu {
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    oam: [ObjectAttributes; 40],
+    oam: Memory<ObjectAttributes>,
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: Memory<u8>,
+    tile_data: Memory<Tile>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: Memory<u8>,
+    tile_maps: Memory<TileIndex>,
 }
 
 impl Gpu {
@@ -51,23 +51,33 @@ impl Gpu {
         &mut self.registers
     }
 
+    /// Get a reference to Object Attribute Memory
+    pub fn oam(&self) -> &Memory<ObjectAttributes> {
+        &self.oam
+    }
+
+    /// Get a mutable reference to Object Attribute Memory
+    pub fn oam_mut(&mut self) -> &mut Memory<ObjectAttributes> {
+        &mut self.oam
+    }
+
     /// Get a reference to tile pixel data VRAM
-    pub fn tile_data(&self) -> &Memory<u8> {
+    pub fn tile_data(&self) -> &Memory<Tile> {
         &self.tile_data
     }
 
     /// Get a mutable reference to tile pixel data VRAM
-    pub fn tile_data_mut(&mut self) -> &mut Memory<u8> {
+    pub fn tile_data_mut(&mut self) -> &mut Memory<Tile> {
         &mut self.tile_data
     }
 
     /// Get a reference to tile maps VRAM
-    pub fn tile_maps(&self) -> &Memory<u8> {
+    pub fn tile_maps(&self) -> &Memory<TileIndex> {
         &self.tile_maps
     }
 
     /// Get a mutable reference to tile maps VRAM
-    pub fn tile_maps_mut(&mut self) -> &mut Memory<u8> {
+    pub fn tile_maps_mut(&mut self) -> &mut Memory<TileIndex> {
         &mut self.tile_maps
     }
 }
@@ -77,7 +87,7 @@ impl Default for Gpu {
         Self {
             registers: Registers::default(),
             ppu: Ppu::default(),
-            oam: [ObjectAttributes::default(); 40],
+            oam: Memory::new(memory::OAM),
             tile_data: Memory::new(memory::TILE_DATA),
             tile_maps: Memory::new(memory::TILE_MAPS),
         }
@@ -180,12 +190,33 @@ enum PpuMode {
     Drawing,
 }
 
+/// An 8x8 collection of pixels
+///
+/// https://gbdev.io/pandocs/Tile_Data.html
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)] // Memory layout matters here
+pub struct Tile {
+    /// A tile is 16 bytes:
+    /// - 4 colors per pixel => 2 bits per pixel
+    /// - 8 pixels per line => 2 bytes per line
+    /// - 8 lines => 16 bytes total
+    ///
+    /// The pixel layout is a little odd: each pixel's bits are split across
+    /// both bytes of that line. For a given line, bit 7 of each byte specifies
+    /// the left-most pixel, bit 6 is the second pixel, etc. The first byte
+    /// holds the lesser bit, second byte holds the greater bit.
+    lines: [(u8, u8); 8],
+}
+
+// Sanity check for unsafe stuff
+assert_eq_size!(Tile, [u8; 16]);
+
 /// Metadata specifying a single pixel object
 ///
 /// https://gbdev.io/pandocs/OAM.html
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // Memory layout matters here
-struct ObjectAttributes {
+pub struct ObjectAttributes {
     // Field order must match the doc above
     /// Vertical position of the object + 16
     y: u8,
@@ -201,7 +232,7 @@ struct ObjectAttributes {
     flags: u8,
 }
 
-// Memory layout relies on this being 4 bytes
+// Sanity check for unsafe stuff
 assert_eq_size!(ObjectAttributes, [u8; 4]);
 
 /// Index of a single tile in a tile map
@@ -209,4 +240,4 @@ assert_eq_size!(ObjectAttributes, [u8; 4]);
 /// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-struct TileIndex(u8);
+pub struct TileIndex(u8);

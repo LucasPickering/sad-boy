@@ -180,10 +180,11 @@ impl MemoryBus<'_> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 Self::accessor(address)
             }
-            OAM_START..=OAM_LAST => {
-                error!("TODO: Object Attribute Memory read");
-                Accessor::ro(|_, _| 0)
-            }
+            OAM_START..=OAM_LAST => Accessor::rw(
+                |bus, address| bus.gpu.oam().byte(address),
+                // TODO OAM write isn't allowed during draw mode 2 or 3
+                |bus, address| bus.gpu.oam_mut().byte_mut(address),
+            ),
             // Null mem
             0xFEA0..=0xFEFF => Accessor::ro(|_, _| 0),
 
