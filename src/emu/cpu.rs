@@ -675,22 +675,27 @@ impl Default for Registers {
 /// important.** The pointer to the first register of the pair is case from a
 /// `u8` pointer to a `u16` pointer; the second register is **assumed** to
 /// be the following byte in memory.
-///
-/// The `$r1` register should be the register with the *lower* bits. Because the
-/// system is little-endian, that register must come first in memory.
 macro_rules! register_pair {
-    ($pair:ident, $pair_mut:ident, $r1:ident) => {
+    // External branch
+    ($r_high:ident, $r_low:ident) => {
+        // Generate identifiers and defer to the next branch
+        paste::paste! {
+            register_pair!([<$r_high $r_low>], [<$r_high $r_low _mut>], $r_low);
+        }
+    };
+    // Internal branch
+    ($pair:ident, $pair_mut:ident, $r_low:ident) => {
         /// Get the value of the `$pair` register pair
         fn $pair(&self) -> u16 {
             // SAFETY: Safety is predicated on the macro being called with
             // registers that are paired together in the struct layout.
             // - Alignment is safe because u16 is 2-byte aligned and the
             //   registers are pairs of 2. The entire struct is aligned, so
-            //   every other register (i.e. the first register of each pair)
+            //   every other register (i.e. the lower register of each pair)
             //   will be 2-byte aligned
             // - This will not read/write out of bounds because the first
             //   register must have a second register after it.
-            let ptr8 = std::ptr::from_ref(&self.$r1);
+            let ptr8 = std::ptr::from_ref(&self.$r_low);
             debug_assert_eq!(
                 ptr8.align_offset(2),
                 0,
@@ -704,7 +709,7 @@ macro_rules! register_pair {
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
             // SAFETY: see above fn
-            let ptr8 = std::ptr::from_mut(&mut self.$r1);
+            let ptr8 = std::ptr::from_mut(&mut self.$r_low);
             debug_assert_eq!(
                 ptr8.align_offset(2),
                 0,
@@ -718,10 +723,10 @@ macro_rules! register_pair {
 }
 
 impl Registers {
-    register_pair!(af, af_mut, f);
-    register_pair!(bc, bc_mut, c);
-    register_pair!(de, de_mut, e);
-    register_pair!(hl, hl_mut, l);
+    register_pair!(a, f);
+    register_pair!(b, c);
+    register_pair!(d, e);
+    register_pair!(h, l);
 
     /// Read bit flags from the `f` register
     fn flags(&self) -> Flags {

@@ -33,24 +33,18 @@ pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
 /// These consts are needed to use the start/end in pattern matching, where
 /// complex expressions aren't allowed.
 macro_rules! bounds {
-    // macro_rules! doesn't support creating identifiers automatically, so the
-    // caller has to pass them in.
-    ($(($range:expr, $start:ident, $last:ident)),* $(,)?) => {
-        $(
-            const $start: u16 = $range.start();
-            const $last: u16 = $range.last();
-        )*
+    ($($range:expr),* $(,)?) => {
+        paste::paste! {
+            $(
+                const [<$range _START>]: u16 = $range.start();
+                const [<$range _LAST>]: u16 = $range.last();
+            )*
+        }
     };
 }
 
-// Extra consts for pattern matching
-bounds!(
-    (RAM, RAM_START, RAM_LAST),
-    (ECHO_RAM, ECHO_RAM_START, ECHO_RAM_LAST),
-    (HIGH_RAM, HIGH_RAM_START, HIGH_RAM_LAST),
-    (TILE_DATA, TILE_DATA_START, TILE_DATA_LAST),
-    (OAM, OAM_START, OAM_LAST),
-);
+// Generate extra consts for pattern matching
+bounds!(RAM, ECHO_RAM, HIGH_RAM, TILE_DATA, OAM);
 
 /// An abstraction over the addessable range of memory
 ///
