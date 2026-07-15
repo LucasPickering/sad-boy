@@ -311,7 +311,12 @@ impl Display for AddressRange {
 
 /// A fixed-length block of memory
 ///
-/// TODO
+/// This can hold any type `T`, and can be treated as either a slice of `T`
+/// **or** a slice of bytes. `T` must have a stable byte representation! Don't
+/// forget `#[repr(C)]`.
+///
+/// Use this for data that is accessible via the memory bus. If memory doesn't
+/// have any semantic meaning (e.g. general-purpose RAM), just use `Memory<u8>`.
 #[derive(Debug)]
 pub struct Memory<T> {
     /// Range of memory addresses covered by this block

@@ -12,7 +12,6 @@ use crate::{
     },
     util::Bit,
 };
-use static_assertions::assert_cfg;
 use std::{
     fmt::{self, Debug},
     ops::{BitAnd, BitOr, BitXor},
@@ -590,7 +589,10 @@ impl CpuExe<'_, '_> {
 }
 
 // Optimizations below rely on this.
-assert_cfg!(target_endian = "little");
+const _: () = assert!(
+    cfg!(target_endian = "little"),
+    "Only little-endian platforms are supported (for register pairs)"
+);
 
 /// Registers in a Game Boy CPU
 #[repr(C)] // Field ordering/alignment is important

@@ -7,10 +7,15 @@ use crate::emu::{
     cpu::Cycles,
     memory::{self, Memory},
 };
-use static_assertions::assert_eq_size;
+use std::mem;
 
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
+
+// Const assertions make the unsafe code a bit more safe
+const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
+const _: () = assert!(mem::size_of::<Tile>() == 16);
+const _: () = assert!(mem::size_of::<TileIndex>() == 1);
 
 /// Graphics registers and processing
 #[derive(Debug)]
@@ -208,9 +213,6 @@ pub struct Tile {
     lines: [(u8, u8); 8],
 }
 
-// Sanity check for unsafe stuff
-assert_eq_size!(Tile, [u8; 16]);
-
 /// Metadata specifying a single pixel object
 ///
 /// https://gbdev.io/pandocs/OAM.html
@@ -231,9 +233,6 @@ pub struct ObjectAttributes {
     /// TODO
     flags: u8,
 }
-
-// Sanity check for unsafe stuff
-assert_eq_size!(ObjectAttributes, [u8; 4]);
 
 /// Index of a single tile in a tile map
 ///
