@@ -5,19 +5,24 @@
 
 use crate::emu::{
     cpu::Cycles,
-    memory::{Memory, VRAM_LEN},
+    memory::{Memory, TILE_DATA_LEN},
 };
 
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
 
+type TileData = Memory<TILE_DATA_LEN>;
+
 /// Graphics registers and processing
 #[derive(Debug, Default)]
+
 pub struct Gpu {
     registers: Registers,
     ppu: Ppu,
-    /// Video RAM, containing tiles and background maps
-    vram: Memory<VRAM_LEN>,
+    /// Pixel data for tiles
+    ///
+    /// https://gbdev.io/pandocs/Tile_Data.html
+    tile_data: TileData,
 }
 
 impl Gpu {
@@ -26,14 +31,14 @@ impl Gpu {
         self.ppu.execute(dots);
     }
 
-    /// Get a reference to Video RAM
-    pub fn vram(&self) -> &Memory<VRAM_LEN> {
-        &self.vram
+    /// Get a reference to tile data VRAM
+    pub fn tile_data(&self) -> &Memory<TILE_DATA_LEN> {
+        &self.tile_data
     }
 
-    /// Get a mutable reference to Video RAM
-    pub fn vram_mut(&mut self) -> &mut Memory<VRAM_LEN> {
-        &mut self.vram
+    /// Get a mutable reference to tile data VRAM
+    pub fn tile_data_mut(&mut self) -> &mut Memory<TILE_DATA_LEN> {
+        &mut self.tile_data
     }
 }
 

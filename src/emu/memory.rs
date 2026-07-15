@@ -20,8 +20,10 @@ pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
 /// Address range for additional general-purpose writable RAM
 const HIGH_RAM: AddressRange = AddressRange::new("High RAM", 0xFF80, 0xFFFE);
-/// Video RAM
-const VRAM: AddressRange = AddressRange::new("VRAM", 0x8000, 0x9FFF);
+/// Video RAM containing tile pixel data
+const TILE_DATA: AddressRange = AddressRange::new("Tile Data", 0x8000, 0x97FF);
+/// Object Attribute Memory (part of VRAM)
+const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
 
 // Extra consts for where expressions aren't allowed
 const RAM_START: u16 = RAM.start();
@@ -32,9 +34,11 @@ const ECHO_RAM_END: u16 = ECHO_RAM.end();
 const HIGH_RAM_START: u16 = HIGH_RAM.start();
 const HIGH_RAM_END: u16 = HIGH_RAM.end();
 pub const HIGH_RAM_LEN: usize = HIGH_RAM.len();
-const VRAM_START: u16 = VRAM.start();
-const VRAM_END: u16 = VRAM.end();
-pub const VRAM_LEN: usize = VRAM.len();
+const TILE_DATA_START: u16 = TILE_DATA.start();
+const TILE_DATA_END: u16 = TILE_DATA.end();
+pub const TILE_DATA_LEN: usize = TILE_DATA.len();
+const OAM_START: u16 = OAM.start();
+const OAM_END: u16 = OAM.end();
 
 /// An abstraction over the addessable range of memory
 ///
@@ -141,11 +145,14 @@ impl MemoryBus<'_> {
                 error!("TODO: Game ROM bank N read");
                 &0
             }
-            VRAM_START..=VRAM_END => {
-                // Safety: self.vram is initialized to the same length as
-                // this range
+            TILE_DATA_START..=TILE_DATA_END => {
+                // Safety: TODO
                 let index: usize = address.0.into();
-                &self.gpu.vram()[index]
+                &self.gpu.tile_data()[index]
+            }
+            0x9800..=0x9FFF => {
+                error!("TODO: Tile map read");
+                &0
             }
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -163,7 +170,7 @@ impl MemoryBus<'_> {
                 let index = (address.0 - ECHO_RAM_START) as usize;
                 &self.ram[index]
             }
-            0xFE00..=0xFE9F => {
+            OAM_START..=OAM_END => {
                 error!("TODO: Object Attribute Memory read");
                 &0
             }
@@ -192,12 +199,13 @@ impl MemoryBus<'_> {
         // TODO dedupe this with get_ref()
         match address.0 {
             0x0000..=0x7FFF => None, // Cartridge ROM
-            VRAM_START..=VRAM_END => {
-                // Safety: self.vram is initialized to the same length as
-                // this range
+            TILE_DATA_START..=TILE_DATA_END => {
+                // Safety: self.tile_data is initialized to the same length
+                // as this range
                 let index: usize = address.0.into();
-                Some(&mut self.gpu.vram_mut()[index])
+                Some(&mut self.gpu.tile_data_mut()[index])
             }
+            0x9800..=0x9FFF => todo!("TODO: Tile map read"),
             0xA000..=0xBFFF => todo!("Cartridge RAM"),
             RAM_START..=RAM_END => {
                 // Safety: self.ram is initialized to the same length as
@@ -213,7 +221,7 @@ impl MemoryBus<'_> {
                 let index = (address.0 - ECHO_RAM_START) as usize;
                 Some(&mut self.ram[index])
             }
-            0xFE00..=0xFE9F => None, // Object Attribute Memory
+            OAM_START..=OAM_END => None, // Object Attribute Memory
             0xFEA0..=0xFEFF => None,
             0xFF00..=0xFF7F => {
                 error!("unimplemented: I/O register write");
