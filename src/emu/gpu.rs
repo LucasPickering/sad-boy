@@ -25,14 +25,14 @@ pub struct Gpu {
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: Memory,
+    tile_data: Memory<u8>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: Memory,
+    tile_maps: Memory<u8>,
 }
 
 impl Gpu {
@@ -52,22 +52,22 @@ impl Gpu {
     }
 
     /// Get a reference to tile pixel data VRAM
-    pub fn tile_data(&self) -> &Memory {
+    pub fn tile_data(&self) -> &Memory<u8> {
         &self.tile_data
     }
 
     /// Get a mutable reference to tile pixel data VRAM
-    pub fn tile_data_mut(&mut self) -> &mut Memory {
+    pub fn tile_data_mut(&mut self) -> &mut Memory<u8> {
         &mut self.tile_data
     }
 
     /// Get a reference to tile maps VRAM
-    pub fn tile_maps(&self) -> &Memory {
+    pub fn tile_maps(&self) -> &Memory<u8> {
         &self.tile_maps
     }
 
     /// Get a mutable reference to tile maps VRAM
-    pub fn tile_maps_mut(&mut self) -> &mut Memory {
+    pub fn tile_maps_mut(&mut self) -> &mut Memory<u8> {
         &mut self.tile_maps
     }
 }

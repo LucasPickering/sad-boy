@@ -1,10 +1,8 @@
-use crate::{
-    emu::{gpu::Gpu, instruction::Instruction, rom::Rom},
-    util::BytesDisplay,
-};
+use crate::emu::{gpu::Gpu, instruction::Instruction, rom::Rom};
 use std::{
+    any,
     fmt::{self, Debug, Display},
-    ops::{Index, IndexMut},
+    mem, ptr,
     range::RangeInclusive,
 };
 use tracing::error;
@@ -69,12 +67,12 @@ pub struct MemoryBus<'a> {
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    pub ram: &'a mut Memory,
+    pub ram: &'a mut Memory<u8>,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    pub high_ram: &'a mut Memory,
+    pub high_ram: &'a mut Memory<u8>,
     /// GPU holds VRAM and graphics registers
     pub gpu: &'a mut Gpu,
 }
@@ -103,7 +101,7 @@ impl MemoryBus<'_> {
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
         let accessor = Self::accessor(address);
-        *(accessor.read)(self, address)
+        (accessor.read)(self, address)
     }
 
     /// Get a mutable reference to a 1-byte value in memory
@@ -153,27 +151,27 @@ impl MemoryBus<'_> {
             0x0000..=0x3FFF => Accessor::ro(|bus, address| {
                 // Safety: TODO
                 let index: usize = address.0.into();
-                &bus.rom.bytes()[index]
+                bus.rom.bytes()[index]
             }),
             0x4000..=0x7FFF => {
                 error!("TODO: Game ROM bank N");
-                Accessor::ro(|_, _| &0)
+                Accessor::ro(|_, _| 0)
             }
             TILE_DATA_START..=TILE_DATA_LAST => Accessor::rw(
-                |bus, address| &bus.gpu.tile_data()[address],
-                |bus, address| &mut bus.gpu.tile_data_mut()[address],
+                |bus, address| bus.gpu.tile_data().byte(address),
+                |bus, address| bus.gpu.tile_data_mut().byte_mut(address),
             ),
             TILE_MAPS_START..=TILE_MAPS_LAST => Accessor::rw(
-                |bus, address| &bus.gpu.tile_maps()[address],
-                |bus, address| &mut bus.gpu.tile_maps_mut()[address],
+                |bus, address| bus.gpu.tile_maps().byte(address),
+                |bus, address| bus.gpu.tile_maps_mut().byte_mut(address),
             ),
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
-                Accessor::ro(|_, _| &0)
+                Accessor::ro(|_, _| 0)
             }
             RAM_START..=RAM_LAST => Accessor::rw(
-                |bus, address| &bus.ram[address],
-                |bus, address| &mut bus.ram[address],
+                |bus, address| bus.ram.byte(address),
+                |bus, address| bus.ram.byte_mut(address),
             ),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
@@ -184,44 +182,44 @@ impl MemoryBus<'_> {
             }
             OAM_START..=OAM_LAST => {
                 error!("TODO: Object Attribute Memory read");
-                Accessor::ro(|_, _| &0)
+                Accessor::ro(|_, _| 0)
             }
             // Null mem
-            0xFEA0..=0xFEFF => Accessor::ro(|_, _| &0),
+            0xFEA0..=0xFEFF => Accessor::ro(|_, _| 0),
 
             // Hardware registers
             LCDC => Accessor::rw(
-                |bus, _| &bus.gpu.registers().lcdc,
+                |bus, _| bus.gpu.registers().lcdc,
                 |bus, _| &mut bus.gpu.registers_mut().lcdc,
             ),
             STAT => Accessor::rw(
-                |bus, _| &bus.gpu.registers().stat,
+                |bus, _| bus.gpu.registers().stat,
                 |bus, _| &mut bus.gpu.registers_mut().stat,
             ),
             SCY => Accessor::rw(
-                |bus, _| &bus.gpu.registers().scy,
+                |bus, _| bus.gpu.registers().scy,
                 |bus, _| &mut bus.gpu.registers_mut().scy,
             ),
             SCX => Accessor::rw(
-                |bus, _| &bus.gpu.registers().scx,
+                |bus, _| bus.gpu.registers().scx,
                 |bus, _| &mut bus.gpu.registers_mut().scx,
             ),
             DMA => Accessor::rw(
-                |bus, _| &bus.gpu.registers().dma,
+                |bus, _| bus.gpu.registers().dma,
                 |bus, _| &mut bus.gpu.registers_mut().dma,
             ),
             0xFF00..=0xFF7F => {
                 error!("TODO: I/O register read");
-                Accessor::ro(|_, _| &0)
+                Accessor::ro(|_, _| 0)
             }
 
             HIGH_RAM_START..=HIGH_RAM_LAST => Accessor::rw(
-                |bus, address| &bus.high_ram[address],
-                |bus, address| &mut bus.high_ram[address],
+                |bus, address| bus.high_ram.byte(address),
+                |bus, address| bus.high_ram.byte_mut(address),
             ),
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
-                Accessor::ro(|_, _| &0)
+                Accessor::ro(|_, _| 0)
             }
         }
     }
@@ -313,7 +311,8 @@ impl Display for AddressRange {
 /// A fixed-length block of memory
 ///
 /// TODO
-pub struct Memory {
+#[derive(Debug)]
+pub struct Memory<T> {
     /// Range of memory addresses covered by this block
     range: AddressRange,
     /// Fixed-length binary data
@@ -323,61 +322,81 @@ pub struct Memory {
     /// only be allocated once, when the memory is initialized.
     ///
     /// Invariant: length is always equal to `self.range.len()`
-    memory: Box<[u8]>,
+    memory: Box<[T]>,
 }
 
-impl Memory {
+impl<T> Memory<T> {
     /// Initialize a new fixed-length block of memory with all zeroes
-    pub fn new(range: AddressRange) -> Self {
+    pub fn new(range: AddressRange) -> Self
+    where
+        T: Clone + Default,
+    {
+        let len_bytes = range.len();
+        let size = mem::size_of::<T>();
+        debug_assert_eq!(
+            len_bytes % size,
+            0,
+            "Memory length must be divisible by item size: \
+            T={t}, len_bytes={len_bytes}, size={size}",
+            t = any::type_name::<T>(),
+        );
+        let len_t = len_bytes / size;
         Self {
             range,
-            memory: vec![0; range.len()].into_boxed_slice(),
+            memory: vec![T::default(); len_t].into_boxed_slice(),
         }
     }
 
     /// Initialize a zero-length block of memory
     #[cfg(test)]
     pub fn zero() -> Self {
-        Self::new(AddressRange::ZERO)
+        Self {
+            range: AddressRange::ZERO,
+            memory: Box::new([]),
+        }
     }
 
-    /// Get the index into `self.memory` for a memory address
+    /// Get the byte at the given memory address
+    pub fn byte(&self, address: Address) -> u8 {
+        let offset = self.byte_offset(address);
+        let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
+        // Safety:
+        // - byte_offset() ensures the offset is in range for self.memory
+        // - u8 is the smallest type so we don't have to worry about alignment
+        //   or corrupted bytes
+        unsafe { *ptr.add(offset) }
+    }
+
+    /// Get a mutable reference to the byte at the given memory address
+    pub fn byte_mut(&mut self, address: Address) -> &mut u8 {
+        let offset = self.byte_offset(address);
+        let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
+        // Safety:
+        // - byte_offset() ensures the offset is in range for self.memory
+        // - u8 is the smallest type so we don't have to worry about alignment
+        //   or corrupted bytes
+        unsafe { &mut *ptr.add(offset) }
+    }
+
+    /// Translate a global memory address into an offset for a single byte in
+    /// `self.memory`
     ///
-    /// In debug, this panics if the address is out of range.
-    fn index(&self, address: Address) -> usize {
-        debug_assert!(
+    /// This panics if the address is out of range. The returned offset is
+    /// guaranteed to be less than the **byte-length** of `self.memory`.
+    fn byte_offset(&self, address: Address) -> usize {
+        assert!(
             self.range.contains(address),
             "Address {address} out of bounds {range}",
             range = self.range
         );
-        (address.0 - self.range.start()) as usize
+        let offset = (address.0 - self.range.start()) as usize;
+        // Double extra sanity check
+        debug_assert!(offset < self.memory.len() * mem::size_of::<T>());
+        offset
     }
 }
 
-impl Debug for Memory {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Memory")
-            .field("range", &self.range)
-            .field("memory", &BytesDisplay::hex(&self.memory))
-            .finish()
-    }
-}
-
-impl Index<Address> for Memory {
-    type Output = u8;
-
-    fn index(&self, address: Address) -> &Self::Output {
-        &self.memory[self.index(address)]
-    }
-}
-
-impl IndexMut<Address> for Memory {
-    fn index_mut(&mut self, address: Address) -> &mut Self::Output {
-        &mut self.memory[self.index(address)]
-    }
-}
-
-type ReadAccessor = for<'a> fn(&'a MemoryBus, Address) -> &'a u8;
+type ReadAccessor = fn(&MemoryBus, Address) -> u8;
 type WriteAccessor = for<'a> fn(&'a mut MemoryBus, Address) -> &'a mut u8;
 
 /// A container for functions to extract a single byte value from the memory

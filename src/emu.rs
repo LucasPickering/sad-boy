@@ -54,14 +54,11 @@ pub struct GameBoy {
     /// Read-only memory from the cartridge
     rom: Rom,
     /// General-purpose writable memory
-    ///
-    /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: Memory,
+    ram: Memory<u8>,
     /// Additional general-purpose writable memory
     ///
-    /// This is most commonly used when accessed by the `LD HL, SP+imm8`
-    /// instruction.
-    high_ram: Memory,
+    /// This is most commonly used via the `LD HL, SP+imm8` instruction.
+    high_ram: Memory<u8>,
 }
 
 impl GameBoy {
