@@ -14,12 +14,20 @@ const SCANLINES_PER_FRAME: u32 = 154;
 /// Graphics registers and processing
 #[derive(Debug)]
 pub struct Gpu {
+    /// 1-byte control registers related to graphics processing
     registers: Registers,
     ppu: Ppu,
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
     tile_data: Memory,
+    /// Two 32x32 tile maps
+    ///
+    /// The first half of the block is the lower tile map; second half is the
+    /// upper tile map.
+    ///
+    /// https://gbdev.io/pandocs/Tile_Maps.html
+    tile_maps: Memory,
 }
 
 impl Gpu {
@@ -28,14 +36,34 @@ impl Gpu {
         self.ppu.execute(dots);
     }
 
-    /// Get a reference to tile data VRAM
+    /// Get GPU registers
+    pub fn registers(&self) -> &Registers {
+        &self.registers
+    }
+
+    /// Get a mutable reference to GPU registers
+    pub fn registers_mut(&mut self) -> &mut Registers {
+        &mut self.registers
+    }
+
+    /// Get a reference to tile pixel data VRAM
     pub fn tile_data(&self) -> &Memory {
         &self.tile_data
     }
 
-    /// Get a mutable reference to tile data VRAM
+    /// Get a mutable reference to tile pixel data VRAM
     pub fn tile_data_mut(&mut self) -> &mut Memory {
         &mut self.tile_data
+    }
+
+    /// Get a reference to tile maps VRAM
+    pub fn tile_maps(&self) -> &Memory {
+        &self.tile_maps
+    }
+
+    /// Get a mutable reference to tile maps VRAM
+    pub fn tile_maps_mut(&mut self) -> &mut Memory {
+        &mut self.tile_maps
     }
 }
 
@@ -45,6 +73,7 @@ impl Default for Gpu {
             registers: Registers::default(),
             ppu: Ppu::default(),
             tile_data: Memory::new(memory::TILE_DATA),
+            tile_maps: Memory::new(memory::TILE_MAPS),
         }
     }
 }
@@ -129,18 +158,18 @@ enum PpuMode {
 /// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
 /// These can be modified via the memory bus.
 #[derive(Debug, Default)]
-struct Registers {
+pub struct Registers {
     /// OAM DMA control
     ///
     /// The written value is the **high** byte of the transfer source address.
     /// Only values `0x00` to `0xDF` are valid.
-    dma: u8,
+    pub dma: u8,
     /// LCD control
-    lcdc: u8,
+    pub lcdc: u8,
     /// LCD status
-    stat: u8,
+    pub stat: u8,
     /// Viewport scroll X
-    scx: u8,
+    pub scx: u8,
     /// Viewport scroll Y
-    scy: u8,
+    pub scy: u8,
 }

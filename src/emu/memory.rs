@@ -13,20 +13,32 @@ use std::{
 };
 use tracing::error;
 
+// ===== Memory Blocks =====
+// https://gbdev.io/pandocs/Memory_Map.html
 /// Range of CPU instructions and data from a game cartridge
 const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
+/// Video RAM containing tile pixel data
+pub const TILE_DATA: AddressRange =
+    AddressRange::new("Tile Data", 0x8000, 0x97FF);
+/// Video RAM containing both tile maps
+pub const TILE_MAPS: AddressRange =
+    AddressRange::new("Tile Maps", 0x9800, 0x9FFF);
 /// Address range for general-purpose writable RAM
 pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
 const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
+/// Object Attribute Memory (part of VRAM)
+pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
 /// Address range for additional general-purpose writable RAM
 pub const HIGH_RAM: AddressRange =
     AddressRange::new("High RAM", 0xFF80, 0xFFFE);
-/// Video RAM containing tile pixel data
-pub const TILE_DATA: AddressRange =
-    AddressRange::new("Tile Data", 0x8000, 0x97FF);
-/// Object Attribute Memory (part of VRAM)
-pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
+// ===== Hardware Registers ====
+// https://gbdev.io/pandocs/Hardware_Reg_List.html
+pub const LCDC: u16 = 0xFF40;
+pub const STAT: u16 = 0xFF41;
+pub const SCY: u16 = 0xFF42;
+pub const SCX: u16 = 0xFF43;
+pub const DMA: u16 = 0xFF46;
 
 /// Generate `x_START` and `x_END` consts for a set of memory ranges
 ///
@@ -44,7 +56,7 @@ macro_rules! bounds {
 }
 
 // Generate extra consts for pattern matching
-bounds!(RAM, ECHO_RAM, HIGH_RAM, TILE_DATA, OAM);
+bounds!(TILE_DATA, TILE_MAPS, RAM, ECHO_RAM, OAM, HIGH_RAM);
 
 /// An abstraction over the addessable range of memory
 ///
@@ -152,10 +164,7 @@ impl MemoryBus<'_> {
                 &0
             }
             TILE_DATA_START..=TILE_DATA_LAST => &self.gpu.tile_data()[address],
-            0x9800..=0x9FFF => {
-                error!("TODO: Tile map read");
-                &0
-            }
+            TILE_MAPS_START..=TILE_MAPS_LAST => &self.gpu.tile_maps()[address],
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
                 &0
@@ -172,11 +181,19 @@ impl MemoryBus<'_> {
                 error!("TODO: Object Attribute Memory read");
                 &0
             }
-            0xFEA0..=0xFEFF => &0,
+            0xFEA0..=0xFEFF => &0, // Null mem
+
+            // Hardware registers
+            LCDC => &self.gpu.registers().lcdc,
+            STAT => &self.gpu.registers().stat,
+            SCY => &self.gpu.registers().scy,
+            SCX => &self.gpu.registers().scx,
+            DMA => &self.gpu.registers().dma,
             0xFF00..=0xFF7F => {
                 error!("TODO: I/O register read");
                 &0
             }
+
             HIGH_RAM_START..=HIGH_RAM_LAST => &self.high_ram[address],
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
@@ -195,7 +212,9 @@ impl MemoryBus<'_> {
             TILE_DATA_START..=TILE_DATA_LAST => {
                 Some(&mut self.gpu.tile_data_mut()[address])
             }
-            0x9800..=0x9FFF => todo!("TODO: Tile map read"),
+            TILE_MAPS_START..=TILE_MAPS_LAST => {
+                Some(&mut self.gpu.tile_maps_mut()[address])
+            }
             0xA000..=0xBFFF => todo!("Cartridge RAM"),
             RAM_START..=RAM_LAST => Some(&mut self.ram[address]),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
@@ -208,11 +227,19 @@ impl MemoryBus<'_> {
                 Some(&mut self.ram[address])
             }
             OAM_START..=OAM_LAST => None, // Object Attribute Memory
-            0xFEA0..=0xFEFF => None,
+            0xFEA0..=0xFEFF => None,      // Null mem
+
+            // Hardware registers
+            LCDC => Some(&mut self.gpu.registers_mut().lcdc),
+            STAT => Some(&mut self.gpu.registers_mut().stat),
+            SCY => Some(&mut self.gpu.registers_mut().scy),
+            SCX => Some(&mut self.gpu.registers_mut().scx),
+            DMA => Some(&mut self.gpu.registers_mut().dma),
             0xFF00..=0xFF7F => {
                 error!("unimplemented: I/O register write");
                 None
             }
+
             HIGH_RAM_START..=HIGH_RAM_LAST => Some(&mut self.high_ram[address]),
             0xFFFF => todo!("Interrupt Enabled Register"),
         }
