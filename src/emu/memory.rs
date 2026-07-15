@@ -1,9 +1,5 @@
 use crate::{
-    emu::{
-        gpu::Gpu,
-        instruction::{Address, Instruction},
-        rom::Rom,
-    },
+    emu::{gpu::Gpu, instruction::Instruction, rom::Rom},
     util::BytesDisplay,
 };
 use std::{
@@ -106,21 +102,23 @@ impl MemoryBus<'_> {
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        *self.get_ref(address)
+        let accessor = Self::accessor(address);
+        *(accessor.read)(self, address)
     }
 
     /// Get a mutable reference to a 1-byte value in memory
     ///
     /// If the memory isn't writable, return `None`.
     pub fn get8_mut(&mut self, address: Address) -> Option<&mut u8> {
-        self.get_ref_mut(address)
+        let accessor = Self::accessor(address);
+        accessor.write.map(|f| f(self, address))
     }
 
     /// Set a 1-byte value in memory
     ///
     /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
-        if let Some(byte) = self.get_ref_mut(address) {
+        if let Some(byte) = self.get8_mut(address) {
             *byte = value;
         } else {
             error!("Skipping write to read-only address {address}");
@@ -145,104 +143,120 @@ impl MemoryBus<'_> {
         self.set8(address.next(), high);
     }
 
-    /// Map an Game Boy [Address] into an address in real memory
-    ///
-    /// This will check which range the address is in, and find the
-    /// corresponding byte in RAM/ROM/etc. accordingly.
+    /// Get an [Accessor] that maps a Game Boy [Address] to real memory
     ///
     /// All 16-bit addresses are valid, so this is infallible.
-    fn get_ref(&self, address: Address) -> &u8 {
+    fn accessor(address: Address) -> Accessor {
         // https://rylev.github.io/DMG-01/public/book/memory_map.html
         match address.0 {
-            0x0000..=0x3FFF => {
+            // Game ROM
+            0x0000..=0x3FFF => Accessor::ro(|bus, address| {
                 // Safety: TODO
                 let index: usize = address.0.into();
-                &self.rom.bytes()[index]
-            }
+                &bus.rom.bytes()[index]
+            }),
             0x4000..=0x7FFF => {
-                error!("TODO: Game ROM bank N read");
-                &0
+                error!("TODO: Game ROM bank N");
+                Accessor::ro(|_, _| &0)
             }
-            TILE_DATA_START..=TILE_DATA_LAST => &self.gpu.tile_data()[address],
-            TILE_MAPS_START..=TILE_MAPS_LAST => &self.gpu.tile_maps()[address],
+            TILE_DATA_START..=TILE_DATA_LAST => Accessor::rw(
+                |bus, address| &bus.gpu.tile_data()[address],
+                |bus, address| &mut bus.gpu.tile_data_mut()[address],
+            ),
+            TILE_MAPS_START..=TILE_MAPS_LAST => Accessor::rw(
+                |bus, address| &bus.gpu.tile_maps()[address],
+                |bus, address| &mut bus.gpu.tile_maps_mut()[address],
+            ),
+
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
-                &0
+                Accessor::ro(|_, _| &0)
             }
-            RAM_START..=RAM_LAST => &self.ram[address],
+            RAM_START..=RAM_LAST => Accessor::rw(
+                |bus, address| &bus.ram[address],
+                |bus, address| &mut bus.ram[address],
+            ),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
                 // Shift to the main RAM section
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
-                &self.ram[address]
+                Self::accessor(address)
             }
             OAM_START..=OAM_LAST => {
                 error!("TODO: Object Attribute Memory read");
-                &0
+                Accessor::ro(|_, _| &0)
             }
-            0xFEA0..=0xFEFF => &0, // Null mem
+            // Null mem
+            0xFEA0..=0xFEFF => Accessor::ro(|_, _| &0),
 
             // Hardware registers
-            LCDC => &self.gpu.registers().lcdc,
-            STAT => &self.gpu.registers().stat,
-            SCY => &self.gpu.registers().scy,
-            SCX => &self.gpu.registers().scx,
-            DMA => &self.gpu.registers().dma,
+            LCDC => Accessor::rw(
+                |bus, _| &bus.gpu.registers().lcdc,
+                |bus, _| &mut bus.gpu.registers_mut().lcdc,
+            ),
+            STAT => Accessor::rw(
+                |bus, _| &bus.gpu.registers().stat,
+                |bus, _| &mut bus.gpu.registers_mut().stat,
+            ),
+            SCY => Accessor::rw(
+                |bus, _| &bus.gpu.registers().scy,
+                |bus, _| &mut bus.gpu.registers_mut().scy,
+            ),
+            SCX => Accessor::rw(
+                |bus, _| &bus.gpu.registers().scx,
+                |bus, _| &mut bus.gpu.registers_mut().scx,
+            ),
+            DMA => Accessor::rw(
+                |bus, _| &bus.gpu.registers().dma,
+                |bus, _| &mut bus.gpu.registers_mut().dma,
+            ),
             0xFF00..=0xFF7F => {
                 error!("TODO: I/O register read");
-                &0
+                Accessor::ro(|_, _| &0)
             }
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => &self.high_ram[address],
+            HIGH_RAM_START..=HIGH_RAM_LAST => Accessor::rw(
+                |bus, address| &bus.high_ram[address],
+                |bus, address| &mut bus.high_ram[address],
+            ),
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
-                &0
+                Accessor::ro(|_, _| &0)
             }
         }
     }
+}
 
-    /// Map an Game Boy [Address] to an a mutable reference to real memory
+/// Address of a byte of memory
+///
+/// The Game Boy memory range covers the entire `u16` range, so all addresses
+/// are valid.
+///
+/// https://rylev.github.io/DMG-01/public/book/memory_map.html
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct Address(pub u16);
+
+impl Address {
+    /// Get the next address after this one (+1 byte)
     ///
-    /// Return `None` if the addressed memory is not writable.
-    fn get_ref_mut(&mut self, address: Address) -> Option<&mut u8> {
-        // TODO dedupe this with get_ref()
-        match address.0 {
-            0x0000..=0x7FFF => None, // Cartridge ROM
-            TILE_DATA_START..=TILE_DATA_LAST => {
-                Some(&mut self.gpu.tile_data_mut()[address])
-            }
-            TILE_MAPS_START..=TILE_MAPS_LAST => {
-                Some(&mut self.gpu.tile_maps_mut()[address])
-            }
-            0xA000..=0xBFFF => todo!("Cartridge RAM"),
-            RAM_START..=RAM_LAST => Some(&mut self.ram[address]),
-            ECHO_RAM_START..=ECHO_RAM_LAST => {
-                // Make sure mirrored references can't go out of bounds
-                debug_assert!(ECHO_RAM.len() <= RAM.len());
-                // Shift to the main RAM section
-                // Safety: self.ram is LARGER than the echo RAM section
-                // TODO move this into a helper fn on AddressRange
-                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
-                Some(&mut self.ram[address])
-            }
-            OAM_START..=OAM_LAST => None, // Object Attribute Memory
-            0xFEA0..=0xFEFF => None,      // Null mem
+    /// Useful for accessing 16-bit values as two separate bytes.
+    pub fn next(self) -> Self {
+        // TODO check if self == 0xffff
+        Self(self.0 + 1)
+    }
+}
 
-            // Hardware registers
-            LCDC => Some(&mut self.gpu.registers_mut().lcdc),
-            STAT => Some(&mut self.gpu.registers_mut().stat),
-            SCY => Some(&mut self.gpu.registers_mut().scy),
-            SCX => Some(&mut self.gpu.registers_mut().scx),
-            DMA => Some(&mut self.gpu.registers_mut().dma),
-            0xFF00..=0xFF7F => {
-                error!("unimplemented: I/O register write");
-                None
-            }
+impl Debug for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self, f) // Defer to Display
+    }
+}
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => Some(&mut self.high_ram[address]),
-            0xFFFF => todo!("Interrupt Enabled Register"),
-        }
+impl Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const ADDRESS_WIDTH: usize = 4;
+        write!(f, "0x{:0>ADDRESS_WIDTH$X}", self.0)
     }
 }
 
@@ -361,5 +375,37 @@ impl Index<Address> for Memory {
 impl IndexMut<Address> for Memory {
     fn index_mut(&mut self, address: Address) -> &mut Self::Output {
         &mut self.memory[self.index(address)]
+    }
+}
+
+type ReadAccessor = for<'a> fn(&'a MemoryBus, Address) -> &'a u8;
+type WriteAccessor = for<'a> fn(&'a mut MemoryBus, Address) -> &'a mut u8;
+
+/// A container for functions to extract a single byte value from the memory
+/// bus
+///
+/// This maps a Game Boy [Address] to real memory. Its purpose is to deduplicate
+/// const and mutable access, eliminating the need for two different match
+/// statements over the entire memory range. Maybe a "better" way would be a
+/// custom match macro, but I hate big macros because they break formatting.
+///
+/// Some memory is read-only, in which case there will be no mutable accessor.
+struct Accessor {
+    read: ReadAccessor,
+    write: Option<WriteAccessor>,
+}
+
+impl Accessor {
+    /// Read-only memory accessor
+    fn ro(read: ReadAccessor) -> Self {
+        Self { read, write: None }
+    }
+
+    /// Read-write memory accessor
+    fn rw(read: ReadAccessor, write: WriteAccessor) -> Self {
+        Self {
+            read,
+            write: Some(write),
+        }
     }
 }

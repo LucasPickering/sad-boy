@@ -1,10 +1,13 @@
 //! ROM loading and parsing
 
 use crate::{
-    emu::instruction::{
-        Add, Address, ConditionCode, DecInc, Instruction, Jump, Load, LoadHigh,
-        Operand, Register8, Register16, Register16Memory, Register16Stack,
-        Value8,
+    emu::{
+        instruction::{
+            Add, ConditionCode, DecInc, Instruction, Jump, Load, LoadHigh,
+            Operand, Register8, Register16, Register16Memory, Register16Stack,
+            Value8,
+        },
+        memory::Address,
     },
     util::{Bit, BytesDisplay},
 };

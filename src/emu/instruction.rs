@@ -1,7 +1,6 @@
 //! Game Boy CPU instructions
 
-use crate::util::Bit;
-use std::fmt::{self, Debug, Display};
+use crate::{emu::memory::Address, util::Bit};
 
 /// CPU instruction
 ///
@@ -326,36 +325,4 @@ pub enum ConditionCode {
     C,
     /// Execute if `carry` flag is not set
     Nc,
-}
-
-/// Address of a byte of memory
-///
-/// The Game Boy memory range covers the entire `u16` range, so all addresses
-/// are valid.
-///
-/// https://rylev.github.io/DMG-01/public/book/memory_map.html
-#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Address(pub u16);
-
-impl Address {
-    /// Get the next address after this one (+1 byte)
-    ///
-    /// Useful for accessing 16-bit values as two separate bytes.
-    pub fn next(self) -> Self {
-        // TODO check if self == 0xffff
-        Self(self.0 + 1)
-    }
-}
-
-impl Debug for Address {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self, f) // Defer to Display
-    }
-}
-
-impl Display for Address {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const ADDRESS_WIDTH: usize = 4;
-        write!(f, "0x{:0>ADDRESS_WIDTH$X}", self.0)
-    }
 }

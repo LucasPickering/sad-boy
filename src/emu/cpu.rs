@@ -5,10 +5,10 @@ mod math;
 use crate::{
     emu::{
         instruction::{
-            Address, ConditionCode, Instruction, Jump, Load, LoadHigh,
-            Register8, Register16, Register16Memory, Register16Stack, Value8,
+            ConditionCode, Instruction, Jump, Load, LoadHigh, Register8,
+            Register16, Register16Memory, Register16Stack, Value8,
         },
-        memory::{self, MemoryBus},
+        memory::{self, Address, MemoryBus},
     },
     util::Bit,
 };
@@ -268,7 +268,6 @@ impl CpuExe<'_, '_> {
     /// Execute a function call
     fn call(
         &mut self,
-
         address: Address,
         condition: Option<ConditionCode>,
     ) -> Cycles {
