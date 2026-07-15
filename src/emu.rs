@@ -12,7 +12,7 @@ use crate::{
     emu::{
         cpu::{Cpu, Cycles},
         gpu::Gpu,
-        memory::{HIGH_RAM_LEN, Memory, MemoryBus, RAM_LEN},
+        memory::{Memory, MemoryBus},
         rom::Rom,
     },
     screen::Screen,
@@ -56,12 +56,12 @@ pub struct GameBoy {
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: Memory<RAM_LEN>,
+    ram: Memory,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    high_ram: Memory<HIGH_RAM_LEN>,
+    high_ram: Memory,
 }
 
 impl GameBoy {
@@ -72,8 +72,8 @@ impl GameBoy {
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
-            ram: Memory::default(),
-            high_ram: Memory::default(),
+            ram: Memory::new(memory::RAM),
+            high_ram: Memory::new(memory::HIGH_RAM),
         })
     }
 

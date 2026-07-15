@@ -330,6 +330,9 @@ pub enum ConditionCode {
 
 /// Address of a byte of memory
 ///
+/// The Game Boy memory range covers the entire `u16` range, so all addresses
+/// are valid.
+///
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
 #[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);

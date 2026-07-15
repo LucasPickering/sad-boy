@@ -8,7 +8,8 @@ use crate::{
 };
 use std::{
     fmt::{self, Debug, Display},
-    ops::{Deref, DerefMut, RangeInclusive},
+    ops::{Index, IndexMut},
+    range::RangeInclusive,
 };
 use tracing::error;
 
@@ -19,30 +20,41 @@ pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
 const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
 /// Address range for additional general-purpose writable RAM
-const HIGH_RAM: AddressRange = AddressRange::new("High RAM", 0xFF80, 0xFFFE);
+pub const HIGH_RAM: AddressRange =
+    AddressRange::new("High RAM", 0xFF80, 0xFFFE);
 /// Video RAM containing tile pixel data
-const TILE_DATA: AddressRange = AddressRange::new("Tile Data", 0x8000, 0x97FF);
+pub const TILE_DATA: AddressRange =
+    AddressRange::new("Tile Data", 0x8000, 0x97FF);
 /// Object Attribute Memory (part of VRAM)
-const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
+pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
 
-// Extra consts for where expressions aren't allowed
-const RAM_START: u16 = RAM.start();
-const RAM_END: u16 = RAM.end();
-pub const RAM_LEN: usize = RAM.len();
-const ECHO_RAM_START: u16 = ECHO_RAM.start();
-const ECHO_RAM_END: u16 = ECHO_RAM.end();
-const HIGH_RAM_START: u16 = HIGH_RAM.start();
-const HIGH_RAM_END: u16 = HIGH_RAM.end();
-pub const HIGH_RAM_LEN: usize = HIGH_RAM.len();
-const TILE_DATA_START: u16 = TILE_DATA.start();
-const TILE_DATA_END: u16 = TILE_DATA.end();
-pub const TILE_DATA_LEN: usize = TILE_DATA.len();
-const OAM_START: u16 = OAM.start();
-const OAM_END: u16 = OAM.end();
+/// Generate `x_START` and `x_END` consts for a set of memory ranges
+///
+/// These consts are needed to use the start/end in pattern matching, where
+/// complex expressions aren't allowed.
+macro_rules! bounds {
+    // macro_rules! doesn't support creating identifiers automatically, so the
+    // caller has to pass them in.
+    ($(($range:expr, $start:ident, $last:ident)),* $(,)?) => {
+        $(
+            const $start: u16 = $range.start();
+            const $last: u16 = $range.last();
+        )*
+    };
+}
+
+// Extra consts for pattern matching
+bounds!(
+    (RAM, RAM_START, RAM_LAST),
+    (ECHO_RAM, ECHO_RAM_START, ECHO_RAM_LAST),
+    (HIGH_RAM, HIGH_RAM_START, HIGH_RAM_LAST),
+    (TILE_DATA, TILE_DATA_START, TILE_DATA_LAST),
+    (OAM, OAM_START, OAM_LAST),
+);
 
 /// An abstraction over the addessable range of memory
 ///
-/// This holds references to all the parts of memory that can be access, and
+/// This holds references to all the parts of memory that can be accessed, and
 /// aliases to each component based on given memory addresses. This allows each
 /// component of memory/registers/etc. to be owned by its relevant module and
 /// handed out to the CPU only as needed.
@@ -55,12 +67,12 @@ pub struct MemoryBus<'a> {
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    pub ram: &'a mut Memory<RAM_LEN>,
+    pub ram: &'a mut Memory,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    pub high_ram: &'a mut Memory<HIGH_RAM_LEN>,
+    pub high_ram: &'a mut Memory,
     /// GPU holds VRAM and graphics registers
     pub gpu: &'a mut Gpu,
 }
@@ -145,11 +157,7 @@ impl MemoryBus<'_> {
                 error!("TODO: Game ROM bank N read");
                 &0
             }
-            TILE_DATA_START..=TILE_DATA_END => {
-                // Safety: TODO
-                let index: usize = address.0.into();
-                &self.gpu.tile_data()[index]
-            }
+            TILE_DATA_START..=TILE_DATA_LAST => &self.gpu.tile_data()[address],
             0x9800..=0x9FFF => {
                 error!("TODO: Tile map read");
                 &0
@@ -158,19 +166,15 @@ impl MemoryBus<'_> {
                 error!("TODO: Cartridge RAM read");
                 &0
             }
-            RAM_START..=RAM_END => {
-                // Safety: self.ram is initialized to the same length as
-                // this range
-                let index = (address.0 - RAM.start()) as usize;
-                &self.ram[index]
-            }
-            ECHO_RAM_START..=ECHO_RAM_END => {
+            RAM_START..=RAM_LAST => &self.ram[address],
+            ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
-                let index = (address.0 - ECHO_RAM_START) as usize;
-                &self.ram[index]
+                // Shift to the main RAM section
+                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
+                &self.ram[address]
             }
-            OAM_START..=OAM_END => {
+            OAM_START..=OAM_LAST => {
                 error!("TODO: Object Attribute Memory read");
                 &0
             }
@@ -179,12 +183,7 @@ impl MemoryBus<'_> {
                 error!("TODO: I/O register read");
                 &0
             }
-            HIGH_RAM_START..=HIGH_RAM_END => {
-                // Safety: self.high_ram is initialized to the same length as
-                // this range
-                let index = (address.0 - HIGH_RAM.start()) as usize;
-                &self.high_ram[index]
-            }
+            HIGH_RAM_START..=HIGH_RAM_LAST => &self.high_ram[address],
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
                 &0
@@ -199,73 +198,70 @@ impl MemoryBus<'_> {
         // TODO dedupe this with get_ref()
         match address.0 {
             0x0000..=0x7FFF => None, // Cartridge ROM
-            TILE_DATA_START..=TILE_DATA_END => {
-                // Safety: self.tile_data is initialized to the same length
-                // as this range
-                let index: usize = address.0.into();
-                Some(&mut self.gpu.tile_data_mut()[index])
+            TILE_DATA_START..=TILE_DATA_LAST => {
+                Some(&mut self.gpu.tile_data_mut()[address])
             }
             0x9800..=0x9FFF => todo!("TODO: Tile map read"),
             0xA000..=0xBFFF => todo!("Cartridge RAM"),
-            RAM_START..=RAM_END => {
-                // Safety: self.ram is initialized to the same length as
-                // this range
-                let index = (address.0 - RAM.start()) as usize;
-                Some(&mut self.ram[index])
-            }
-            ECHO_RAM_START..=ECHO_RAM_END => {
+            RAM_START..=RAM_LAST => Some(&mut self.ram[address]),
+            ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
-                // Echo RAM
+                // Shift to the main RAM section
                 // Safety: self.ram is LARGER than the echo RAM section
-                let index = (address.0 - ECHO_RAM_START) as usize;
-                Some(&mut self.ram[index])
+                // TODO move this into a helper fn on AddressRange
+                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
+                Some(&mut self.ram[address])
             }
-            OAM_START..=OAM_END => None, // Object Attribute Memory
+            OAM_START..=OAM_LAST => None, // Object Attribute Memory
             0xFEA0..=0xFEFF => None,
             0xFF00..=0xFF7F => {
                 error!("unimplemented: I/O register write");
                 None
             }
-            HIGH_RAM_START..=HIGH_RAM_END => {
-                // Safety: self.high_ram is initialized to the same length as
-                // this range
-                let index = (address.0 - HIGH_RAM.start()) as usize;
-                Some(&mut self.high_ram[index])
-            }
+            HIGH_RAM_START..=HIGH_RAM_LAST => Some(&mut self.high_ram[address]),
             0xFFFF => todo!("Interrupt Enabled Register"),
         }
     }
 }
 
 /// A range of memory addresses
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AddressRange {
     name: &'static str,
     range: RangeInclusive<Address>,
 }
 
 impl AddressRange {
+    /// Empty address range
+    #[cfg(test)]
+    const ZERO: Self = Self::new("Zero", 0, 0);
+
     /// Define a range of memory
     pub const fn new(name: &'static str, start: u16, end: u16) -> Self {
         Self {
             name,
-            range: Address(start)..=Address(end),
+            range: RangeInclusive {
+                start: Address(start),
+                last: Address(end),
+            },
         }
     }
 
     /// Get the number of bytes in the range
     const fn len(&self) -> usize {
         // The end is inclusive, so we need +1 to count it
-        (self.range.end().0 - self.range.start().0 + 1) as usize
+        (self.range.last.0 - self.range.start.0 + 1) as usize
     }
 
+    /// First address included in the range
     pub const fn start(&self) -> u16 {
-        self.range.start().0
+        self.range.start.0
     }
 
-    pub const fn end(&self) -> u16 {
-        self.range.end().0
+    /// Last address included in the range
+    pub const fn last(&self) -> u16 {
+        self.range.last.0
     }
 
     pub fn contains(&self, address: Address) -> bool {
@@ -276,37 +272,73 @@ impl AddressRange {
 impl Display for AddressRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let range = &self.range;
-        write!(f, "{} [{}, {}]", self.name, range.start(), range.end())
+        write!(f, "{} [{}, {}]", self.name, range.start, range.last)
     }
 }
 
 /// A fixed-length block of memory
 ///
-/// This is a newtype for a byte array. It provides better debug formatting.
-pub struct Memory<const N: usize>(Box<[u8; N]>);
+/// TODO
+pub struct Memory {
+    /// Range of memory addresses covered by this block
+    range: AddressRange,
+    /// Fixed-length binary data
+    ///
+    /// The length could be known and fixed at compile time, but plumbing that
+    /// around is tedious with Rust's limited const generics. This slice will
+    /// only be allocated once, when the memory is initialized.
+    ///
+    /// Invariant: length is always equal to `self.range.len()`
+    memory: Box<[u8]>,
+}
 
-impl<const N: usize> Default for Memory<N> {
-    fn default() -> Self {
-        Self(Box::new([0; N]))
+impl Memory {
+    /// Initialize a new fixed-length block of memory with all zeroes
+    pub fn new(range: AddressRange) -> Self {
+        Self {
+            range,
+            memory: vec![0; range.len()].into_boxed_slice(),
+        }
+    }
+
+    /// Initialize a zero-length block of memory
+    #[cfg(test)]
+    pub fn zero() -> Self {
+        Self::new(AddressRange::ZERO)
+    }
+
+    /// Get the index into `self.memory` for a memory address
+    ///
+    /// In debug, this panics if the address is out of range.
+    fn index(&self, address: Address) -> usize {
+        debug_assert!(
+            self.range.contains(address),
+            "Address {address} out of bounds {range}",
+            range = self.range
+        );
+        (address.0 - self.range.start()) as usize
     }
 }
 
-impl<const N: usize> Debug for Memory<N> {
+impl Debug for Memory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&BytesDisplay::hex(&*self.0), f)
+        f.debug_struct("Memory")
+            .field("range", &self.range)
+            .field("memory", &BytesDisplay::hex(&self.memory))
+            .finish()
     }
 }
 
-impl<const N: usize> Deref for Memory<N> {
-    type Target = [u8];
+impl Index<Address> for Memory {
+    type Output = u8;
 
-    fn deref(&self) -> &Self::Target {
-        &*self.0
+    fn index(&self, address: Address) -> &Self::Output {
+        &self.memory[self.index(address)]
     }
 }
 
-impl<const N: usize> DerefMut for Memory<N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.0
+impl IndexMut<Address> for Memory {
+    fn index_mut(&mut self, address: Address) -> &mut Self::Output {
+        &mut self.memory[self.index(address)]
     }
 }

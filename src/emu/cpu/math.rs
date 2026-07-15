@@ -388,8 +388,8 @@ mod tests {
         let mut cpu = Cpu::default();
         let mut memory = MemoryBus {
             rom: &Rom::empty(),
-            ram: &mut Memory::default(),
-            high_ram: &mut Memory::default(),
+            ram: &mut Memory::zero(),
+            high_ram: &mut Memory::zero(),
             gpu: &mut Gpu::default(),
         };
         cpu.registers.a = lhs;

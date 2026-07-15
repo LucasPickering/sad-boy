@@ -5,24 +5,21 @@
 
 use crate::emu::{
     cpu::Cycles,
-    memory::{Memory, TILE_DATA_LEN},
+    memory::{self, Memory},
 };
 
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
 
-type TileData = Memory<TILE_DATA_LEN>;
-
 /// Graphics registers and processing
-#[derive(Debug, Default)]
-
+#[derive(Debug)]
 pub struct Gpu {
     registers: Registers,
     ppu: Ppu,
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: TileData,
+    tile_data: Memory,
 }
 
 impl Gpu {
@@ -32,13 +29,23 @@ impl Gpu {
     }
 
     /// Get a reference to tile data VRAM
-    pub fn tile_data(&self) -> &Memory<TILE_DATA_LEN> {
+    pub fn tile_data(&self) -> &Memory {
         &self.tile_data
     }
 
     /// Get a mutable reference to tile data VRAM
-    pub fn tile_data_mut(&mut self) -> &mut Memory<TILE_DATA_LEN> {
+    pub fn tile_data_mut(&mut self) -> &mut Memory {
         &mut self.tile_data
+    }
+}
+
+impl Default for Gpu {
+    fn default() -> Self {
+        Self {
+            registers: Registers::default(),
+            ppu: Ppu::default(),
+            tile_data: Memory::new(memory::TILE_DATA),
+        }
     }
 }
 

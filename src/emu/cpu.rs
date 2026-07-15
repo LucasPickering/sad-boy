@@ -660,7 +660,7 @@ impl Default for Registers {
             l: 0,
             h: 0,
             // Stack starts at the end of RAM
-            sp: Address(memory::RAM.end() + 1),
+            sp: Address(memory::RAM.last() + 1),
             // Skip the boot ROM, go straight to the game's ROM
             // https://gbdev.io/pandocs/Power_Up_Sequence.html
             pc: Address(0x0100),
