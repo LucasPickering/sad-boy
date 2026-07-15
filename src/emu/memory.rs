@@ -167,7 +167,6 @@ impl MemoryBus<'_> {
                 |bus, address| &bus.gpu.tile_maps()[address],
                 |bus, address| &mut bus.gpu.tile_maps_mut()[address],
             ),
-
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
                 Accessor::ro(|_, _| &0)

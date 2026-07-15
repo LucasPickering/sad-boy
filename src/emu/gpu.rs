@@ -7,6 +7,7 @@ use crate::emu::{
     cpu::Cycles,
     memory::{self, Memory},
 };
+use static_assertions::assert_eq_size;
 
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
@@ -17,6 +18,10 @@ pub struct Gpu {
     /// 1-byte control registers related to graphics processing
     registers: Registers,
     ppu: Ppu,
+    /// Object Attribute Memory
+    ///
+    /// https://gbdev.io/pandocs/OAM.html
+    oam: [ObjectAttributes; 40],
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
@@ -72,10 +77,32 @@ impl Default for Gpu {
         Self {
             registers: Registers::default(),
             ppu: Ppu::default(),
+            oam: [ObjectAttributes::default(); 40],
             tile_data: Memory::new(memory::TILE_DATA),
             tile_maps: Memory::new(memory::TILE_MAPS),
         }
     }
+}
+
+/// Registers in the GPU
+///
+/// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
+/// These can be modified via the memory bus.
+#[derive(Debug, Default)]
+pub struct Registers {
+    /// OAM DMA control
+    ///
+    /// The written value is the **high** byte of the transfer source address.
+    /// Only values `0x00` to `0xDF` are valid.
+    pub dma: u8,
+    /// LCD control
+    pub lcdc: u8,
+    /// LCD status
+    pub stat: u8,
+    /// Viewport scroll X
+    pub scx: u8,
+    /// Viewport scroll Y
+    pub scy: u8,
 }
 
 /// Pixel Processing Unit
@@ -153,23 +180,33 @@ enum PpuMode {
     Drawing,
 }
 
-/// Registers in the GPU
+/// Metadata specifying a single pixel object
 ///
-/// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
-/// These can be modified via the memory bus.
-#[derive(Debug, Default)]
-pub struct Registers {
-    /// OAM DMA control
+/// https://gbdev.io/pandocs/OAM.html
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)] // Memory layout matters here
+struct ObjectAttributes {
+    // Field order must match the doc above
+    /// Vertical position of the object + 16
+    y: u8,
+    /// Horizontal position of the object + 8
+    x: u8,
+    /// Index of the tile defining this object
     ///
-    /// The written value is the **high** byte of the transfer source address.
-    /// Only values `0x00` to `0xDF` are valid.
-    pub dma: u8,
-    /// LCD control
-    pub lcdc: u8,
-    /// LCD status
-    pub stat: u8,
-    /// Viewport scroll X
-    pub scx: u8,
-    /// Viewport scroll Y
-    pub scy: u8,
+    /// For 8x8 tiles, this is the index into the tile map for the object's
+    /// only tile. For 8x16 tiles, it's the index of the first (upper) tile,
+    /// and the lower tile is the subsequent tile in the map.
+    tile_index: TileIndex,
+    /// TODO
+    flags: u8,
 }
+
+// Memory layout relies on this being 4 bytes
+assert_eq_size!(ObjectAttributes, [u8; 4]);
+
+/// Index of a single tile in a tile map
+///
+/// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+struct TileIndex(u8);
