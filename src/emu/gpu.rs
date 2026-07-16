@@ -8,7 +8,7 @@ use crate::{
         cpu::Cycles,
         memory::{self, Memory},
     },
-    util::{Bit, BitPack, Mask, PackedBits, impl_bit_pack},
+    util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
 use std::{fmt::Debug, mem};
 
@@ -116,11 +116,38 @@ pub struct Registers {
     /// LCD control
     pub lcdc: u8,
     /// LCD status
-    pub stat: u8,
+    pub stat: PackedBits<LcdStatus>,
     /// Viewport scroll X
     pub scx: u8,
     /// Viewport scroll Y
     pub scy: u8,
+}
+
+/// Bit-packed values in the `STAT` register
+#[derive(Debug)]
+pub struct LcdStatus {
+    /// TODO
+    lyc_interrupt: bool,
+    /// TODO
+    mode_2_interrupt: bool,
+    /// TODO
+    mode_1_interrupt: bool,
+    /// TODO
+    mode_0_interrupt: bool,
+    /// TODO
+    lyc_equal_ly: bool,
+    /// TODO
+    ppu_mode: PpuMode,
+}
+
+impl_bit_pack! {
+    struct LcdStatus;
+    Bit(6).mask() => lyc_interrupt,
+    Bit(5).mask() => mode_2_interrupt,
+    Bit(4).mask() => mode_1_interrupt,
+    Bit(3).mask() => mode_0_interrupt,
+    Bit(2).mask() => lyc_equal_ly,
+    Mask::M10 => ppu_mode,
 }
 
 /// Pixel Processing Unit
@@ -198,6 +225,14 @@ enum PpuMode {
     Drawing,
 }
 
+impl_bit_pack! {
+    enum PpuMode;
+    0b00 => HorizontalBlank,
+    0b01 => VerticalBlank,
+    0b10 => OamScan,
+    0b11 => Drawing,
+}
+
 /// An 8x8 collection of pixels
 ///
 /// https://gbdev.io/pandocs/Tile_Data.html
@@ -260,7 +295,7 @@ struct ObjectFlags {
 }
 
 impl_bit_pack! {
-    ObjectFlags;
+    struct ObjectFlags;
     Mask::M210 => cgb_palette,
     Bit(3).mask() => bank,
     Bit(4).mask() => dmg_palette,
@@ -269,16 +304,31 @@ impl_bit_pack! {
     Bit(7).mask() => priority,
 }
 
-impl BitPack for bool {
-    fn from_bits(bits: u8) -> Self {
-        (bits & 0b1) == 1
-    }
-
-    fn to_bits(&self) -> u8 {
-        (*self).into()
-    }
+/// Color palette selection in OAM flags for DMG (original Game Boy) mode
+enum DmgPalette {
+    Obp0,
+    Obp1,
 }
 
+impl_bit_pack! {
+    enum DmgPalette;
+    0b0 => Obp0,
+    0b1 => Obp1,
+}
+
+/// VRAM bank selection in OAM flags
+enum VramBank {
+    Bank0,
+    Bank1,
+}
+
+impl_bit_pack! {
+    enum VramBank;
+    0b0 => Bank0,
+    0b1 => Bank1,
+}
+
+/// Color palette selection in OAM flags for CGB (Game Boy Color) mode
 enum CgbPalette {
     Obp0,
     Obp1,
@@ -290,75 +340,14 @@ enum CgbPalette {
     Obp7,
 }
 
-impl BitPack for CgbPalette {
-    fn from_bits(bits: u8) -> Self {
-        match bits & 0b111 {
-            0b000 => Self::Obp0,
-            0b001 => Self::Obp1,
-            0b010 => Self::Obp2,
-            0b011 => Self::Obp3,
-            0b100 => Self::Obp4,
-            0b101 => Self::Obp5,
-            0b110 => Self::Obp6,
-            0b111 => Self::Obp7,
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_bits(&self) -> u8 {
-        match self {
-            Self::Obp0 => 0b000,
-            Self::Obp1 => 0b001,
-            Self::Obp2 => 0b010,
-            Self::Obp3 => 0b011,
-            Self::Obp4 => 0b100,
-            Self::Obp5 => 0b101,
-            Self::Obp6 => 0b110,
-            Self::Obp7 => 0b111,
-        }
-    }
-}
-
-enum VramBank {
-    Bank0,
-    Bank1,
-}
-
-impl BitPack for VramBank {
-    fn from_bits(bits: u8) -> Self {
-        match bits & 0b1 {
-            0b0 => Self::Bank0,
-            0b1 => Self::Bank1,
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_bits(&self) -> u8 {
-        match self {
-            Self::Bank0 => 0b0,
-            Self::Bank1 => 0b1,
-        }
-    }
-}
-
-enum DmgPalette {
-    Obp0,
-    Obp1,
-}
-
-impl BitPack for DmgPalette {
-    fn from_bits(bits: u8) -> Self {
-        match bits & 0b1 {
-            0b0 => Self::Obp0,
-            0b1 => Self::Obp1,
-            _ => unreachable!(),
-        }
-    }
-
-    fn to_bits(&self) -> u8 {
-        match self {
-            Self::Obp0 => 0b0,
-            Self::Obp1 => 0b1,
-        }
-    }
+impl_bit_pack! {
+    enum CgbPalette;
+    0b000 => Obp0,
+    0b001 => Obp1,
+    0b010 => Obp2,
+    0b011 => Obp3,
+    0b100 => Obp4,
+    0b101 => Obp5,
+    0b110 => Obp6,
+    0b111 => Obp7,
 }

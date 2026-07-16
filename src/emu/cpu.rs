@@ -759,7 +759,7 @@ struct BcdFlags {
 }
 
 impl_bit_pack! {
-    BcdFlags;
+    struct BcdFlags;
     Bit(7).mask() => zero,
     Bit(6).mask() => subtract,
     Bit(5).mask() => half_carry,
@@ -801,7 +801,7 @@ mod tests {
     }
 
     fn f(registers: &mut Registers) -> &mut u8 {
-        registers.f.value_mut()
+        &mut registers.f
     }
 
     fn b(registers: &mut Registers) -> &mut u8 {

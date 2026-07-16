@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Debug, Display},
     marker::PhantomData,
-    ops::{BitAnd, BitOr, Not},
+    ops::{BitAnd, BitOr, Deref, DerefMut, Not},
 };
 
 /// Index of a single bit in a byte
@@ -39,6 +39,8 @@ pub struct Mask(u8);
 impl Mask {
     /// Mask with no bits
     pub const ZERO: Self = Self(0);
+    /// Mask for bits 1-0
+    pub const M10: Self = Self(0b0000_0011);
     /// Mask for bits 2-0
     pub const M210: Self = Self(0b0000_0111);
     /// Mask for bits 4-3
@@ -115,7 +117,8 @@ impl BitOr for Mask {
 /// `BitPack` struct is composed of various `BitPack` fields such as bools and
 /// enums. Each field can be either one or multiple bits.
 ///
-/// For structs, do **not** implement this manually. Use [impl_bit_pack].
+/// Do **not** implement this manually. Use [impl_bit_pack] for enums and
+/// structs.
 pub trait BitPack: Sized {
     /// Convert from bits to this value
     fn from_bits(bits: u8) -> Self;
@@ -129,15 +132,28 @@ pub trait BitPack: Sized {
     }
 }
 
-/// Implement [BitPack] for structs
+impl BitPack for bool {
+    fn from_bits(bits: u8) -> Self {
+        (bits & 0b1) == 1
+    }
+
+    fn to_bits(&self) -> u8 {
+        (*self).into()
+    }
+}
+
+/// Implement [BitPack] for structs and enums
 ///
-/// This maps each struct's field to a specific bit mask. The conversions
+/// For structs, this maps each field to a specific bit mask. The conversions
 /// to/from bits are implemented automatically based on that mapping.
 ///
-/// It's impossible to forget a field with this implementation because the
-/// struct initialization will produce a compile error.
+/// For enums, it maps each variant to a static byte value. Supported for unit
+/// enums only.
+///
+/// It's impossible to forget a field/variant with this implementation because
+/// the generated code will produce a compile error.
 macro_rules! impl_bit_pack {
-    ($type:ty; $($mask:expr => $field:ident),* $(,)?) => {
+    (struct $type:ty; $($mask:expr => $field:ident),* $(,)?) => {
         impl $crate::util::BitPack for $type {
             fn from_bits(bits: u8) -> Self {
                 Self {
@@ -151,6 +167,22 @@ macro_rules! impl_bit_pack {
                 let mut bits = 0;
                 $(bits |= self.$field.to_bits() << $mask.shift();)*
                 bits
+            }
+        }
+    };
+    (enum $type:ty; $($value:literal => $variant:ident),* $(,)?) => {
+        impl $crate::util::BitPack for $type {
+            fn from_bits(bits: u8) -> Self {
+                match bits {
+                    $($value => Self::$variant,)*
+                    _ => unreachable!("TODO"),
+                }
+            }
+
+            fn to_bits(&self) -> u8 {
+                match self {
+                    $(Self::$variant => $value,)*
+                }
             }
         }
     };
@@ -172,11 +204,6 @@ impl<T: BitPack> PackedBits<T> {
             value,
             ty: PhantomData,
         }
-    }
-
-    #[cfg(test)]
-    pub fn value_mut(&mut self) -> &mut u8 {
-        &mut self.value
     }
 
     /// Unpack a byte value into a `T` using its [BitPack] implementation
@@ -205,6 +232,20 @@ impl<T> Default for PackedBits<T> {
             value: 0,
             ty: PhantomData,
         }
+    }
+}
+
+impl<T> Deref for PackedBits<T> {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for PackedBits<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
     }
 }
 
