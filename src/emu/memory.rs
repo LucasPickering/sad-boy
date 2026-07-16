@@ -362,6 +362,11 @@ impl<T> Memory<T> {
         }
     }
 
+    /// Get the inner slice of `T` values
+    pub fn as_values(&self) -> &[T] {
+        &self.memory
+    }
+
     /// Get the byte at the given memory address
     pub fn byte(&self, address: Address) -> u8 {
         let offset = self.byte_offset(address);

@@ -87,6 +87,55 @@ impl Gpu {
     pub fn tile_maps_mut(&mut self) -> &mut Memory<TileIndex> {
         &mut self.tile_maps
     }
+
+    /// Get a list of **up to 10** visible objects for the current scanline
+    ///
+    /// When there are more than 10 objects intersecting with the current
+    /// scanline, the objects earlier in memory (with lower addresses) get
+    /// priority.
+    ///
+    /// https://gbdev.io/pandocs/OAM.html#selection-priority
+    fn get_objects(&self) -> Vec<ObjectAttributes> {
+        let line = self.registers.ly;
+        let object_height = self.registers.lcdc.unpack().object_size.height();
+        // Take the first 10 objects intersecting the current line
+        //
+        self.oam
+            .as_values()
+            .iter()
+            .filter(|object| object.intersects(line, object_height))
+            .take(10)
+            .copied()
+            .collect()
+    }
+
+    /// TODO
+    fn get_tile(&self, index: TileIndex) -> &Tile {
+        // Select active tiles based on the LCDC flag
+        let tiles =
+            self.get_tiles(self.registers.lcdc.unpack().bg_window_tiles);
+        // Safety: tiles is an array of 256, so the index must be valid
+        &tiles[index.0 as usize]
+    }
+
+    /// Get the block of accessible tiles for the given addressing mode
+    ///
+    ///
+    /// Each addressing mode can access exactly 256 tiles, so that's encoded in
+    /// the return type.
+    fn get_tiles(&self, area: TileDataArea) -> &[Tile; 256] {
+        let tiles = self.tile_data.as_values();
+        debug_assert_eq!(
+            tiles.len(),
+            128 * 3,
+            "Tile data should be 3 blocks of 128 tiles"
+        );
+        let slice = match area {
+            TileDataArea::Low => &tiles[..256],
+            TileDataArea::High => &tiles[128..],
+        };
+        slice.try_into().expect("256 tiles accessible at a time")
+    }
 }
 
 impl Default for Gpu {
@@ -120,6 +169,14 @@ pub struct Registers {
     pub scx: u8,
     /// Viewport scroll Y
     pub scy: u8,
+    /// Current horizontal line being drawn on the LCD (**read-only**)
+    ///
+    /// Range is `[0, 153]`. `[144, 153]` is the vblank period.
+    pub ly: Scanline,
+    /// A writable register compared to `LY` every cycle
+    ///
+    /// When `LY == LYC`, bit 2 of the `STAT` register is set. See [LcdStatus].
+    pub lyc: Scanline,
 }
 
 /// Bit-packed values in the `LCDC` register
@@ -218,6 +275,14 @@ enum ObjectSize {
     /// 8x16
     Large,
 }
+impl ObjectSize {
+    fn height(&self) -> u8 {
+        match self {
+            ObjectSize::Small => 8,
+            ObjectSize::Large => 16,
+        }
+    }
+}
 
 impl_bit_pack! {
     enum ObjectSize;
@@ -238,7 +303,9 @@ pub struct LcdStatus {
     mode_1_interrupt: bool,
     /// TODO
     mode_0_interrupt: bool,
-    /// TODO
+    /// Is the `LY` register currently equal to the `LYC` register?
+    ///
+    /// See [Registers] for those register definitions.
     lyc_equal_ly: bool,
     /// TODO
     ppu_mode: PpuMode,
@@ -246,6 +313,7 @@ pub struct LcdStatus {
 
 impl_bit_pack! {
     struct LcdStatus;
+    // Bit 7 is empty
     Bit(6).mask() => lyc_interrupt,
     Bit(5).mask() => mode_2_interrupt,
     Bit(4).mask() => mode_1_interrupt,
@@ -337,6 +405,13 @@ impl_bit_pack! {
     0b11 => Drawing,
 }
 
+/// Index of a particular horizontal line on the screen
+///
+/// Range is `[0, 153]`. `[144, 153]` is the vblank period. Any value `>=154` is
+/// invalid.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Scanline(u8);
+
 /// An 8x8 collection of pixels
 ///
 /// A tile is 16 bytes:
@@ -383,8 +458,14 @@ const _: () = assert!(mem::size_of::<TileIndex>() == 1);
 pub struct ObjectAttributes {
     // Field order must match the doc above
     /// Vertical position of the object + 16
+    ///
+    /// The +16 allows moving an object above the screen without underflowing
+    /// the byte.
     y: u8,
     /// Horizontal position of the object + 8
+    ///
+    /// The +8 allows moving an object left of the screen without underflowing
+    /// the byte.
     x: u8,
     /// Index of the tile defining this object
     ///
@@ -394,6 +475,24 @@ pub struct ObjectAttributes {
     tile_index: TileIndex,
     /// TODO
     flags: PackedBits<ObjectFlags>,
+}
+impl ObjectAttributes {
+    /// Does this object intersect with the current horizontal line?
+    ///
+    /// The object height (8 vs 16 pixels) is determined by the `LCDC` register,
+    /// so it must be passed in. This *only* checks for vertical intersection.
+    /// If an object intersects vertically but is off the screen horizontally,
+    /// this will **still return true.** That's consistent with the [object
+    /// selection priority algorithm](https://gbdev.io/pandocs/OAM.html#selection-priority).
+    fn intersects(self, line: Scanline, object_height: u8) -> bool {
+        // self.y is shifted +16. Shift the line up to match. Subtracting could
+        // incur underflow. Addition can't overflow because the max line value
+        // is 153.
+        let line = line.0 + 16;
+        let top = self.y; // Top edge (inclusive)
+        let bottom = self.y + object_height; // Bottom edge (exclusive)
+        bottom > line && top <= line
+    }
 }
 const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 
