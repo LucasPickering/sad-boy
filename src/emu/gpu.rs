@@ -3,11 +3,14 @@
 //! This computes graphics output and sends it to the virtual screen. The
 //! physical drawing is done in [crate::screen].
 
-use crate::emu::{
-    cpu::Cycles,
-    memory::{self, Memory},
+use crate::{
+    emu::{
+        cpu::Cycles,
+        memory::{self, Memory},
+    },
+    util::{Bit, BitPack, Mask, PackedBits, impl_bit_pack},
 };
-use std::mem;
+use std::{fmt::Debug, mem};
 
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
@@ -231,7 +234,7 @@ pub struct ObjectAttributes {
     /// and the lower tile is the subsequent tile in the map.
     tile_index: TileIndex,
     /// TODO
-    flags: u8,
+    flags: PackedBits<ObjectFlags>,
 }
 
 /// Index of a single tile in a tile map
@@ -240,3 +243,122 @@ pub struct ObjectAttributes {
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct TileIndex(u8);
+
+/// Flags in byte 3 of [ObjectAttributes]
+///
+/// This is packed as a single byte in memory; this struct is the unpacked
+/// semantic data.
+///
+/// https://gbdev.io/pandocs/OAM.html#byte-3--attributesflags
+struct ObjectFlags {
+    cgb_palette: CgbPalette,
+    bank: VramBank,
+    dmg_palette: DmgPalette,
+    x_flip: bool,
+    y_flip: bool,
+    priority: bool,
+}
+
+impl_bit_pack! {
+    ObjectFlags;
+    Mask::M210 => cgb_palette,
+    Bit(3).mask() => bank,
+    Bit(4).mask() => dmg_palette,
+    Bit(5).mask() => x_flip,
+    Bit(6).mask() => y_flip,
+    Bit(7).mask() => priority,
+}
+
+impl BitPack for bool {
+    fn from_bits(bits: u8) -> Self {
+        (bits & 0b1) == 1
+    }
+
+    fn to_bits(&self) -> u8 {
+        (*self).into()
+    }
+}
+
+enum CgbPalette {
+    Obp0,
+    Obp1,
+    Obp2,
+    Obp3,
+    Obp4,
+    Obp5,
+    Obp6,
+    Obp7,
+}
+
+impl BitPack for CgbPalette {
+    fn from_bits(bits: u8) -> Self {
+        match bits & 0b111 {
+            0b000 => Self::Obp0,
+            0b001 => Self::Obp1,
+            0b010 => Self::Obp2,
+            0b011 => Self::Obp3,
+            0b100 => Self::Obp4,
+            0b101 => Self::Obp5,
+            0b110 => Self::Obp6,
+            0b111 => Self::Obp7,
+            _ => unreachable!(),
+        }
+    }
+
+    fn to_bits(&self) -> u8 {
+        match self {
+            Self::Obp0 => 0b000,
+            Self::Obp1 => 0b001,
+            Self::Obp2 => 0b010,
+            Self::Obp3 => 0b011,
+            Self::Obp4 => 0b100,
+            Self::Obp5 => 0b101,
+            Self::Obp6 => 0b110,
+            Self::Obp7 => 0b111,
+        }
+    }
+}
+
+enum VramBank {
+    Bank0,
+    Bank1,
+}
+
+impl BitPack for VramBank {
+    fn from_bits(bits: u8) -> Self {
+        match bits & 0b1 {
+            0b0 => Self::Bank0,
+            0b1 => Self::Bank1,
+            _ => unreachable!(),
+        }
+    }
+
+    fn to_bits(&self) -> u8 {
+        match self {
+            Self::Bank0 => 0b0,
+            Self::Bank1 => 0b1,
+        }
+    }
+}
+
+enum DmgPalette {
+    Obp0,
+    Obp1,
+}
+
+impl BitPack for DmgPalette {
+    fn from_bits(bits: u8) -> Self {
+        match bits & 0b1 {
+            0b0 => Self::Obp0,
+            0b1 => Self::Obp1,
+            _ => unreachable!(),
+        }
+    }
+
+    fn to_bits(&self) -> u8 {
+        match self {
+            Self::Obp0 => 0b0,
+            Self::Obp1 => 0b1,
+        }
+    }
+}

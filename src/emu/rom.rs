@@ -9,14 +9,14 @@ use crate::{
         },
         memory::Address,
     },
-    util::{Bit, BytesDisplay},
+    util::{Bit, BytesDisplay, Mask},
 };
 use color_eyre::eyre::{self, Context};
 use std::{
     error::Error,
     fmt::{self, Debug, Display},
     fs,
-    ops::{BitAnd, BitOr, Not},
+    ops::BitOr,
     path::Path,
 };
 use tracing::{info, trace};
@@ -187,7 +187,7 @@ type ParseError = ErrMode<ContextError>;
 
 /// A version of winnow's `alt` combinator that takes any number of branches
 macro_rules! alt {
-    ($($parser:expr),*, $(,)?) => {
+    ($($parser:expr),* $(,)?) => {
         (|input: &mut &[u8]| -> ModalResult<Instruction> {
             use winnow::stream::Stream;
             use winnow::Parser;
@@ -441,62 +441,6 @@ fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     .parse_next(input)
 }
 
-/// Newtype for a bitmask
-///
-/// There's a lot of `u8`s floating around in this file, so this helps keep them
-/// all straight.
-#[derive(Clone, Copy)]
-struct Mask(u8);
-
-impl Mask {
-    /// Mask for bits 2-0
-    const M210: Self = Self(0b0000_0111);
-    /// Mask for bits 4-3
-    const M43: Self = Self(0b0001_1000);
-    /// Mask for bits 5-4
-    const M54: Self = Self(0b0011_0000);
-    /// Mask for bits 5-3
-    const M543: Self = Self(0b0011_1000);
-}
-
-impl Debug for Mask {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Mask(0b{:0>8b})", self.0)
-    }
-}
-
-impl Not for Mask {
-    type Output = Self;
-
-    fn not(self) -> Self::Output {
-        Self(!self.0)
-    }
-}
-
-impl BitAnd<Mask> for u8 {
-    type Output = u8;
-
-    fn bitand(self, rhs: Mask) -> Self::Output {
-        self & rhs.0
-    }
-}
-
-impl BitAnd for Mask {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self(self.0 & rhs.0)
-    }
-}
-
-impl BitOr for Mask {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        Self(self.0 | rhs.0)
-    }
-}
-
 trait ParserExt<I, O, E> {
     /// Shortcut for `parser.context(StrContext::Label(label))`
     fn label(self, label: &'static str) -> impl Parser<I, O, E>;
@@ -581,7 +525,7 @@ fn get_bit_params<const N: usize>(
     input: u8,
 ) -> Option<[u8; N]> {
     // Make sure the static opcode has all 0s in the dynamic bits
-    let all_masks = masks.into_iter().fold(Mask(0), Mask::bitor);
+    let all_masks = masks.into_iter().fold(Mask::ZERO, Mask::bitor);
     debug_assert_eq!(
         opcode & all_masks,
         0,
@@ -592,7 +536,7 @@ fn get_bit_params<const N: usize>(
     if input & !all_masks == opcode {
         // Grab each dynamic param via its mask, with its bits shifted down
         // to the right
-        Some(masks.map(|mask| (input & mask.0) >> mask.0.trailing_zeros()))
+        Some(masks.map(|mask| mask.reduced(input)))
     } else {
         None
     }

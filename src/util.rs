@@ -1,6 +1,7 @@
 use std::{
     fmt::{self, Debug, Display},
     marker::PhantomData,
+    ops::{BitAnd, BitOr, Not},
 };
 
 /// Index of a single bit in a byte
@@ -10,21 +11,9 @@ use std::{
 pub struct Bit(pub u8);
 
 impl Bit {
-    /// List of all bit index 0-7
-    const ALL: &[Self] = &[
-        Self(0),
-        Self(1),
-        Self(2),
-        Self(3),
-        Self(4),
-        Self(5),
-        Self(6),
-        Self(7),
-    ];
-
     /// Get the value of a bit from a byte as a bool
     pub fn get(self, bits: u8) -> bool {
-        bits & (0b1 << self.0) > 0
+        bits & self.mask() > 0
     }
 
     /// Set the value of a bit in a byte, returning the new byte
@@ -33,63 +22,151 @@ impl Bit {
         let new = u8::from(flag) << self.0;
         (bits | new) & new
     }
-}
 
-/// A trait for structs of booleans that are stored as bitflags in a `u8`
-///
-/// The idea is you define your flags as a struct of booleans, then implement
-/// this trait to map booleans to bits. This trait and [FlagBits] take care of
-/// converting to `u8`, allowing you to store the flags as a byte for easy
-/// runtime representation and interop, but semantically you can work with it
-/// as a set of bools.
-///
-/// This is an alternative to the `bitflags` crate, because I think it's pretty
-/// clunky to use.
-pub trait Flags: Default {
-    /// Get the boolean value of a flag based on its bit index
-    ///
-    /// This **will** be called for all bits 0-7. If the bit index isn't used,
-    /// return `false`.
-    fn get_bit(&self, bit: Bit) -> bool;
-
-    /// Set the boolean value of a flag based on its bit index
-    ///
-    /// This **will** be called for all bits 0-7. If the bit index isn't used,
-    /// do nothing.
-    fn set_bit(&mut self, bit: Bit, value: bool);
-
-    /// Read individual flags from the bits of the byte
-    fn from_bits(bits: FlagBits<Self>) -> Self {
-        let mut flags = Self::default();
-        for bit in Bit::ALL {
-            let flag = bit.get(bits.value);
-            flags.set_bit(*bit, flag);
-        }
-        flags
-    }
-
-    /// Convert individual flags into bitflags
-    fn into_bits(self) -> FlagBits<Self> {
-        let mut bits = 0;
-        for bit in Bit::ALL {
-            let flag = self.get_bit(*bit);
-            bits = bit.set(bits, flag);
-        }
-        FlagBits::new(bits)
+    /// Get a [Mask] for this single bit
+    pub const fn mask(self) -> Mask {
+        Mask(0b1 << self.0)
     }
 }
 
-/// Byte representation of a [Flags] implementation
+/// Newtype for a bitmask
 ///
-/// This is how flags should be represented in memory. [Flags::from_bits] and
-/// [Flags::into_bits] to convert to/from this type.
-#[derive(Clone, Copy, Default)]
-pub struct FlagBits<T> {
+/// There's a lot of `u8`s floating around in this file, so this helps keep them
+/// all straight.
+#[derive(Clone, Copy)]
+pub struct Mask(u8);
+
+impl Mask {
+    /// Mask with no bits
+    pub const ZERO: Self = Self(0);
+    /// Mask for bits 2-0
+    pub const M210: Self = Self(0b0000_0111);
+    /// Mask for bits 4-3
+    pub const M43: Self = Self(0b0001_1000);
+    /// Mask for bits 5-4
+    pub const M54: Self = Self(0b0011_0000);
+    /// Mask for bits 5-3
+    pub const M543: Self = Self(0b0011_1000);
+
+    pub fn new(mask: u8) -> Self {
+        Self(mask)
+    }
+
+    /// Mask out bits from the given value, then right-shift to puts those bits
+    /// in the right-most place
+    ///
+    /// ```
+    /// // Mask 0b1010_1010 to 0b0010_0000, then reduce to 0b10
+    /// assert_eq!(Mask::new(0b0011_0000).reduced(0b1010_1010), 0b10);
+    /// ```
+    pub fn reduced(self, value: u8) -> u8 {
+        (value & self) >> self.shift()
+    }
+
+    /// Get the number of bits required to right-shift this mask to the least
+    /// significant bits
+    pub fn shift(self) -> u32 {
+        self.0.trailing_zeros()
+    }
+}
+
+impl Debug for Mask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Mask(0b{:0>8b})", self.0)
+    }
+}
+
+impl Not for Mask {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(!self.0)
+    }
+}
+
+impl BitAnd<Mask> for u8 {
+    type Output = u8;
+
+    fn bitand(self, rhs: Mask) -> Self::Output {
+        self & rhs.0
+    }
+}
+
+impl BitAnd for Mask {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl BitOr for Mask {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+/// A trait for types that can be packed into a single byte
+///
+/// This is used for structs that pack multiple values into one byte, but can
+/// also be used for any value that is represented in bits. Typically a
+/// `BitPack` struct is composed of various `BitPack` fields such as bools and
+/// enums. Each field can be either one or multiple bits.
+///
+/// For structs, do **not** implement this manually. Use [impl_bit_pack].
+pub trait BitPack: Sized {
+    /// Convert from bits to this value
+    fn from_bits(bits: u8) -> Self;
+
+    /// Convert this value to bits
+    fn to_bits(&self) -> u8;
+
+    /// Convert this value to bits, then wrap in [PackedBits]
+    fn pack(self) -> PackedBits<Self> {
+        PackedBits::new(self.to_bits())
+    }
+}
+
+/// Implement [BitPack] for structs
+///
+/// This maps each struct's field to a specific bit mask. The conversions
+/// to/from bits are implemented automatically based on that mapping.
+///
+/// It's impossible to forget a field with this implementation because the
+/// struct initialization will produce a compile error.
+macro_rules! impl_bit_pack {
+    ($type:ty; $($mask:expr => $field:ident),* $(,)?) => {
+        impl $crate::util::BitPack for $type {
+            fn from_bits(bits: u8) -> Self {
+                Self {
+                    $($field: $crate::util::BitPack::from_bits(
+                        $mask.reduced(bits)
+                    ),)*
+                }
+            }
+
+            fn to_bits(&self) -> u8 {
+                let mut bits = 0;
+                $(bits |= self.$field.to_bits() << $mask.shift();)*
+                bits
+            }
+        }
+    };
+}
+pub(crate) use impl_bit_pack;
+
+/// A byte associated with a [BitPack]-implementing type
+///
+/// At runtime this is just the packed byte, but it carries an associated type
+/// so it can be unpacked easily with [Self::unpack].
+pub struct PackedBits<T> {
     value: u8,
     ty: PhantomData<T>,
 }
 
-impl<T: Flags> FlagBits<T> {
+impl<T: BitPack> PackedBits<T> {
     pub fn new(value: u8) -> Self {
         Self {
             value,
@@ -97,16 +174,37 @@ impl<T: Flags> FlagBits<T> {
         }
     }
 
-    /// Get a mutable reference to the inner byte value
     #[cfg(test)]
     pub fn value_mut(&mut self) -> &mut u8 {
         &mut self.value
     }
+
+    /// Unpack a byte value into a `T` using its [BitPack] implementation
+    pub fn unpack(self) -> T {
+        T::from_bits(self.value)
+    }
 }
 
-impl<T> Debug for FlagBits<T> {
+impl<T> Clone for PackedBits<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for PackedBits<T> {}
+
+impl<T> Debug for PackedBits<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Debug::fmt(&BytesDisplay::binary(&[self.value]), f)
+    }
+}
+
+impl<T> Default for PackedBits<T> {
+    fn default() -> Self {
+        Self {
+            value: 0,
+            ty: PhantomData,
+        }
     }
 }
 

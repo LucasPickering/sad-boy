@@ -10,7 +10,7 @@ use crate::{
         },
         memory::{self, Address, MemoryBus},
     },
-    util::{Bit, FlagBits, Flags},
+    util::{Bit, BitPack, PackedBits, impl_bit_pack},
 };
 use std::{
     fmt::{self, Debug},
@@ -603,7 +603,7 @@ struct Registers {
     // The assertion above ensures we're on an little-endian system.
 
     // af
-    f: FlagBits<BcdFlags>,
+    f: PackedBits<BcdFlags>,
     a: u8,
     // bc
     c: u8,
@@ -652,7 +652,7 @@ impl Debug for Registers {
 impl Default for Registers {
     fn default() -> Self {
         Self {
-            f: FlagBits::default(),
+            f: PackedBits::default(),
             a: 0,
             c: 0,
             b: 0,
@@ -731,12 +731,12 @@ impl Registers {
 
     /// Read bit flags from the `f` register
     fn flags(&self) -> BcdFlags {
-        BcdFlags::from_bits(self.f)
+        self.f.unpack()
     }
 
     /// Set the `f` register to the given flags
     fn set_flags(&mut self, flags: BcdFlags) {
-        self.f = flags.into_bits();
+        self.f = flags.pack();
     }
 }
 
@@ -758,37 +758,12 @@ struct BcdFlags {
     carry: bool,
 }
 
-impl BcdFlags {
-    /// Last operation resulted in a `0`
-    const ZERO: Bit = Bit(7);
-    /// Last operation was a subtraction
-    const SUBTRACT: Bit = Bit(6);
-    /// The bottom 4 bits overflowed into the top 4 in the last operation
-    const HALF_CARRY: Bit = Bit(5);
-    /// Last operation overflowed (wrapped)
-    const CARRY: Bit = Bit(4);
-}
-
-impl Flags for BcdFlags {
-    fn get_bit(&self, bit: Bit) -> bool {
-        match bit {
-            Self::ZERO => self.zero,
-            Self::SUBTRACT => self.subtract,
-            Self::HALF_CARRY => self.half_carry,
-            Self::CARRY => self.carry,
-            _ => false,
-        }
-    }
-
-    fn set_bit(&mut self, bit: Bit, value: bool) {
-        match bit {
-            Self::ZERO => self.zero = value,
-            Self::SUBTRACT => self.subtract = value,
-            Self::HALF_CARRY => self.half_carry = value,
-            Self::CARRY => self.carry = value,
-            _ => {}
-        }
-    }
+impl_bit_pack! {
+    BcdFlags;
+    Bit(7).mask() => zero,
+    Bit(6).mask() => subtract,
+    Bit(5).mask() => half_carry,
+    Bit(4).mask() => carry,
 }
 
 /// Newtype for a number of CPU cycles
@@ -908,7 +883,7 @@ mod tests {
         #[case] expected: bool,
     ) {
         let registers = Registers {
-            f: FlagBits::new(register_value),
+            f: PackedBits::new(register_value),
             ..Default::default()
         };
         let actual = getter(registers.flags());
