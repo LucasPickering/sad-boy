@@ -190,7 +190,7 @@ impl MemoryBus<'_> {
 
             // Hardware registers
             LCDC => Accessor::rw(
-                |bus, _| bus.gpu.registers().lcdc,
+                |bus, _| *bus.gpu.registers().lcdc,
                 |bus, _| &mut bus.gpu.registers_mut().lcdc,
             ),
             STAT => Accessor::rw(

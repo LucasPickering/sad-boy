@@ -15,11 +15,6 @@ use std::{fmt::Debug, mem};
 const DOTS_PER_SCANLINE: u32 = 456;
 const SCANLINES_PER_FRAME: u32 = 154;
 
-// Const assertions make the unsafe code a bit more safe
-const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
-const _: () = assert!(mem::size_of::<Tile>() == 16);
-const _: () = assert!(mem::size_of::<TileIndex>() == 1);
-
 /// Graphics registers and processing
 #[derive(Debug)]
 pub struct Gpu {
@@ -31,6 +26,10 @@ pub struct Gpu {
     /// https://gbdev.io/pandocs/OAM.html
     oam: Memory<ObjectAttributes>,
     /// Pixel data for tiles
+    ///
+    /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
+    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
+    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
     tile_data: Memory<Tile>,
@@ -114,7 +113,7 @@ pub struct Registers {
     /// Only values `0x00` to `0xDF` are valid.
     pub dma: u8,
     /// LCD control
-    pub lcdc: u8,
+    pub lcdc: PackedBits<LcdControl>,
     /// LCD status
     pub stat: PackedBits<LcdStatus>,
     /// Viewport scroll X
@@ -123,7 +122,112 @@ pub struct Registers {
     pub scy: u8,
 }
 
+/// Bit-packed values in the `LCDC` register
+///
+/// https://gbdev.io/pandocs/LCDC.html
+#[derive(Debug)]
+pub struct LcdControl {
+    /// Are the LCD and PPU enabled?
+    lcd_enable: bool,
+    /// Tile map in use for the window
+    window_tile_map: TileMapArea,
+    ///
+    ///
+    /// It's complicated - see the Pandocs
+    window_enable: bool,
+    /// Which blocks are accessible for background and window tiles?
+    ///
+    /// Objects are unaffected by this. They always use the low area.
+    bg_window_tiles: TileDataArea,
+    /// Tile map in use for the background
+    bg_tile_map: TileMapArea,
+    /// Size of the next object to draw
+    object_size: ObjectSize,
+    /// TODO
+    object_enable: bool,
+    /// Disable the background AND window
+    ///
+    /// If zero, the `window_enable` flag is ignored. On CGB, this is actually
+    /// the `priority` flag.
+    ///
+    /// It's complicated - see the Pandocs
+    bg_window_enable: bool,
+}
+
+impl_bit_pack! {
+    struct LcdControl;
+    Bit(7).mask() => lcd_enable,
+    Bit(6).mask() => window_tile_map,
+    Bit(5).mask() => window_enable,
+    Bit(4).mask() => bg_window_tiles,
+    Bit(3).mask() => bg_tile_map,
+    Bit(2).mask() => object_size,
+    Bit(1).mask() => object_enable,
+    Bit(0).mask() => bg_window_enable,
+}
+
+/// Selector for a block of tile map memory
+///
+/// Used for multiple flags in [LcdControl].
+#[derive(Debug)]
+enum TileMapArea {
+    /// `0x9800–0x9BFF`
+    Low,
+    /// `0x9C00–0x9FFF`
+    High,
+}
+
+impl_bit_pack! {
+    enum TileMapArea;
+    0b0 => Low,
+    0b1 => High,
+}
+
+/// Selector for which blocks of tile data are in use.
+///
+/// There are 3 blocks:
+/// - Block 0: `0x8000-0x87FF`
+/// - Block 1: `0x8800-0x8FFF`
+/// - Block 2: `0x9000-0x97FF`
+///
+/// At any given time two blocks are accessible: 0-1 or 1-2.
+#[derive(Debug)]
+enum TileDataArea {
+    /// `0x8000-0x8FFF` (blocks 0 and 1)
+    ///
+    /// This is called "`$8000` addressing mode" in Pandocs
+    Low,
+    /// `0x8800-0x97FF` (blocks 1 and 2)
+    ///
+    /// This is called "`$8800` addressing mode" in Pandocs
+    High,
+}
+
+impl_bit_pack! {
+    enum TileDataArea;
+    // Backwards!
+    0b0 => High,
+    0b1 => Low,
+}
+
+/// Size of the next object to draw (flag in [LcdControl])
+#[derive(Debug)]
+enum ObjectSize {
+    /// 8x8
+    Small,
+    /// 8x16
+    Large,
+}
+
+impl_bit_pack! {
+    enum ObjectSize;
+    0b0 => Small,
+    0b1 => Large,
+}
+
 /// Bit-packed values in the `STAT` register
+///
+/// https://gbdev.io/pandocs/STAT.html
 #[derive(Debug)]
 pub struct LcdStatus {
     /// TODO
@@ -235,21 +339,41 @@ impl_bit_pack! {
 
 /// An 8x8 collection of pixels
 ///
+/// A tile is 16 bytes:
+/// - 4 colors per pixel => 2 bits per pixel
+/// - 8 pixels per line => 2 bytes per line
+/// - 8 lines => 16 bytes total
+///
 /// https://gbdev.io/pandocs/Tile_Data.html
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // Memory layout matters here
 pub struct Tile {
-    /// A tile is 16 bytes:
-    /// - 4 colors per pixel => 2 bits per pixel
-    /// - 8 pixels per line => 2 bytes per line
-    /// - 8 lines => 16 bytes total
-    ///
-    /// The pixel layout is a little odd: each pixel's bits are split across
-    /// both bytes of that line. For a given line, bit 7 of each byte specifies
-    /// the left-most pixel, bit 6 is the second pixel, etc. The first byte
-    /// holds the lesser bit, second byte holds the greater bit.
-    lines: [(u8, u8); 8],
+    lines: [TileLine; 8],
 }
+const _: () = assert!(mem::size_of::<Tile>() == 16);
+
+/// A single 8-pixel line in a tile
+///
+/// A pixel is a color index 0-3 (2 bits). The actual color is defined in a
+/// [Palette]. The color index layout is a little odd: each index's bits are
+/// split across both bytes of that line. For a given line, bit 7 of each byte
+/// specifies the left-most pixel, bit 6 is the second pixel, etc. The first
+/// byte holds the lesser bit, second byte holds the greater bit.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+struct TileLine {
+    low: u8,
+    high: u8,
+}
+const _: () = assert!(mem::size_of::<TileLine>() == 2);
+
+/// Index of a single tile in a tile map
+///
+/// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct TileIndex(u8);
+const _: () = assert!(mem::size_of::<TileIndex>() == 1);
 
 /// Metadata specifying a single pixel object
 ///
@@ -271,13 +395,7 @@ pub struct ObjectAttributes {
     /// TODO
     flags: PackedBits<ObjectFlags>,
 }
-
-/// Index of a single tile in a tile map
-///
-/// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
-#[derive(Clone, Copy, Debug, Default)]
-#[repr(C)]
-pub struct TileIndex(u8);
+const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 
 /// Flags in byte 3 of [ObjectAttributes]
 ///
