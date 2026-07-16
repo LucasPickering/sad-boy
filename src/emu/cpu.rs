@@ -10,7 +10,7 @@ use crate::{
         },
         memory::{self, Address, MemoryBus},
     },
-    util::Bit,
+    util::{Bit, FlagBits, Flags},
 };
 use std::{
     fmt::{self, Debug},
@@ -96,7 +96,7 @@ impl CpuExe<'_, '_> {
             }
             Instruction::Ccf => {
                 let flags = self.registers.flags();
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     subtract: false,
                     half_carry: false,
                     carry: !flags.carry,
@@ -109,7 +109,7 @@ impl CpuExe<'_, '_> {
             Instruction::Cpl => {
                 self.registers.a = !self.registers.a;
                 let flags = self.registers.flags();
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     subtract: true,
                     half_carry: true,
                     ..flags
@@ -161,7 +161,7 @@ impl CpuExe<'_, '_> {
                 let carry = self.registers.flags().carry;
                 let old = self.registers.a;
                 self.registers.a = Bit(0).set(old.rotate_left(1), carry);
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     zero: false,
                     subtract: false,
                     half_carry: false,
@@ -176,7 +176,7 @@ impl CpuExe<'_, '_> {
             Instruction::Rlca => {
                 let old = self.registers.a;
                 self.registers.a = old.rotate_left(1);
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     zero: false,
                     subtract: false,
                     half_carry: false,
@@ -197,7 +197,7 @@ impl CpuExe<'_, '_> {
                 let carry = self.registers.flags().carry;
                 let old = self.registers.a;
                 self.registers.a = Bit(7).set(old.rotate_right(1), carry);
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     zero: false,
                     subtract: false,
                     half_carry: false,
@@ -212,7 +212,7 @@ impl CpuExe<'_, '_> {
             Instruction::Rrca => {
                 let old = self.registers.a;
                 self.registers.a = old.rotate_right(1);
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     zero: false,
                     subtract: false,
                     half_carry: false,
@@ -224,7 +224,7 @@ impl CpuExe<'_, '_> {
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
             Instruction::Scf => {
                 let flags = self.registers.flags();
-                self.registers.set_flags(Flags {
+                self.registers.set_flags(BcdFlags {
                     subtract: false,
                     half_carry: false,
                     carry: true,
@@ -603,7 +603,7 @@ struct Registers {
     // The assertion above ensures we're on an little-endian system.
 
     // af
-    f: u8,
+    f: FlagBits<BcdFlags>,
     a: u8,
     // bc
     c: u8,
@@ -652,7 +652,7 @@ impl Debug for Registers {
 impl Default for Registers {
     fn default() -> Self {
         Self {
-            f: 0,
+            f: FlagBits::default(),
             a: 0,
             c: 0,
             b: 0,
@@ -730,24 +730,24 @@ impl Registers {
     register_pair!(h, l);
 
     /// Read bit flags from the `f` register
-    fn flags(&self) -> Flags {
-        Flags::from_bits(self.f)
+    fn flags(&self) -> BcdFlags {
+        BcdFlags::from_bits(self.f)
     }
 
     /// Set the `f` register to the given flags
-    fn set_flags(&mut self, flags: Flags) {
+    fn set_flags(&mut self, flags: BcdFlags) {
         self.f = flags.into_bits();
     }
 }
 
 /// The `f` register holds a set of 4 flags providing feedback about the
-/// previous operation
+/// previous operation, for use with Binary Coded Decimal values
 ///
 /// Use [Registers::flags] to get this value.
 ///
 /// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Flags {
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct BcdFlags {
     /// Was the result of the operation zero?
     zero: bool,
     /// Was the operation a subtraction?
@@ -758,7 +758,7 @@ struct Flags {
     carry: bool,
 }
 
-impl Flags {
+impl BcdFlags {
     /// Last operation resulted in a `0`
     const ZERO: Bit = Bit(7);
     /// Last operation was a subtraction
@@ -767,23 +767,27 @@ impl Flags {
     const HALF_CARRY: Bit = Bit(5);
     /// Last operation overflowed (wrapped)
     const CARRY: Bit = Bit(4);
+}
 
-    /// Read individual flags from the top 4 bits of the byte
-    fn from_bits(bits: u8) -> Self {
-        Flags {
-            zero: Flags::ZERO.get(bits),
-            subtract: Flags::SUBTRACT.get(bits),
-            half_carry: Flags::HALF_CARRY.get(bits),
-            carry: Flags::CARRY.get(bits),
+impl Flags for BcdFlags {
+    fn get_bit(&self, bit: Bit) -> bool {
+        match bit {
+            Self::ZERO => self.zero,
+            Self::SUBTRACT => self.subtract,
+            Self::HALF_CARRY => self.half_carry,
+            Self::CARRY => self.carry,
+            _ => false,
         }
     }
 
-    /// Convert individual flags into bitflags
-    fn into_bits(self) -> u8 {
-        Self::ZERO.bit(self.zero)
-            | Self::SUBTRACT.bit(self.subtract)
-            | Self::HALF_CARRY.bit(self.half_carry)
-            | Self::CARRY.bit(self.carry)
+    fn set_bit(&mut self, bit: Bit, value: bool) {
+        match bit {
+            Self::ZERO => self.zero = value,
+            Self::SUBTRACT => self.subtract = value,
+            Self::HALF_CARRY => self.half_carry = value,
+            Self::CARRY => self.carry = value,
+            _ => {}
+        }
     }
 }
 
@@ -822,7 +826,7 @@ mod tests {
     }
 
     fn f(registers: &mut Registers) -> &mut u8 {
-        &mut registers.f
+        registers.f.value_mut()
     }
 
     fn b(registers: &mut Registers) -> &mut u8 {
@@ -849,19 +853,19 @@ mod tests {
         &mut registers.l
     }
 
-    fn zero(register: Flags) -> bool {
+    fn zero(register: BcdFlags) -> bool {
         register.zero
     }
 
-    fn subtract(register: Flags) -> bool {
+    fn subtract(register: BcdFlags) -> bool {
         register.subtract
     }
 
-    fn half_carry(register: Flags) -> bool {
+    fn half_carry(register: BcdFlags) -> bool {
         register.half_carry
     }
 
-    fn carry(register: Flags) -> bool {
+    fn carry(register: BcdFlags) -> bool {
         register.carry
     }
 
@@ -899,12 +903,12 @@ mod tests {
     #[case::carry_false(carry, 0b1110_0000, false)]
     #[case::carry_true(carry, 0b0001_0000, true)]
     fn flags(
-        #[case] getter: impl FnOnce(Flags) -> bool,
+        #[case] getter: impl FnOnce(BcdFlags) -> bool,
         #[case] register_value: u8,
         #[case] expected: bool,
     ) {
         let registers = Registers {
-            f: register_value,
+            f: FlagBits::new(register_value),
             ..Default::default()
         };
         let actual = getter(registers.flags());

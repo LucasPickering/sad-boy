@@ -2,7 +2,7 @@
 
 use crate::{
     emu::{
-        cpu::{CpuExe, Cycles, Flags},
+        cpu::{CpuExe, CpuFlags, Cycles},
         instruction::{Add, DecInc, Operand, Value8},
     },
     util::Bit,
@@ -27,7 +27,7 @@ impl CpuExe<'_, '_> {
                 let lhs = self.registers.hl();
                 let (new, carry) = lhs.overflowing_add(rhs);
                 *self.registers.hl_mut() = new;
-                let flags = Flags {
+                let flags = CpuFlags {
                     zero: new == 0,
                     subtract: false,
                     half_carry: (lhs & HALF16) + (rhs & HALF16) > HALF16,
@@ -39,7 +39,7 @@ impl CpuExe<'_, '_> {
                 let lhs = self.registers.sp.0;
                 let (new, carry) = lhs.overflowing_add_signed(rhs.into());
                 self.registers.sp.0 = new;
-                let flags = Flags {
+                let flags = CpuFlags {
                     zero: new == 0,
                     subtract: false,
                     half_carry: false, // TODO
@@ -85,7 +85,7 @@ impl CpuExe<'_, '_> {
         let (rhs, cycles) = self.operand(rhs);
         let lhs = self.registers.a;
         self.registers.a = operation(lhs, rhs);
-        self.registers.set_flags(Flags {
+        self.registers.set_flags(CpuFlags {
             zero: self.registers.a == 0,
             subtract: false,
             half_carry,
@@ -103,7 +103,7 @@ impl CpuExe<'_, '_> {
             Value8::Hl => (self.hl_mem(), 3.into()),
         };
         let carry = self.registers.flags().carry;
-        self.registers.set_flags(Flags {
+        self.registers.set_flags(CpuFlags {
             zero: bit.get(value),
             // These two flags are hard-coded
             subtract: false,
@@ -159,7 +159,7 @@ impl CpuExe<'_, '_> {
         };
         let (new, carry) = operation(*dest, carry);
         *dest = new;
-        self.registers.set_flags(Flags {
+        self.registers.set_flags(CpuFlags {
             zero: new == 0,
             subtract: false,
             half_carry: false,
@@ -256,9 +256,9 @@ impl CpuExe<'_, '_> {
 }
 
 /// Add two 8-bit numbers, returning the sum and flags
-fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
+fn add8(lhs: u8, rhs: u8) -> (u8, CpuFlags) {
     let (sum, carry) = lhs.overflowing_add(rhs);
-    let flags = Flags {
+    let flags = CpuFlags {
         zero: sum == 0,
         subtract: false,
         half_carry: (lhs & HALF8) + (rhs & HALF8) > HALF8,
@@ -270,8 +270,8 @@ fn add8(lhs: u8, rhs: u8) -> (u8, Flags) {
 /// Inner implementation for [GameBoy::daa]
 ///
 /// This is separate for testing.
-fn daa(a: u8, flags: Flags) -> (u8, Flags) {
-    let Flags {
+fn daa(a: u8, flags: CpuFlags) -> (u8, CpuFlags) {
+    let CpuFlags {
         subtract,
         half_carry,
         mut carry,
@@ -304,7 +304,7 @@ fn daa(a: u8, flags: Flags) -> (u8, Flags) {
 
     (
         a,
-        Flags {
+        CpuFlags {
             zero: a == 0,
             subtract,
             half_carry: false,
@@ -317,9 +317,9 @@ fn daa(a: u8, flags: Flags) -> (u8, Flags) {
 }
 
 /// Subtract two 8-bit numbers, return the difference and flags
-fn sub8(lhs: u8, rhs: u8) -> (u8, Flags) {
+fn sub8(lhs: u8, rhs: u8) -> (u8, CpuFlags) {
     let (difference, carry) = lhs.overflowing_sub(rhs);
-    let flags = Flags {
+    let flags = CpuFlags {
         zero: difference == 0,
         subtract: true,
         half_carry: (lhs & HALF8) < (rhs & HALF8),
@@ -343,37 +343,37 @@ mod tests {
 
     /// Test addition to register `a` (`ADD A,n8`)
     #[rstest]
-    #[case::zero(0x00, 0x00, 0x00, Flags {
+    #[case::zero(0x00, 0x00, 0x00, CpuFlags {
         zero: true,
         subtract: false,
         half_carry: false,
         carry: false,
     })]
-    #[case::no_carry(0x44, 0x88, 0xCC, Flags {
+    #[case::no_carry(0x44, 0x88, 0xCC, CpuFlags {
         zero: false,
         subtract: false,
         half_carry: false,
         carry: false,
     })]
-    #[case::half_carry(0x08, 0x88, 0x90, Flags {
+    #[case::half_carry(0x08, 0x88, 0x90, CpuFlags {
         zero: false,
         subtract: false,
         half_carry: true,
         carry: false,
     })]
-    #[case::carry(0xFF, 0x10, 0x0F, Flags {
+    #[case::carry(0xFF, 0x10, 0x0F, CpuFlags {
         zero: false,
         subtract: false,
         half_carry: false,
         carry: true,
     })]
-    #[case::double_carry(0xFF, 0x01, 0x00, Flags {
+    #[case::double_carry(0xFF, 0x01, 0x00, CpuFlags {
         zero: true,
         subtract: false,
         half_carry: true,
         carry: true,
     })]
-    #[case::carry_zero(0x50, 0xb0, 0x00, Flags {
+    #[case::carry_zero(0x50, 0xb0, 0x00, CpuFlags {
         zero: true,
         subtract: false,
         half_carry: false,
@@ -383,7 +383,7 @@ mod tests {
         #[case] lhs: u8,
         #[case] rhs: u8,
         #[case] expected_value: u8,
-        #[case] expected_flags: Flags,
+        #[case] expected_flags: CpuFlags,
     ) {
         let mut cpu = Cpu::default();
         let mut memory = MemoryBus {
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(sum, sum_wrap, "sum");
         assert_eq!(
             flags,
-            Flags {
+            CpuFlags {
                 zero: sum_wrap == 0,
                 subtract: false,
                 half_carry: ((lhs & 0xf) + (rhs & 0xf)) != (sum16 & 0xf),
@@ -452,7 +452,7 @@ mod tests {
         assert!(a_out & 0xF0 <= 0x90, "upper digit must be <= 9: {a_out:X}");
         assert_eq!(
             flags,
-            Flags {
+            CpuFlags {
                 zero: a_out == 0,
                 subtract,
                 half_carry: false,
