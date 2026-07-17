@@ -4,6 +4,7 @@ mod math;
 
 use crate::{
     emu::{
+        Clock,
         instruction::{
             ConditionCode, Instruction, Jump, Load, LoadHigh, Register8,
             Register16, Register16Memory, Register16Stack, Value8,
@@ -30,12 +31,16 @@ pub struct Cpu {
 }
 
 impl Cpu {
+    /// TODO
+    pub async fn run(mut self, mut memory: MemoryBus<'_>) {
+        // TODO should we execute _then_ wait?
+        let cycles = self.execute_next(&mut memory);
+        Clock::wait(cycles).await
+    }
+
     /// Execute the next CPU instruction, returning the number of consumed CPU
     /// cycles (dots)
-    pub fn execute_next<'a>(
-        &'a mut self,
-        memory: &'a mut MemoryBus<'_>,
-    ) -> Cycles {
+    fn execute_next<'a>(&'a mut self, memory: &'a mut MemoryBus<'_>) -> Cycles {
         let (instruction, num_bytes) =
             memory.get_instruction(self.registers.pc);
         let pc = self.registers.pc;

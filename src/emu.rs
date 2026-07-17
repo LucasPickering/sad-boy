@@ -18,12 +18,8 @@ use crate::{
     screen::Screen,
 };
 use color_eyre::eyre;
-use std::{
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
-use tracing::error;
+use std::{cell::Cell, path::Path, time::Duration};
+use tokio::{runtime::LocalRuntime, sync::broadcast, task::JoinSet, time};
 
 /// Number of dots (CPU cycles) in a single frame
 ///
@@ -38,12 +34,6 @@ const DOTS_PER_FRAME: Cycles = Cycles(70224);
 /// Really this should be 238.4185791015625, but [Duration::from_secs_f64] isn't
 /// `const`.
 const DOT_DURATION: Duration = Duration::from_nanos(238);
-/// Real time duration of a single frame
-///
-/// There are approximately 60 frames per second.
-const FRAME_DURATION: Duration = Duration::from_nanos_u128(
-    DOT_DURATION.as_nanos() * DOTS_PER_FRAME.0 as u128,
-);
 
 /// Game Boy emulator
 #[derive(Debug)]
@@ -74,48 +64,78 @@ impl GameBoy {
         })
     }
 
-    /// Keep running until the CPU is halted
-    pub fn run(&mut self, screen: &mut Screen) {
-        // Each iteration of this loop is a single frame
+    /// Run the Game Boy indefinitely
+    ///
+    /// This will never return. To stop the Game Boy, kill the process.
+    pub fn run(mut self, screen: &mut Screen) {
+        // TODO explain
+        let runtime = LocalRuntime::new().unwrap();
+        let memory = MemoryBus {
+            rom: &self.rom,
+            ram: &mut self.ram,
+            high_ram: &mut self.high_ram,
+        };
+        runtime.block_on(futures::join!(
+            Clock::run(),
+            self.cpu.run(memory),
+            self.gpu.run(screen),
+        ));
+    }
+}
+
+/// TODO
+#[derive(Debug)]
+struct Clock {
+    /// TODO
+    cycles: Cell<u32>,
+    broadcast: broadcast::Sender<u32>,
+}
+
+impl Clock {
+    thread_local! {
+        static CLOCK: Clock = Clock::new();
+    }
+
+    fn new() -> Self {
+        let (broadcast, _) = broadcast::channel(16);
+        Self {
+            cycles: Cell::new(0),
+            broadcast,
+        }
+    }
+
+    /// Run the CPU clock indefinitely
+    ///
+    /// TODO
+    async fn run() {
+        let mut interval = time::interval(DOT_DURATION);
         loop {
-            screen.reset();
-            let frame_start = Instant::now();
-            let mut cycle_budget = DOTS_PER_FRAME;
+            interval.tick().await;
+            Self::CLOCK.with(|clock| {
+                // Increment the clock and wrap at the end of the frame
+                let next = (clock.cycles.get() + 1) % DOTS_PER_FRAME.0;
+                clock.cycles.set(next);
+                // Send failure just means there's no receivers RIGHT NOW. More
+                // could come later.
+                let _ = clock.broadcast.send(next);
+            });
+        }
+    }
 
-            // Alternate between running the CPU and the PPU. The CPU runs a
-            // single instruction whic htakes some number of cycles. Then we
-            // run the PPU the same number of cycles to sync up.
-            //
-            // In reality these two components run concurrently, but a modern
-            // CPU is so fast that we can flip-flop without any visible effect.
-            //
-            // The PPU needs to update after _every_ CPU instruction because the
-            // PPU and CPU can affect each other:
-            // - VRAM behavior based on PPU mode
-            // - LCD registers can be modified mid-frame to change rendering
-            while cycle_budget.0 > 0 {
-                let mut memory = MemoryBus {
-                    rom: &self.rom,
-                    ram: &mut self.ram,
-                    high_ram: &mut self.high_ram,
-                    gpu: &mut self.gpu,
-                };
-                let cycles = self.cpu.execute_next(&mut memory);
-                self.gpu.execute(cycles);
-                cycle_budget.deduct(cycles);
-            }
-            if let Err(error) = screen.draw() {
-                error!(%error, "Error drawing to screen");
-            }
-
-            // Sleep for the rest of the frame
-            // It's possible this sleeps _too_ long, but the difference should
-            // be negligible.
-            // Unstable: use sleep_until
-            // https://github.com/rust-lang/rust/issues/113752
-            let elapsed = frame_start.elapsed();
-            if let Some(sleep_time) = FRAME_DURATION.checked_sub(elapsed) {
-                thread::sleep(sleep_time);
+    /// Wait for the given number of cycles to elapse
+    ///
+    /// This is how the CPU and GPU stay in sync. Each component waits some
+    /// number of cycles, then at the end performs whatever work was meant to
+    /// be done during those cycles. This simulates the time elapsed during a
+    /// CPU instruction, GPU operation, etc.
+    async fn wait(cycles: Cycles) {
+        let (current, mut rx) = Self::CLOCK
+            .with(|clock| (clock.cycles.get(), clock.broadcast.subscribe()));
+        let target = current + cycles.0;
+        // The broadcast sends a message after each cycle
+        while let Ok(current) = rx.recv().await {
+            if current >= target {
+                break;
             }
         }
     }

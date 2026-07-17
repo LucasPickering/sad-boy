@@ -8,6 +8,7 @@ use crate::{
         cpu::Cycles,
         memory::{self, Memory},
     },
+    screen::Screen,
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
 use std::{fmt::Debug, mem};
@@ -44,8 +45,8 @@ pub struct Gpu {
 
 impl Gpu {
     /// Advance the current frame draw a certain number of dots
-    pub fn execute(&mut self, dots: Cycles) {
-        self.ppu.execute(dots);
+    pub async fn run(self, screen: &mut Screen) {
+        todo!()
     }
 
     /// Get GPU registers

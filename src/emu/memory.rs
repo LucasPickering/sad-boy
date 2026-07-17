@@ -1,4 +1,4 @@
-use crate::emu::{gpu::Gpu, instruction::Instruction, rom::Rom};
+use crate::emu::{instruction::Instruction, rom::Rom};
 use std::{
     any,
     fmt::{self, Debug, Display},
@@ -73,8 +73,6 @@ pub struct MemoryBus<'a> {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     pub high_ram: &'a mut Memory<u8>,
-    /// GPU holds VRAM and graphics registers
-    pub gpu: &'a mut Gpu,
 }
 
 impl MemoryBus<'_> {
@@ -158,12 +156,16 @@ impl MemoryBus<'_> {
                 Accessor::ro(|_, _| 0)
             }
             TILE_DATA_START..=TILE_DATA_LAST => Accessor::rw(
-                |bus, address| bus.gpu.tile_data().byte(address),
-                |bus, address| bus.gpu.tile_data_mut().byte_mut(address),
+                // |bus, address| bus.gpu.tile_data().byte(address),
+                // |bus, address| bus.gpu.tile_data_mut().byte_mut(address),
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             TILE_MAPS_START..=TILE_MAPS_LAST => Accessor::rw(
-                |bus, address| bus.gpu.tile_maps().byte(address),
-                |bus, address| bus.gpu.tile_maps_mut().byte_mut(address),
+                // |bus, address| bus.gpu.tile_maps().byte(address),
+                // |bus, address| bus.gpu.tile_maps_mut().byte_mut(address),
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -181,33 +183,45 @@ impl MemoryBus<'_> {
                 Self::accessor(address)
             }
             OAM_START..=OAM_LAST => Accessor::rw(
-                |bus, address| bus.gpu.oam().byte(address),
-                // TODO OAM write isn't allowed during draw mode 2 or 3
-                |bus, address| bus.gpu.oam_mut().byte_mut(address),
+                // |bus, address| bus.gpu.oam().byte(address),
+                // // TODO OAM write isn't allowed during draw mode 2 or 3
+                // |bus, address| bus.gpu.oam_mut().byte_mut(address),
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             // Null mem
             0xFEA0..=0xFEFF => Accessor::ro(|_, _| 0),
 
             // Hardware registers
             LCDC => Accessor::rw(
-                |bus, _| *bus.gpu.registers().lcdc,
-                |bus, _| &mut bus.gpu.registers_mut().lcdc,
+                // |bus, _| *bus.gpu.registers().lcdc,
+                // |bus, _| &mut bus.gpu.registers_mut().lcdc,
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             STAT => Accessor::rw(
-                |bus, _| *bus.gpu.registers().stat,
-                |bus, _| &mut bus.gpu.registers_mut().stat,
+                // |bus, _| *bus.gpu.registers().stat,
+                // |bus, _| &mut bus.gpu.registers_mut().stat,
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             SCY => Accessor::rw(
-                |bus, _| bus.gpu.registers().scy,
-                |bus, _| &mut bus.gpu.registers_mut().scy,
+                // |bus, _| bus.gpu.registers().scy,
+                // |bus, _| &mut bus.gpu.registers_mut().scy,
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             SCX => Accessor::rw(
-                |bus, _| bus.gpu.registers().scx,
-                |bus, _| &mut bus.gpu.registers_mut().scx,
+                // |bus, _| bus.gpu.registers().scx,
+                // |bus, _| &mut bus.gpu.registers_mut().scx,
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             DMA => Accessor::rw(
-                |bus, _| bus.gpu.registers().dma,
-                |bus, _| &mut bus.gpu.registers_mut().dma,
+                // |bus, _| bus.gpu.registers().dma,
+                // |bus, _| &mut bus.gpu.registers_mut().dma,
+                |_, _| todo!(),
+                |_, _| todo!(),
             ),
             0xFF00..=0xFF7F => {
                 error!("TODO: I/O register read");
