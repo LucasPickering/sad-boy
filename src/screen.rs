@@ -8,46 +8,48 @@ use std::{
     mem, slice,
 };
 
-/// Width of the screen in pixels
-const WIDTH_PIXELS: u16 = 160;
-/// Height of the screen in pixels
-const HEIGHT_PIXELS: u16 = 144;
-/// Total number of pixels in the image
-const IMAGE_SIZE: usize = WIDTH_PIXELS as usize * HEIGHT_PIXELS as usize;
 /// Width of the screen in terminal columns
 const WIDTH_TERM: u16 = 80;
 
 /// TODO
 pub struct Screen {
-    pixels: Box<[Pixel; IMAGE_SIZE]>,
+    pixels: Box<[Color]>,
+    width: u16,
+    height: u16,
 }
 
 impl Screen {
     /// TODO
-    pub fn new(pixels: Box<[Pixel; IMAGE_SIZE]>) -> Self {
-        Self { pixels }
+    pub fn new(width: u16, height: u16) -> Self {
+        let len = (width * height) as usize;
+        Self {
+            pixels: vec![Color::default(); len].into_boxed_slice(),
+            width,
+            height,
+        }
     }
 
-    /// TODO delete
-    pub fn test() -> Self {
-        let red = Pixel::new(255, 0, 0);
-        let green = Pixel::new(0, 255, 0);
-        let blue = Pixel::new(0, 0, 255);
-        let pixels: Vec<Pixel> = (0..IMAGE_SIZE)
-            .map(|i| match i % 3 {
-                0 => red,
-                1 => green,
-                2 => blue,
-                3.. => unreachable!(),
-            })
-            .collect();
-        let pixels: Box<[Pixel; IMAGE_SIZE]> = pixels.try_into().unwrap();
-        Self::new(pixels)
+    /// Set the color value of a single pixel
+    ///
+    /// Panics if the pixel is out of bounds.
+    pub fn set(&mut self, x: u16, y: u16, color: Color) {
+        assert!(
+            x < self.width,
+            "x {x} must be less than width {width}",
+            width = self.width
+        );
+        assert!(
+            y < self.height,
+            "y {y} must be less than height {height}",
+            height = self.height
+        );
+        let index = (y * self.width + x) as usize;
+        self.pixels[index] = color;
     }
 
     /// Reset all pixels to black
     pub fn reset(&mut self) {
-        self.pixels.fill(Pixel::default());
+        self.pixels.fill(Color::default());
     }
 
     /// Draw the current screen buffer to the terminal
@@ -60,11 +62,13 @@ impl Screen {
         out.write_all(ESCAPE)?;
         write!(
             out,
-            "_Ga=T,f=24,s={WIDTH_PIXELS},v={HEIGHT_PIXELS},c={WIDTH_TERM};"
+            "_Ga=T,f=24,s={width},v={height},c={WIDTH_TERM};",
+            width = self.width,
+            height = self.height
         )?;
 
         // Cast the pixels to raw bytes
-        let ptr: *const [Pixel] = &raw const *self.pixels;
+        let ptr: *const [Color] = &raw const *self.pixels;
         // SAFETY:
         // - Pointer is always valid because we construct it safely above
         // - Length is correct because we're casting to BYTES, and it's just the
@@ -72,7 +76,7 @@ impl Screen {
         let pixel_bytes: &[u8] = unsafe {
             slice::from_raw_parts(
                 ptr.cast(),
-                self.pixels.len() * mem::size_of::<Pixel>(),
+                self.pixels.len() * mem::size_of::<Color>(),
             )
         };
         // Encode and write as base64
@@ -87,16 +91,16 @@ impl Screen {
     }
 }
 
-/// RGB pixel
+/// 24-bit RGB color
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // We treat this as raw bytes when sending pixels over
-pub struct Pixel {
+pub struct Color {
     red: u8,
     green: u8,
     blue: u8,
 }
 
-impl Pixel {
+impl Color {
     pub fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }
     }

@@ -19,7 +19,12 @@ use crate::{
 };
 use color_eyre::eyre;
 use std::{cell::Cell, path::Path, time::Duration};
-use tokio::{runtime::LocalRuntime, sync::broadcast, task::JoinSet, time};
+use tokio::{runtime::LocalRuntime, sync::broadcast, time};
+
+/// Width of the screen in pixels
+pub const SCREEN_WIDTH: u16 = 160;
+/// Height of the screen in pixels
+pub const SCREEN_HEIGHT: u16 = 144;
 
 /// Number of dots (CPU cycles) in a single frame
 ///
@@ -75,11 +80,13 @@ impl GameBoy {
             ram: &mut self.ram,
             high_ram: &mut self.high_ram,
         };
-        runtime.block_on(futures::join!(
-            Clock::run(),
-            self.cpu.run(memory),
-            self.gpu.run(screen),
-        ));
+        runtime.block_on(async move {
+            futures::join!(
+                Clock::run(),
+                self.cpu.run(memory),
+                self.gpu.run(screen),
+            );
+        });
     }
 }
 
@@ -102,6 +109,11 @@ impl Clock {
             cycles: Cell::new(0),
             broadcast,
         }
+    }
+
+    /// Get the number of cycles elapsed in the current frame
+    pub fn elapsed() -> Cycles {
+        Cycles(Self::CLOCK.with(|clock| clock.cycles.get()))
     }
 
     /// Run the CPU clock indefinitely

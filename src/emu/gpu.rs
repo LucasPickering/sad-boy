@@ -5,23 +5,24 @@
 
 use crate::{
     emu::{
+        Clock, SCREEN_WIDTH,
         cpu::Cycles,
         memory::{self, Memory},
     },
-    screen::Screen,
+    screen::{Color, Screen},
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
 use std::{fmt::Debug, mem};
 
-const DOTS_PER_SCANLINE: u32 = 456;
-const SCANLINES_PER_FRAME: u32 = 154;
+const SCANLINES_PER_FRAME: u8 = 154;
+/// Number of dots in [PpuMode::OamScan] for a single scanline
+const MODE_2_DOTS: Cycles = Cycles(80);
 
 /// Graphics registers and processing
 #[derive(Debug)]
 pub struct Gpu {
     /// 1-byte control registers related to graphics processing
     registers: Registers,
-    ppu: Ppu,
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
@@ -45,48 +46,82 @@ pub struct Gpu {
 
 impl Gpu {
     /// Advance the current frame draw a certain number of dots
-    pub async fn run(self, screen: &mut Screen) {
-        todo!()
+    pub async fn run(mut self, screen: &mut Screen) {
+        // Each iteration of this loop is one frame
+        //
+        // For each frame, this will load the entire frame into the screen's
+        // buffer, then draw then entire frame to the screen at the end.
+        loop {
+            // Make sure the GPU and clock stay in sync
+            debug_assert_eq!(
+                Clock::elapsed(),
+                Cycles(0),
+                "Clock should start at 0 for each frame"
+            );
+            screen.reset();
+            self.registers.ly = Scanline(0);
+
+            // TODO keep this in sync with the STAT register
+            for scanline in 0..SCANLINES_PER_FRAME {
+                let scanline = Scanline(scanline);
+                self.draw_scanline(screen, scanline).await;
+                self.registers.ly = scanline;
+            }
+            screen.draw();
+        }
     }
 
-    /// Get GPU registers
-    pub fn registers(&self) -> &Registers {
-        &self.registers
+    /// Draw a single scanline with the given index to the screen
+    ///
+    /// https://gbdev.io/pandocs/Rendering.html
+    async fn draw_scanline(&mut self, screen: &mut Screen, scanline: Scanline) {
+        // TODO wait before or after executing?
+        // TODO add some assertions on Clock::elapsed()
+
+        if scanline.0 >= 144 {
+            self.set_mode(PpuMode::VerticalBlank);
+            Clock::wait(Cycles(456)).await;
+        }
+
+        // Mode 2 - OAM scan
+        // I didn't find anything in the docs about the actual rate that the GB
+        // collects objects per dot, so I'm doing it all up front. This may
+        // have a semantic impact, I'm not sure.
+        self.set_mode(PpuMode::OamScan);
+        let objects = self.get_objects();
+        Clock::wait(MODE_2_DOTS).await;
+
+        // Mode 3 - draw pixels
+        // https://gbdev.io/pandocs/Rendering.html#mode-3-length
+        self.set_mode(PpuMode::Drawing);
+        let mode_3_start = Clock::elapsed();
+        Clock::wait(Cycles(12)).await; // Initial delay
+        let y = scanline.0.into();
+        for x in 0..SCREEN_WIDTH {
+            // TODO simulate pixel FIFO
+            // https://gbdev.io/pandocs/pixel_fifo.html
+            let pixel = self.get_pixel(&objects, x, y);
+            screen.set(x, y, pixel);
+            // TODO include penalty waits
+            Clock::wait(Cycles(1)).await;
+        }
+        // Mode 3 has a dynamic length. Whatever budget it doesn't use gets
+        // rolled over to mode 0.
+        let mode_3_length = Clock::elapsed() - mode_3_start;
+
+        // Mode 0 - horizontal blank
+        self.set_mode(PpuMode::HorizontalBlank);
+        Clock::wait(Cycles(376) - mode_3_length).await;
     }
 
-    /// Get a mutable reference to GPU registers
-    pub fn registers_mut(&mut self) -> &mut Registers {
-        &mut self.registers
-    }
-
-    /// Get a reference to Object Attribute Memory
-    pub fn oam(&self) -> &Memory<ObjectAttributes> {
-        &self.oam
-    }
-
-    /// Get a mutable reference to Object Attribute Memory
-    pub fn oam_mut(&mut self) -> &mut Memory<ObjectAttributes> {
-        &mut self.oam
-    }
-
-    /// Get a reference to tile pixel data VRAM
-    pub fn tile_data(&self) -> &Memory<Tile> {
-        &self.tile_data
-    }
-
-    /// Get a mutable reference to tile pixel data VRAM
-    pub fn tile_data_mut(&mut self) -> &mut Memory<Tile> {
-        &mut self.tile_data
-    }
-
-    /// Get a reference to tile maps VRAM
-    pub fn tile_maps(&self) -> &Memory<TileIndex> {
-        &self.tile_maps
-    }
-
-    /// Get a mutable reference to tile maps VRAM
-    pub fn tile_maps_mut(&mut self) -> &mut Memory<TileIndex> {
-        &mut self.tile_maps
+    /// Calculate the color value for a specific pixel
+    fn get_pixel(&self, objects: &[ObjectAttributes], x: u16, y: u16) -> Color {
+        // https://gbdev.io/pandocs/OAM.html#drawing-priority
+        // First, check for objects
+        for object in objects {}
+        // TODO check window
+        // TODO check background
+        Color::new(255, 0, 0)
     }
 
     /// Get a list of **up to 10** visible objects for the current scanline
@@ -137,13 +172,20 @@ impl Gpu {
         };
         slice.try_into().expect("256 tiles accessible at a time")
     }
+
+    /// Set the `ppu_mode` flag of the `STAT` register
+    fn set_mode(&mut self, mode: PpuMode) {
+        self.registers.stat.update(|stat| LcdStatus {
+            ppu_mode: mode,
+            ..stat
+        });
+    }
 }
 
 impl Default for Gpu {
     fn default() -> Self {
         Self {
             registers: Registers::default(),
-            ppu: Ppu::default(),
             oam: Memory::new(memory::OAM),
             tile_data: Memory::new(memory::TILE_DATA),
             tile_maps: Memory::new(memory::TILE_MAPS),
@@ -276,6 +318,7 @@ enum ObjectSize {
     /// 8x16
     Large,
 }
+
 impl ObjectSize {
     fn height(&self) -> u8 {
         match self {
@@ -323,64 +366,26 @@ impl_bit_pack! {
     Mask::M10 => ppu_mode,
 }
 
-/// Pixel Processing Unit
-///
-/// This controls the rendering state within a single frame. A frame consists
-/// of 154 scanlines, each taking 456 dots.
-///
-/// This page is really good: https://gbdev.io/pandocs/Rendering.html
-#[derive(Debug, Default)]
-struct Ppu {
-    /// Number of elapsed dots in the current frame
+/// TODO
+#[derive(Debug)]
+struct Frame {
+    /// Number of the scanline currently being drawn
     ///
-    /// TODO don't store this here, since it's stored in the parent as well
-    dots: Cycles,
+    /// Must be in the range `[0, 153]`.
+    scanline: u16,
+    /// Number of the dots elapsed in the current scanline
+    ///
+    /// Must be in the range `[0, 455]`.
+    line_dots: u16,
+    /// TODO
     mode: PpuMode,
-}
-
-impl Ppu {
-    /// Advance the current frame draw a certain number of dots
-    fn execute(&mut self, dots: Cycles) {
-        self.dots.0 += dots.0;
-        let scanline = self.scanline();
-        self.mode = match scanline {
-            // We're in one of the drawing scanlines - figure out where in the
-            // scanline we are
-            0..144 => match self.dots.0 % DOTS_PER_SCANLINE {
-                0..80 => PpuMode::OamScan,
-                // TODO figure out how to makes modes 3/0 dynamic
-                80..252 => PpuMode::HorizontalBlank,
-                252..DOTS_PER_SCANLINE => PpuMode::Drawing,
-                // This is impossible because of the modulo above
-                DOTS_PER_SCANLINE.. => unreachable!(
-                    "scanline cannot have more than {DOTS_PER_SCANLINE} dots"
-                ),
-            },
-            144..SCANLINES_PER_FRAME => PpuMode::VerticalBlank,
-            // This indicates there were too many dots in a frame. That *should*
-            // be impossible because the longest CPU instruction is 8 cycles,
-            // and 456 is divisible by 8. Indicates a bug somewhere.
-            SCANLINES_PER_FRAME.. => panic!(
-                "frame cannot have more than {SCANLINES_PER_FRAME} scanlines, \
-                but scanline index is {scanline} ({dots:?} dots)",
-                dots = self.dots
-            ),
-        };
-    }
-
-    /// Number of the scanline last drawn to
-    ///
-    /// The first scanline of a frame is `0`; the last is `153`.
-    fn scanline(&self) -> u32 {
-        self.dots.0 / DOTS_PER_SCANLINE
-    }
 }
 
 /// Draw mode within the current frame
 ///
 /// This defines what the PPU is doing within a single frame draw.
 /// https://gbdev.io/pandocs/Rendering.html#ppu-modes
-#[derive(Debug, Default)]
+#[derive(Debug)]
 enum PpuMode {
     /// Mode 0
     ///
@@ -391,8 +396,7 @@ enum PpuMode {
     ///
     /// The tail end of the entire frame.
     VerticalBlank,
-    /// Mode 2
-    #[default]
+    /// Mode 2 - search for objects intersecting the current scanline
     OamScan,
     /// Mode 3
     Drawing,
@@ -477,6 +481,7 @@ pub struct ObjectAttributes {
     /// TODO
     flags: PackedBits<ObjectFlags>,
 }
+
 impl ObjectAttributes {
     /// Does this object intersect with the current horizontal line?
     ///
@@ -504,12 +509,12 @@ const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 ///
 /// https://gbdev.io/pandocs/OAM.html#byte-3--attributesflags
 struct ObjectFlags {
-    cgb_palette: CgbPalette,
-    bank: VramBank,
-    dmg_palette: DmgPalette,
-    x_flip: bool,
-    y_flip: bool,
     priority: bool,
+    y_flip: bool,
+    x_flip: bool,
+    dmg_palette: DmgPalette,
+    bank: VramBank,
+    cgb_palette: CgbPalette,
 }
 
 impl_bit_pack! {

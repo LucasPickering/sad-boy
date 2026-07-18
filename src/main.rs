@@ -17,8 +17,8 @@ fn main() -> eyre::Result<()> {
     initialize_tracing();
     let args = Args::parse()?;
 
-    let mut screen = Screen::test();
-    let mut game_boy = GameBoy::boot(&args.rom)?;
+    let mut screen = Screen::new(emu::SCREEN_WIDTH, emu::SCREEN_HEIGHT);
+    let game_boy = GameBoy::boot(&args.rom)?;
     game_boy.run(&mut screen);
     Ok(())
 }

@@ -210,6 +210,11 @@ impl<T: BitPack> PackedBits<T> {
     pub fn unpack(self) -> T {
         T::from_bits(self.value)
     }
+
+    /// Modify the unpacked value with a function
+    pub fn update(&mut self, f: impl FnOnce(T) -> T) {
+        *self = f(self.unpack()).pack();
+    }
 }
 
 impl<T> Clone for PackedBits<T> {

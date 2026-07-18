@@ -15,7 +15,7 @@ use crate::{
 };
 use std::{
     fmt::{self, Debug},
-    ops::{BitAnd, BitOr, BitXor},
+    ops::{Add, AddAssign, BitAnd, BitOr, BitXor, Sub},
 };
 use tracing::{error, info_span, trace};
 
@@ -35,7 +35,7 @@ impl Cpu {
     pub async fn run(mut self, mut memory: MemoryBus<'_>) {
         // TODO should we execute _then_ wait?
         let cycles = self.execute_next(&mut memory);
-        Clock::wait(cycles).await
+        Clock::wait(cycles).await;
     }
 
     /// Execute the next CPU instruction, returning the number of consumed CPU
@@ -779,18 +779,31 @@ impl_bit_pack! {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Cycles(pub u32);
 
-impl Cycles {
-    /// Deduct a number of cycles from a cycle budget
-    ///
-    /// If `cycles` is less than `self`, `self` will be set to `0`.
-    pub fn deduct(&mut self, cycles: Self) {
-        self.0 = self.0.saturating_sub(cycles.0);
+impl Add for Cycles {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for Cycles {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
     }
 }
 
 impl From<u32> for Cycles {
     fn from(value: u32) -> Self {
         Self(value)
+    }
+}
+
+impl Sub for Cycles {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 

@@ -333,7 +333,6 @@ mod tests {
     use super::*;
     use crate::emu::{
         cpu::Cpu,
-        gpu::Gpu,
         instruction::Instruction,
         memory::{Memory, MemoryBus},
         rom::Rom,
@@ -390,7 +389,6 @@ mod tests {
             rom: &Rom::empty(),
             ram: &mut Memory::zero(),
             high_ram: &mut Memory::zero(),
-            gpu: &mut Gpu::default(),
         };
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
