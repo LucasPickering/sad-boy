@@ -17,6 +17,10 @@ use std::{fmt::Debug, mem};
 const SCANLINES_PER_FRAME: u8 = 154;
 /// Number of dots in [PpuMode::OamScan] for a single scanline
 const MODE_2_DOTS: Cycles = Cycles(80);
+const COLOR_BLACK: Color = Color::new(0, 0, 0);
+const COLOR_DARK_GRAY: Color = Color::new(85, 85, 85);
+const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
+const COLOR_WHITE: Color = Color::new(255, 255, 255);
 
 /// Graphics registers and processing
 #[derive(Debug)]
@@ -136,8 +140,16 @@ impl Gpu {
     }
 
     /// Look up a color from the active color palette
+    ///
+    /// https://gbdev.io/pandocs/Palettes.html
     fn get_color(&self, index: ColorIndex) -> Color {
-        Color::new(255, 0, 0) // TODO
+        // TODO look this up in the BGP register
+        match index {
+            ColorIndex::Zero => COLOR_BLACK,
+            ColorIndex::One => COLOR_DARK_GRAY,
+            ColorIndex::Two => COLOR_LIGHT_GRAY,
+            ColorIndex::Three => COLOR_WHITE,
+        }
     }
 
     /// Get a list of **up to 10** visible objects for the current scanline

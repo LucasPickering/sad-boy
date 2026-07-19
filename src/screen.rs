@@ -101,7 +101,7 @@ pub struct Color {
 }
 
 impl Color {
-    pub fn new(red: u8, green: u8, blue: u8) -> Self {
+    pub const fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }
     }
 }
