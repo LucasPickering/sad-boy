@@ -22,9 +22,9 @@ use std::{cell::Cell, path::Path, time::Duration};
 use tokio::{runtime::LocalRuntime, sync::broadcast, time};
 
 /// Width of the screen in pixels
-pub const SCREEN_WIDTH: u16 = 160;
+pub const SCREEN_WIDTH: u8 = 160;
 /// Height of the screen in pixels
-pub const SCREEN_HEIGHT: u16 = 144;
+pub const SCREEN_HEIGHT: u8 = 144;
 
 /// Number of dots (CPU cycles) in a single frame
 ///

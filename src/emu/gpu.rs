@@ -76,8 +76,6 @@ impl Gpu {
     /// https://gbdev.io/pandocs/Rendering.html
     async fn draw_scanline(&mut self, screen: &mut Screen, scanline: Scanline) {
         // TODO wait before or after executing?
-        // TODO add some assertions on Clock::elapsed()
-
         if scanline.0 >= 144 {
             self.set_mode(PpuMode::VerticalBlank);
             Clock::wait(Cycles(456)).await;
@@ -89,6 +87,13 @@ impl Gpu {
         // have a semantic impact, I'm not sure.
         self.set_mode(PpuMode::OamScan);
         let objects = self.get_objects();
+        // Render order relies on the objects being sorted
+        // NOTE: This is only for non-CGB mode. In CGB mode this will have to
+        // change
+        debug_assert!(
+            objects.is_sorted_by_key(|object| object.attributes.x),
+            "Objects must be sorted ascending by x coordinate"
+        );
         Clock::wait(MODE_2_DOTS).await;
 
         // Mode 3 - draw pixels
@@ -96,12 +101,12 @@ impl Gpu {
         self.set_mode(PpuMode::Drawing);
         let mode_3_start = Clock::elapsed();
         Clock::wait(Cycles(12)).await; // Initial delay
-        let y = scanline.0.into();
+        let y = scanline.0;
         for x in 0..SCREEN_WIDTH {
             // TODO simulate pixel FIFO
             // https://gbdev.io/pandocs/pixel_fifo.html
-            let pixel = self.get_pixel(&objects, x, y);
-            screen.set(x, y, pixel);
+            let color_index = self.get_pixel(&objects, x, y);
+            screen.set(x.into(), y.into(), self.get_color(color_index));
             // TODO include penalty waits
             Clock::wait(Cycles(1)).await;
         }
@@ -114,14 +119,25 @@ impl Gpu {
         Clock::wait(Cycles(376) - mode_3_length).await;
     }
 
-    /// Calculate the color value for a specific pixel
-    fn get_pixel(&self, objects: &[ObjectAttributes], x: u16, y: u16) -> Color {
+    /// Calculate the color index for a specific pixel
+    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
-        // First, check for objects
-        for object in objects {}
+        // First, check for objects. These are pre-sorted by x
+        if let Some((tile_index, x, y)) =
+            objects.iter().find_map(|object| object.get_pixel(x, y))
+        {
+            let tile = self.get_tile(tile_index);
+            return tile.color_index(x, y);
+        }
+
         // TODO check window
         // TODO check background
-        Color::new(255, 0, 0)
+        ColorIndex::Zero
+    }
+
+    /// Look up a color from the active color palette
+    fn get_color(&self, index: ColorIndex) -> Color {
+        Color::new(255, 0, 0) // TODO
     }
 
     /// Get a list of **up to 10** visible objects for the current scanline
@@ -130,19 +146,27 @@ impl Gpu {
     /// scanline, the objects earlier in memory (with lower addresses) get
     /// priority.
     ///
+    /// Returned objects will always be sorted by x coordinate (ascending).
+    ///
     /// https://gbdev.io/pandocs/OAM.html#selection-priority
-    fn get_objects(&self) -> Vec<ObjectAttributes> {
+    fn get_objects(&self) -> Vec<Object> {
         let line = self.registers.ly;
-        let object_height = self.registers.lcdc.unpack().object_size.height();
+        // TODO the height should be changeable between objects? maybe we need
+        // to delay between each object fetch
+        let height = self.registers.lcdc.unpack().object_size.height();
         // Take the first 10 objects intersecting the current line
-        //
-        self.oam
+        let mut objects = self
+            .oam
             .as_values()
             .iter()
-            .filter(|object| object.intersects(line, object_height))
-            .take(10)
             .copied()
-            .collect()
+            .map(|attributes| Object { attributes, height })
+            .filter(|object| object.intersects_line(line))
+            .take(10)
+            .collect::<Vec<_>>();
+        // Sort by x because that's what we need for render order
+        objects.sort_by_key(|object| object.attributes.x);
+        objects
     }
 
     /// TODO
@@ -366,21 +390,6 @@ impl_bit_pack! {
     Mask::M10 => ppu_mode,
 }
 
-/// TODO
-#[derive(Debug)]
-struct Frame {
-    /// Number of the scanline currently being drawn
-    ///
-    /// Must be in the range `[0, 153]`.
-    scanline: u16,
-    /// Number of the dots elapsed in the current scanline
-    ///
-    /// Must be in the range `[0, 455]`.
-    line_dots: u16,
-    /// TODO
-    mode: PpuMode,
-}
-
 /// Draw mode within the current frame
 ///
 /// This defines what the PPU is doing within a single frame draw.
@@ -417,6 +426,14 @@ impl_bit_pack! {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scanline(u8);
 
+/// TODO
+enum ColorIndex {
+    Zero,
+    One,
+    Two,
+    Three,
+}
+
 /// An 8x8 collection of pixels
 ///
 /// A tile is 16 bytes:
@@ -431,6 +448,28 @@ pub struct Tile {
     lines: [TileLine; 8],
 }
 const _: () = assert!(mem::size_of::<Tile>() == 16);
+
+impl Tile {
+    /// Get a color index for a single pixel in the tile
+    ///
+    /// `x` and `y` must both be in the range `[0, 7]`. This will panic
+    /// otherwise.
+    fn color_index(&self, x: u8, y: u8) -> ColorIndex {
+        debug_assert!(
+            x < 8 && y < 8,
+            "Tile coordinates must be [0,7], but got ({x}, {y})"
+        );
+        let line = self.lines[y as usize];
+        // Grab the bit corresponding to this pixel from each byte
+        let bit = Bit(x);
+        match (bit.get(line.low), bit.get(line.high)) {
+            (false, false) => ColorIndex::Zero,
+            (false, true) => ColorIndex::One,
+            (true, false) => ColorIndex::Two,
+            (true, true) => ColorIndex::Three,
+        }
+    }
+}
 
 /// A single 8-pixel line in a tile
 ///
@@ -454,6 +493,69 @@ const _: () = assert!(mem::size_of::<TileLine>() == 2);
 #[repr(C)]
 pub struct TileIndex(u8);
 const _: () = assert!(mem::size_of::<TileIndex>() == 1);
+
+impl TileIndex {
+    /// Get the index of the tile after this one
+    ///
+    /// This is used for 8x16 tiles. The bottom tile is always the one
+    /// immediately after the top tile.
+    fn next(self) -> Self {
+        debug_assert!(self.0 < 255, "Cannot get next tile for tile index 255");
+        Self(self.0 + 1)
+    }
+}
+
+/// An object that's been loaded in mode 2 and is ready to be drawn
+struct Object {
+    /// Attributes loaded from OAM
+    attributes: ObjectAttributes,
+    /// Height of the object (8 or 16), loaded from the `LCDC` register while
+    /// the object is being loaded
+    height: u8,
+}
+
+impl Object {
+    /// Does this object intersect with the current horizontal line?
+    ///
+    /// The object height (8 vs 16 pixels) is determined by the `LCDC` register,
+    /// so it must be passed in. This *only* checks for vertical intersection.
+    /// If an object intersects vertically but is off the screen horizontally,
+    /// this will **still return true.** That's consistent with the [object
+    /// selection priority algorithm](https://gbdev.io/pandocs/OAM.html#selection-priority).
+    fn intersects_line(&self, line: Scanline) -> bool {
+        // attributes.y is shifted +16. Shift the line up to match. Subtracting
+        // could incur underflow. Addition can't overflow because the max line
+        // value is 153.
+        let line = line.0 + 16;
+        let top = self.attributes.y; // Top edge (inclusive)
+        let bottom = self.attributes.y + self.height; // Bottom edge (exclusive)
+        bottom > line && top <= line
+    }
+
+    /// TODO
+    fn get_pixel(&self, x: u8, y: u8) -> Option<(TileIndex, u8, u8)> {
+        let x = x + 8;
+        let y = y + 16;
+        if self.attributes.x <= x
+            && x < (self.attributes.x + 8)
+            && self.attributes.y <= y
+            && y < (self.attributes.y + 16)
+        {
+            let tile_index = if y < 8 {
+                self.attributes.tile_index
+            } else {
+                self.attributes.tile_index.next()
+            };
+            // Safety: these won't underflow/overflow because of the bounds
+            // checks above
+            let x = x - self.attributes.x;
+            let y = y - self.attributes.y;
+            Some((tile_index, x, y))
+        } else {
+            None
+        }
+    }
+}
 
 /// Metadata specifying a single pixel object
 ///
@@ -480,25 +582,6 @@ pub struct ObjectAttributes {
     tile_index: TileIndex,
     /// TODO
     flags: PackedBits<ObjectFlags>,
-}
-
-impl ObjectAttributes {
-    /// Does this object intersect with the current horizontal line?
-    ///
-    /// The object height (8 vs 16 pixels) is determined by the `LCDC` register,
-    /// so it must be passed in. This *only* checks for vertical intersection.
-    /// If an object intersects vertically but is off the screen horizontally,
-    /// this will **still return true.** That's consistent with the [object
-    /// selection priority algorithm](https://gbdev.io/pandocs/OAM.html#selection-priority).
-    fn intersects(self, line: Scanline, object_height: u8) -> bool {
-        // self.y is shifted +16. Shift the line up to match. Subtracting could
-        // incur underflow. Addition can't overflow because the max line value
-        // is 153.
-        let line = line.0 + 16;
-        let top = self.y; // Top edge (inclusive)
-        let bottom = self.y + object_height; // Bottom edge (exclusive)
-        bottom > line && top <= line
-    }
 }
 const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 
