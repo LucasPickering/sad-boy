@@ -7,6 +7,7 @@ use std::{
     io::{self, Write},
     mem, slice,
 };
+use tracing::error;
 
 /// Width of the screen in terminal columns
 const WIDTH_TERM: u16 = 80;
@@ -53,7 +54,14 @@ impl Screen {
     }
 
     /// Draw the current screen buffer to the terminal
-    pub fn draw(&self) -> io::Result<()> {
+    pub fn draw(&self) {
+        if let Err(error) = self.draw_inner() {
+            error!(%error, "Error drawing to screen");
+        }
+    }
+
+    /// Implementation for [Self::draw]
+    fn draw_inner(&self) -> io::Result<()> {
         // https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
         const ESCAPE: &[u8] = b"\x1b";
         let mut out = io::stdout();

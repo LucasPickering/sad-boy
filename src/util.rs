@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     fmt::{self, Debug, Display},
     marker::PhantomData,
     ops::{BitAnd, BitOr, Deref, DerefMut, Not},
@@ -199,6 +200,9 @@ pub struct PackedBits<T> {
 }
 
 impl<T: BitPack> PackedBits<T> {
+    /// Create a [PackedBits] value from a byte
+    ///
+    /// The input byte is not validated in any way. It will be stored as-is.
     pub fn new(value: u8) -> Self {
         Self {
             value,
@@ -251,6 +255,18 @@ impl<T> Deref for PackedBits<T> {
 impl<T> DerefMut for PackedBits<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.value
+    }
+}
+
+impl<T: BitPack> From<u8> for PackedBits<T> {
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<T: BitPack> From<PackedBits<T>> for u8 {
+    fn from(value: PackedBits<T>) -> Self {
+        value.value
     }
 }
 
@@ -321,4 +337,34 @@ impl Display for BytesDisplay<'_> {
 enum BytesDisplayMode {
     Binary,
     Hex,
+}
+
+/// A wrapper around [RefCell] that only exposes its value through closures
+///
+/// This constraint makes it impossible to hold onto a cell across an `await`
+/// boundary, which prevents concurrent access in this single-threaded world.
+#[derive(Debug, Default)]
+pub struct AsyncCell<T>(RefCell<T>);
+
+impl<T> AsyncCell<T> {
+    pub fn new(value: T) -> Self {
+        Self(RefCell::new(value))
+    }
+
+    /// Run a function with read access to the inner value, returning its output
+    pub fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
+        f(&self.0.borrow())
+    }
+
+    /// Run a function with mutable access to the inner value, returning its
+    /// output
+    pub fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
+        f(&mut self.0.borrow_mut())
+    }
+}
+
+impl<T> From<T> for AsyncCell<T> {
+    fn from(value: T) -> Self {
+        Self::new(value)
+    }
 }

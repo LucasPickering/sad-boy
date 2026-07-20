@@ -10,14 +10,9 @@ use crate::{
         memory::{self, Memory},
     },
     screen::{Color, Screen},
-    util::{Bit, Mask, PackedBits, impl_bit_pack},
+    util::{AsyncCell, Bit, Mask, PackedBits, impl_bit_pack},
 };
-use std::{
-    cell::RefCell,
-    fmt::Debug,
-    mem,
-    ops::{Deref, DerefMut},
-};
+use std::{fmt::Debug, mem};
 
 const SCANLINES_PER_FRAME: u8 = 154;
 /// Number of dots in [PpuMode::OamScan] for a single scanline
@@ -27,15 +22,22 @@ const COLOR_DARK_GRAY: Color = Color::new(85, 85, 85);
 const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
 const COLOR_WHITE: Color = Color::new(255, 255, 255);
 
+/// Shorthand to read a register from [Registers]
+macro_rules! reg {
+    ($gpu:expr, $register:ident) => {
+        $gpu.registers.with(|r| r.$register)
+    };
+}
+
 /// Graphics registers and processing
 #[derive(Debug)]
 pub struct Gpu {
     /// 1-byte control registers related to graphics processing
-    registers: RefCell<Registers>,
+    pub registers: AsyncCell<Registers>,
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    oam: RefCell<Memory<ObjectAttributes>>,
+    pub oam: AsyncCell<Memory<ObjectAttributes>>,
     /// Pixel data for tiles
     ///
     /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
@@ -43,14 +45,14 @@ pub struct Gpu {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: RefCell<Memory<Tile>>,
+    pub tile_data: AsyncCell<Memory<Tile>>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: RefCell<Memory<TileIndex>>,
+    pub tile_maps: AsyncCell<Memory<TileIndex>>,
 }
 
 impl Gpu {
@@ -68,22 +70,31 @@ impl Gpu {
                 "Clock should start at 0 for each frame"
             );
             screen.reset();
-            self.registers.borrow_mut().ly = Scanline(0);
 
-            // TODO keep this in sync with the STAT register
             for scanline in 0..SCANLINES_PER_FRAME {
-                let scanline = Scanline(scanline);
-                self.draw_scanline(screen, scanline).await;
-                self.registers.borrow_mut().ly = scanline;
+                self.registers.with_mut(|r| r.ly = Scanline(scanline));
+                self.draw_scanline(screen).await;
+                // Set bit 2 of STAT to match LY==LYC
+                self.registers.with_mut(|r| {
+                    r.stat.update(|stat| LcdStatus {
+                        lyc_equal_ly: r.ly == r.lyc,
+                        ..stat
+                    });
+                });
             }
             screen.draw();
         }
     }
 
-    /// Draw a single scanline with the given index to the screen
+    /// Draw the current scanline to the screen
+    ///
+    ///
+    /// The `LY` register should be set to the current scanline **before**
+    /// calling this.
     ///
     /// https://gbdev.io/pandocs/Rendering.html
-    async fn draw_scanline(&self, screen: &mut Screen, scanline: Scanline) {
+    async fn draw_scanline(&self, screen: &mut Screen) {
+        let scanline = reg!(self, ly);
         // TODO wait before or after executing?
         if scanline.0 >= 144 {
             self.set_mode(PpuMode::VerticalBlank);
@@ -128,18 +139,6 @@ impl Gpu {
         Clock::wait(Cycles(376) - mode_3_length).await;
     }
 
-    // TODO returning the ref is bad, could be held across an await
-
-    /// TODO
-    pub fn registers(&self) -> impl Deref<Target = Registers> {
-        self.registers.borrow()
-    }
-
-    /// TODO
-    pub fn registers_mut(&self) -> impl DerefMut<Target = Registers> {
-        self.registers.borrow_mut()
-    }
-
     /// Calculate the color index for a specific pixel
     fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
@@ -179,22 +178,20 @@ impl Gpu {
     ///
     /// https://gbdev.io/pandocs/OAM.html#selection-priority
     fn get_objects(&self) -> Vec<Object> {
-        let registers = self.registers.borrow();
-        let line = registers.ly;
+        let line = reg!(self, ly);
         // TODO the height should be changeable between objects? maybe we need
         // to delay between each object fetch
-        let height = registers.lcdc.unpack().object_size.height();
+        let height = reg!(self, lcdc).unpack().object_size.height();
         // Take the first 10 objects intersecting the current line
-        let mut objects = self
-            .oam
-            .borrow()
-            .as_values()
-            .iter()
-            .copied()
-            .map(|attributes| Object { attributes, height })
-            .filter(|object| object.intersects_line(line))
-            .take(10)
-            .collect::<Vec<_>>();
+        let mut objects = self.oam.with(|oam| {
+            oam.as_values()
+                .iter()
+                .copied()
+                .map(|attributes| Object { attributes, height })
+                .filter(|object| object.intersects_line(line))
+                .take(10)
+                .collect::<Vec<_>>()
+        });
         // Sort by x because that's what we need for render order
         objects.sort_by_key(|object| object.attributes.x);
         objects
@@ -203,8 +200,7 @@ impl Gpu {
     /// TODO
     fn get_tile(&self, index: TileIndex) -> Tile {
         // Select active tiles based on the LCDC flag
-        let tiles = self
-            .get_tiles(self.registers.borrow().lcdc.unpack().bg_window_tiles);
+        let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
         // Safety: tiles is an array of 256, so the index must be valid
         tiles[index.0 as usize]
     }
@@ -215,25 +211,28 @@ impl Gpu {
     /// Each addressing mode can access exactly 256 tiles, so that's encoded in
     /// the return type.
     fn get_tiles(&self, area: TileDataArea) -> [Tile; 256] {
-        let tile_data = self.tile_data.borrow();
-        let tiles = tile_data.as_values();
-        debug_assert_eq!(
-            tiles.len(),
-            128 * 3,
-            "Tile data should be 3 blocks of 128 tiles"
-        );
-        let slice = match area {
-            TileDataArea::Low => &tiles[..256],
-            TileDataArea::High => &tiles[128..],
-        };
-        slice.try_into().expect("256 tiles accessible at a time")
+        self.tile_data.with(|tile_data| {
+            let tiles = tile_data.as_values();
+            debug_assert_eq!(
+                tiles.len(),
+                128 * 3,
+                "Tile data should be 3 blocks of 128 tiles"
+            );
+            let slice = match area {
+                TileDataArea::Low => &tiles[..256],
+                TileDataArea::High => &tiles[128..],
+            };
+            slice.try_into().expect("256 tiles accessible at a time")
+        })
     }
 
     /// Set the `ppu_mode` flag of the `STAT` register
     fn set_mode(&self, mode: PpuMode) {
-        self.registers.borrow_mut().stat.update(|stat| LcdStatus {
-            ppu_mode: mode,
-            ..stat
+        self.registers.with_mut(|r| {
+            r.stat.update(|stat| LcdStatus {
+                ppu_mode: mode,
+                ..stat
+            });
         });
     }
 }
@@ -241,7 +240,7 @@ impl Gpu {
 impl Default for Gpu {
     fn default() -> Self {
         Self {
-            registers: RefCell::default(),
+            registers: AsyncCell::default(),
             oam: Memory::new(memory::OAM).into(),
             tile_data: Memory::new(memory::TILE_DATA).into(),
             tile_maps: Memory::new(memory::TILE_MAPS).into(),
@@ -455,7 +454,7 @@ impl_bit_pack! {
 ///
 /// Range is `[0, 153]`. `[144, 153]` is the vblank period. Any value `>=154` is
 /// invalid.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Scanline(u8);
 
 impl From<u8> for Scanline {
