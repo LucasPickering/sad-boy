@@ -79,8 +79,9 @@ impl GameBoy {
             rom: &self.rom,
             ram: &mut self.ram,
             high_ram: &mut self.high_ram,
+            gpu: &self.gpu,
         };
-        runtime.block_on(async move {
+        runtime.block_on(async {
             futures::join!(
                 Clock::run(),
                 self.cpu.run(memory),

@@ -1,4 +1,4 @@
-use crate::emu::{instruction::Instruction, rom::Rom};
+use crate::emu::{gpu::Gpu, instruction::Instruction, rom::Rom};
 use std::{
     any,
     fmt::{self, Debug, Display},
@@ -73,6 +73,12 @@ pub struct MemoryBus<'a> {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     pub high_ram: &'a mut Memory<u8>,
+    /// Graphics processing
+    ///
+    /// This holds VRAM and graphics-related IO registers. This reference is
+    /// shared with a separate GPU task, so it's an immutable reference with
+    /// internal mutability.
+    pub gpu: &'a Gpu,
 }
 
 impl MemoryBus<'_> {
