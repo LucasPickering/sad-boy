@@ -123,14 +123,18 @@ impl CpuExe<'_, '_> {
         dest: Value8,
         value: bool,
     ) -> Cycles {
-        let (dest, cycles) = match dest {
+        match dest {
             Value8::Register(register) => {
-                (self.register8_mut(register), 2.into())
+                let dest = self.register8_mut(register);
+                *dest = bit.set(*dest, value);
+                2.into()
             }
-            Value8::Hl => (self.hl_mem_mut(), 4.into()),
-        };
-        *dest = bit.set(*dest, value);
-        cycles
+            Value8::Hl => {
+                let src = self.hl_mem();
+                self.set_hl_mem(bit.set(src, value));
+                4.into()
+            }
+        }
     }
 
     /// Execute a unary bitwise instruction like `SWAP` or `SRL`
@@ -151,14 +155,19 @@ impl CpuExe<'_, '_> {
         dest: Value8,
     ) -> Cycles {
         let carry = self.registers.flags().carry;
-        let (dest, cycles) = match dest {
+        let (new, carry, cycles) = match dest {
             Value8::Register(register) => {
-                (self.register8_mut(register), 2.into())
+                let dest = self.register8_mut(register);
+                let (new, carry) = operation(*dest, carry);
+                *dest = new;
+                (new, carry, 2.into())
             }
-            Value8::Hl => (self.hl_mem_mut(), 4.into()),
+            Value8::Hl => {
+                let (new, carry) = operation(self.hl_mem(), carry);
+                self.set_hl_mem(new);
+                (new, carry, 4.into())
+            }
         };
-        let (new, carry) = operation(*dest, carry);
-        *dest = new;
         self.registers.set_flags(BcdFlags {
             zero: new == 0,
             subtract: false,
@@ -333,6 +342,7 @@ mod tests {
     use super::*;
     use crate::emu::{
         cpu::Cpu,
+        gpu::Gpu,
         instruction::Instruction,
         memory::{Memory, MemoryBus},
         rom::Rom,
@@ -389,7 +399,7 @@ mod tests {
             rom: &Rom::empty(),
             ram: &mut Memory::zero(),
             high_ram: &mut Memory::zero(),
-            gpu: todo!(),
+            gpu: &Gpu::default(),
         };
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));

@@ -12,7 +12,12 @@ use crate::{
     screen::{Color, Screen},
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
-use std::{cell::RefCell, fmt::Debug, mem, ops::DerefMut};
+use std::{
+    cell::RefCell,
+    fmt::Debug,
+    mem,
+    ops::{Deref, DerefMut},
+};
 
 const SCANLINES_PER_FRAME: u8 = 154;
 /// Number of dots in [PpuMode::OamScan] for a single scanline
@@ -121,6 +126,13 @@ impl Gpu {
         // Mode 0 - horizontal blank
         self.set_mode(PpuMode::HorizontalBlank);
         Clock::wait(Cycles(376) - mode_3_length).await;
+    }
+
+    // TODO returning the ref is bad, could be held across an await
+
+    /// TODO
+    pub fn registers(&self) -> impl Deref<Target = Registers> {
+        self.registers.borrow()
     }
 
     /// TODO
@@ -445,6 +457,18 @@ impl_bit_pack! {
 /// invalid.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Scanline(u8);
+
+impl From<u8> for Scanline {
+    fn from(value: u8) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Scanline> for u8 {
+    fn from(value: Scanline) -> Self {
+        value.0
+    }
+}
 
 /// TODO
 enum ColorIndex {

@@ -32,6 +32,8 @@ pub const LCDC: u16 = 0xFF40;
 pub const STAT: u16 = 0xFF41;
 pub const SCY: u16 = 0xFF42;
 pub const SCX: u16 = 0xFF43;
+pub const LY: u16 = 0xFF44;
+pub const LYC: u16 = 0xFF45;
 pub const DMA: u16 = 0xFF46;
 
 /// Generate `x_START` and `x_END` consts for a set of memory ranges
@@ -105,26 +107,15 @@ impl MemoryBus<'_> {
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
         let accessor = Self::accessor(address);
-        (accessor.read)(self, address)
-    }
-
-    /// Get a mutable reference to a 1-byte value in memory
-    ///
-    /// If the memory isn't writable, return `None`.
-    pub fn get8_mut(&mut self, address: Address) -> Option<&mut u8> {
-        let accessor = Self::accessor(address);
-        accessor.write.map(|f| f(self, address))
+        accessor.read(self, address)
     }
 
     /// Set a 1-byte value in memory
     ///
     /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
-        if let Some(byte) = self.get8_mut(address) {
-            *byte = value;
-        } else {
-            error!("Skipping write to read-only address {address}");
-        }
+        let accessor = Self::accessor(address);
+        accessor.write(self, address, value);
     }
 
     /// Get a 2-byte value from memory
@@ -165,13 +156,13 @@ impl MemoryBus<'_> {
                 // |bus, address| bus.gpu.tile_data().byte(address),
                 // |bus, address| bus.gpu.tile_data_mut().byte_mut(address),
                 |_, _| todo!(),
-                |_, _| todo!(),
+                |_, _, _| todo!(),
             ),
             TILE_MAPS_START..=TILE_MAPS_LAST => Accessor::rw(
                 // |bus, address| bus.gpu.tile_maps().byte(address),
                 // |bus, address| bus.gpu.tile_maps_mut().byte_mut(address),
                 |_, _| todo!(),
-                |_, _| todo!(),
+                |_, _, _| todo!(),
             ),
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -179,7 +170,7 @@ impl MemoryBus<'_> {
             }
             RAM_START..=RAM_LAST => Accessor::rw(
                 |bus, address| bus.ram.byte(address),
-                |bus, address| bus.ram.byte_mut(address),
+                |bus, address, value| *bus.ram.byte_mut(address) = value,
             ),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
@@ -193,41 +184,39 @@ impl MemoryBus<'_> {
                 // // TODO OAM write isn't allowed during draw mode 2 or 3
                 // |bus, address| bus.gpu.oam_mut().byte_mut(address),
                 |_, _| todo!(),
-                |_, _| todo!(),
+                |_, _, _| todo!(),
             ),
             // Null mem
             0xFEA0..=0xFEFF => Accessor::ro(|_, _| 0),
 
             // Hardware registers
             LCDC => Accessor::rw(
-                // |bus, _| *bus.gpu.registers().lcdc,
-                // |bus, _| &mut bus.gpu.registers_mut().lcdc,
-                |_, _| todo!(),
-                |_, _| todo!(),
+                |bus, _| *bus.gpu.registers().lcdc,
+                |bus, _, value| *bus.gpu.registers_mut().lcdc = value,
             ),
             STAT => Accessor::rw(
-                // |bus, _| *bus.gpu.registers().stat,
-                // |bus, _| &mut bus.gpu.registers_mut().stat,
-                |_, _| todo!(),
-                |_, _| todo!(),
+                |bus, _| *bus.gpu.registers().stat,
+                |bus, _, value| *bus.gpu.registers_mut().stat = value,
             ),
             SCY => Accessor::rw(
-                // |bus, _| bus.gpu.registers().scy,
-                // |bus, _| &mut bus.gpu.registers_mut().scy,
-                |_, _| todo!(),
-                |_, _| todo!(),
+                |bus, _| bus.gpu.registers().scy,
+                |bus, _, value| bus.gpu.registers_mut().scy = value,
             ),
             SCX => Accessor::rw(
-                // |bus, _| bus.gpu.registers().scx,
-                // |bus, _| &mut bus.gpu.registers_mut().scx,
-                |_, _| todo!(),
-                |_, _| todo!(),
+                |bus, _| bus.gpu.registers().scx,
+                |bus, _, value| bus.gpu.registers_mut().scx = value,
+            ),
+            LY => Accessor::rw(
+                |bus, _| bus.gpu.registers().ly.into(),
+                |bus, _, value| bus.gpu.registers_mut().ly = value.into(),
+            ),
+            LYC => Accessor::rw(
+                |bus, _| bus.gpu.registers().lyc.into(),
+                |bus, _, value| bus.gpu.registers_mut().lyc = value.into(),
             ),
             DMA => Accessor::rw(
-                // |bus, _| bus.gpu.registers().dma,
-                // |bus, _| &mut bus.gpu.registers_mut().dma,
-                |_, _| todo!(),
-                |_, _| todo!(),
+                |bus, _| bus.gpu.registers().dma,
+                |bus, _, value| bus.gpu.registers_mut().dma = value,
             ),
             0xFF00..=0xFF7F => {
                 error!("TODO: I/O register read");
@@ -236,7 +225,7 @@ impl MemoryBus<'_> {
 
             HIGH_RAM_START..=HIGH_RAM_LAST => Accessor::rw(
                 |bus, address| bus.high_ram.byte(address),
-                |bus, address| bus.high_ram.byte_mut(address),
+                |bus, address, value| *bus.high_ram.byte_mut(address) = value,
             ),
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
@@ -428,7 +417,7 @@ impl<T> Memory<T> {
 }
 
 type ReadAccessor = fn(&MemoryBus, Address) -> u8;
-type WriteAccessor = for<'a> fn(&'a mut MemoryBus, Address) -> &'a mut u8;
+type WriteAccessor = fn(&mut MemoryBus, Address, u8);
 
 /// A container for functions to extract a single byte value from the memory
 /// bus
@@ -439,22 +428,32 @@ type WriteAccessor = for<'a> fn(&'a mut MemoryBus, Address) -> &'a mut u8;
 /// custom match macro, but I hate big macros because they break formatting.
 ///
 /// Some memory is read-only, in which case there will be no mutable accessor.
+///
+/// TODO update^^
 struct Accessor {
     read: ReadAccessor,
-    write: Option<WriteAccessor>,
+    write: WriteAccessor,
 }
 
 impl Accessor {
     /// Read-only memory accessor
     fn ro(read: ReadAccessor) -> Self {
-        Self { read, write: None }
+        Self {
+            read,
+            write: |_, _, _| {},
+        }
     }
 
     /// Read-write memory accessor
     fn rw(read: ReadAccessor, write: WriteAccessor) -> Self {
-        Self {
-            read,
-            write: Some(write),
-        }
+        Self { read, write }
+    }
+
+    fn read(&self, bus: &MemoryBus, address: Address) -> u8 {
+        (self.read)(bus, address)
+    }
+
+    fn write(&self, bus: &mut MemoryBus, address: Address, value: u8) {
+        (self.write)(bus, address, value);
     }
 }

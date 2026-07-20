@@ -580,13 +580,6 @@ impl CpuExe<'_, '_> {
         self.memory.get8(Address(self.registers.hl()))
     }
 
-    /// TODO
-    fn hl_mem_mut(&mut self) -> &mut u8 {
-        self.memory
-            .get8_mut(Address(self.registers.hl()))
-            .expect("TODO")
-    }
-
     /// Set the value of the byte of memory pointed to by register `hl`
     fn set_hl_mem(&mut self, value: u8) {
         self.memory.set8(Address(self.registers.hl()), value);
