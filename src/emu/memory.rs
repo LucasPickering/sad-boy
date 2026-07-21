@@ -195,7 +195,7 @@ impl MemoryBus<'_> {
             TILE_MAPS_START..=TILE_MAPS_LAST => {
                 self.gpu.tile_maps().set_byte(address, value);
             }
-            0xA000..=0xBFFF => todo!("cartridge RAM"),
+            0xA000..=0xBFFF => error!("cartridge RAM"),
             RAM_START..=RAM_LAST => self.ram.set_byte(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
@@ -215,13 +215,13 @@ impl MemoryBus<'_> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
-            0xFF00..=0xFF7F => todo!("unmapped I/O register"),
+            0xFF00..=0xFF7F => error!("unmapped I/O register"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
                 self.high_ram.set_byte(address, value);
             }
 
-            0xFFFF => todo!("TODO: Interrupt Enabled Register write"),
+            0xFFFF => error!("TODO: Interrupt Enabled Register write"),
         }
     }
 

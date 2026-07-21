@@ -2,7 +2,8 @@
 
 use crate::{
     emu::{
-        cpu::{BcdFlags, CpuExe, Cycles},
+        clock::Cycles,
+        cpu::{BcdFlags, CpuExe},
         instruction::{Add, DecInc, Operand, Value8},
     },
     util::Bit,

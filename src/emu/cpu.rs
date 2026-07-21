@@ -5,6 +5,7 @@ mod math;
 use crate::{
     emu::{
         Clock,
+        clock::Cycles,
         instruction::{
             ConditionCode, Instruction, Jump, Load, LoadHigh, Register8,
             Register16, Register16Memory, Register16Stack, Value8,
@@ -15,7 +16,7 @@ use crate::{
 };
 use std::{
     fmt::{self, Debug},
-    ops::{Add, AddAssign, BitAnd, BitOr, BitXor, Sub},
+    ops::{BitAnd, BitOr, BitXor},
 };
 use tracing::{error, info_span, trace};
 
@@ -34,8 +35,10 @@ impl Cpu {
     /// TODO
     pub async fn run(mut self, mut memory: MemoryBus<'_>) {
         // TODO should we execute _then_ wait?
-        let cycles = self.execute_next(&mut memory);
-        Clock::wait(cycles).await;
+        loop {
+            let cycles = self.execute_next(&mut memory);
+            Clock::wait(cycles).await;
+        }
     }
 
     /// Execute the next CPU instruction, returning the number of consumed CPU
@@ -90,7 +93,7 @@ impl CpuExe<'_, '_> {
             registers = ?self.registers,
         )
         .entered();
-        trace!("Executing");
+        trace!("Executing instruction");
         match instruction {
             Instruction::Adc(rhs) => self.add_carry(rhs),
             Instruction::Add(add) => self.add(add),
@@ -762,42 +765,6 @@ impl_bit_pack! {
     Bit(6).mask() => subtract,
     Bit(5).mask() => half_carry,
     Bit(4).mask() => carry,
-}
-
-/// Newtype for a number of CPU cycles
-///
-/// This makes it clearer what a value is, instead of passing around `u32`
-/// everywhere. Every executed instruction returns this value so the CPU can
-/// report how many cycles were consumed from the budget.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Cycles(pub u32);
-
-impl Add for Cycles {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl AddAssign for Cycles {
-    fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0;
-    }
-}
-
-impl From<u32> for Cycles {
-    fn from(value: u32) -> Self {
-        Self(value)
-    }
-}
-
-impl Sub for Cycles {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0 - rhs.0)
-    }
 }
 
 #[cfg(test)]

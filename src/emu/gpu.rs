@@ -5,14 +5,15 @@
 
 use crate::{
     emu::{
-        Clock, SCREEN_WIDTH,
-        cpu::Cycles,
+        SCREEN_WIDTH,
+        clock::{Clock, Cycles},
         memory::{self, Address, Memory, MemoryRead, MemoryWrite},
     },
     screen::{Color, Screen},
     util::{Bit, Mask, PackedBits, TodoCell, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
+use tracing::trace;
 
 const SCANLINES_PER_FRAME: u8 = 154;
 /// Number of dots in [PpuMode::OamScan] for a single scanline
@@ -56,6 +57,37 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    /// Advance the current frame draw a certain number of dots
+    pub async fn run(&self, screen: &mut Screen) {
+        // Each iteration of this loop is one frame
+        //
+        // For each frame, this will load the entire frame into the screen's
+        // buffer, then draw then entire frame to the screen at the end.
+        loop {
+            trace!("GPU frame");
+            // Make sure the GPU and clock stay in sync
+            debug_assert_eq!(
+                Clock::elapsed(),
+                Cycles(0),
+                "Clock should start at 0 for each frame"
+            );
+            screen.reset();
+
+            for scanline in 0..SCANLINES_PER_FRAME {
+                self.registers.with_mut(|r| r.ly = Scanline(scanline));
+                self.draw_scanline(screen).await;
+                // Set bit 2 of STAT to match LY==LYC
+                self.registers.with_mut(|r| {
+                    r.stat.update(|stat| LcdStatus {
+                        lyc_equal_ly: r.ly == r.lyc,
+                        ..stat
+                    });
+                });
+            }
+            screen.draw();
+        }
+    }
+
     /// Access the GPU I/O registers
     ///
     /// This is abstracted through [TodoCell] to constrain the access to the
@@ -106,36 +138,6 @@ impl Gpu {
         }
     }
 
-    /// Advance the current frame draw a certain number of dots
-    pub async fn run(&self, screen: &mut Screen) {
-        // Each iteration of this loop is one frame
-        //
-        // For each frame, this will load the entire frame into the screen's
-        // buffer, then draw then entire frame to the screen at the end.
-        loop {
-            // Make sure the GPU and clock stay in sync
-            debug_assert_eq!(
-                Clock::elapsed(),
-                Cycles(0),
-                "Clock should start at 0 for each frame"
-            );
-            screen.reset();
-
-            for scanline in 0..SCANLINES_PER_FRAME {
-                self.registers.with_mut(|r| r.ly = Scanline(scanline));
-                self.draw_scanline(screen).await;
-                // Set bit 2 of STAT to match LY==LYC
-                self.registers.with_mut(|r| {
-                    r.stat.update(|stat| LcdStatus {
-                        lyc_equal_ly: r.ly == r.lyc,
-                        ..stat
-                    });
-                });
-            }
-            screen.draw();
-        }
-    }
-
     /// Draw the current scanline to the screen
     ///
     ///
@@ -182,7 +184,9 @@ impl Gpu {
         }
         // Mode 3 has a dynamic length. Whatever budget it doesn't use gets
         // rolled over to mode 0.
-        let mode_3_length = Clock::elapsed() - mode_3_start;
+        // TODO this could fail if clock cycles are missed
+        // let mode_3_length = Clock::elapsed() - mode_3_start;
+        let mode_3_length = Cycles(172);
 
         // Mode 0 - horizontal blank
         self.set_mode(PpuMode::HorizontalBlank);
