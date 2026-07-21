@@ -20,9 +20,12 @@ use crate::{
     screen::Screen,
 };
 use color_eyre::eyre;
-use std::path::Path;
-use tokio::runtime::LocalRuntime;
-use tracing::{Instrument, info_span};
+use std::{
+    path::Path,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
+use tracing::{Instrument, error, info_span};
 
 /// Width of the screen in pixels
 pub const SCREEN_WIDTH: u8 = 160;
@@ -63,19 +66,34 @@ impl GameBoy {
     /// This will never return. To stop the Game Boy, kill the process.
     pub fn run(mut self, screen: &mut Screen) {
         // TODO explain
-        let runtime = LocalRuntime::new().unwrap();
-        let memory = MemoryBus {
+        let clock = Clock::new();
+        let memory_bus = MemoryBus {
             rom: &self.rom,
             ram: &mut self.ram,
             high_ram: &mut self.high_ram,
             gpu: &self.gpu,
         };
-        runtime.block_on(async {
-            futures::join!(
-                Clock::run().instrument(info_span!("Clock")),
-                self.cpu.run(memory).instrument(info_span!("CPU")),
-                self.gpu.run(screen).instrument(info_span!("GPU")),
-            );
-        });
+        let mut cpu_fut = pin!(
+            self.cpu
+                .run(&clock, memory_bus)
+                .instrument(info_span!("CPU"))
+        );
+        let mut gpu_fut =
+            pin!(self.gpu.run(&clock, screen).instrument(info_span!("GPU")));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        loop {
+            // These futures are supposed to be infinite loops, so if they exit
+            // that's... odd
+            let polls = [
+                cpu_fut.as_mut().poll(&mut context),
+                gpu_fut.as_mut().poll(&mut context),
+            ];
+            if polls.iter().any(Poll::is_ready) {
+                error!("Future exited early");
+                break;
+            }
+            clock.tick();
+        }
     }
 }

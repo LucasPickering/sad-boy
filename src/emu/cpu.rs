@@ -33,11 +33,11 @@ pub struct Cpu {
 
 impl Cpu {
     /// TODO
-    pub async fn run(mut self, mut memory: MemoryBus<'_>) {
+    pub async fn run(mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
         // TODO should we execute _then_ wait?
         loop {
             let cycles = self.execute_next(&mut memory);
-            Clock::wait(cycles).await;
+            clock.wait(cycles).await;
         }
     }
 

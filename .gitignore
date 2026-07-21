@@ -1,4 +1,4 @@
 roms/
 target/
 .DS_Store
-*.tar.gz
+*.json.gz

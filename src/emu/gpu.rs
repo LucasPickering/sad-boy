@@ -58,7 +58,7 @@ pub struct Gpu {
 
 impl Gpu {
     /// Advance the current frame draw a certain number of dots
-    pub async fn run(&self, screen: &mut Screen) {
+    pub async fn run(&self, clock: &Clock, screen: &mut Screen) {
         // Each iteration of this loop is one frame
         //
         // For each frame, this will load the entire frame into the screen's
@@ -67,7 +67,7 @@ impl Gpu {
             trace!("GPU frame");
             // Make sure the GPU and clock stay in sync
             debug_assert_eq!(
-                Clock::elapsed(),
+                clock.cycles(),
                 Cycles(0),
                 "Clock should start at 0 for each frame"
             );
@@ -75,7 +75,7 @@ impl Gpu {
 
             for scanline in 0..SCANLINES_PER_FRAME {
                 self.registers.with_mut(|r| r.ly = Scanline(scanline));
-                self.draw_scanline(screen).await;
+                self.draw_scanline(clock, screen).await;
                 // Set bit 2 of STAT to match LY==LYC
                 self.registers.with_mut(|r| {
                     r.stat.update(|stat| LcdStatus {
@@ -145,12 +145,12 @@ impl Gpu {
     /// calling this.
     ///
     /// https://gbdev.io/pandocs/Rendering.html
-    async fn draw_scanline(&self, screen: &mut Screen) {
+    async fn draw_scanline(&self, clock: &Clock, screen: &mut Screen) {
         let scanline = reg!(self, ly);
         // TODO wait before or after executing?
         if scanline.0 >= 144 {
             self.set_mode(PpuMode::VerticalBlank);
-            Clock::wait(Cycles(456)).await;
+            clock.wait(Cycles(456)).await;
         }
 
         // Mode 2 - OAM scan
@@ -166,13 +166,13 @@ impl Gpu {
             objects.is_sorted_by_key(|object| object.attributes.x),
             "Objects must be sorted ascending by x coordinate"
         );
-        Clock::wait(MODE_2_DOTS).await;
+        clock.wait(MODE_2_DOTS).await;
 
         // Mode 3 - draw pixels
         // https://gbdev.io/pandocs/Rendering.html#mode-3-length
         self.set_mode(PpuMode::Drawing);
-        let mode_3_start = Clock::elapsed();
-        Clock::wait(Cycles(12)).await; // Initial delay
+        let mode_3_start = clock.cycles();
+        clock.wait(Cycles(12)).await; // Initial delay
         let y = scanline.0;
         for x in 0..SCREEN_WIDTH {
             // TODO simulate pixel FIFO
@@ -180,17 +180,19 @@ impl Gpu {
             let color_index = self.get_pixel(&objects, x, y);
             screen.set(x.into(), y.into(), self.get_color(color_index));
             // TODO include penalty waits
-            Clock::wait(Cycles(1)).await;
+            clock.wait(Cycles(1)).await;
         }
         // Mode 3 has a dynamic length. Whatever budget it doesn't use gets
         // rolled over to mode 0.
-        // TODO this could fail if clock cycles are missed
-        // let mode_3_length = Clock::elapsed() - mode_3_start;
-        let mode_3_length = Cycles(172);
+        let mode_3_length = clock.cycles() - mode_3_start;
 
         // Mode 0 - horizontal blank
         self.set_mode(PpuMode::HorizontalBlank);
-        Clock::wait(Cycles(376) - mode_3_length).await;
+        debug_assert!(
+            (172u32..=289).contains(&mode_3_length.0),
+            "Mode 3 should be take [127, 289] dots, but took {mode_3_length:?}"
+        );
+        clock.wait(Cycles(376) - mode_3_length).await;
     }
 
     /// Calculate the color index for a specific pixel

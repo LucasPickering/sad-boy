@@ -5,9 +5,9 @@ use std::{
     future,
     ops::{Add, AddAssign, Sub},
     task::Poll,
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
-use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 
 /// Number of dots (clock cycles) in a single frame
@@ -26,53 +26,56 @@ const DOT_DURATION: Duration =
 /// Emulated hardware clock
 ///
 /// The clock drives the CPU, GPU, and whatever other components run off the
-/// main clock. TODO explain async stuff.
+/// main clock. This uses `Cell`s so it can be handed out to each component's
+/// future and still be ticked by the core emulator loop.
 #[derive(Debug)]
 pub struct Clock {
     /// Number of elapsed cycles (dots) **in the current frame**
     ///
     /// The max value for this is [DOTS_PER_FRAME] and resets to 0 at the
     /// beginning of every frame.
-    cycles: Cell<u32>,
+    cycles: Cell<Cycles>,
+    /// TODO
+    last_tick: Cell<Instant>,
 }
 
 impl Clock {
-    thread_local! {
-        static CLOCK: Clock = Clock::new();
-    }
-
-    fn new() -> Self {
+    /// Initialize a new clock
+    pub fn new() -> Self {
         Self {
-            cycles: Cell::new(0),
+            cycles: Cell::default(),
+            last_tick: Instant::now().into(),
         }
     }
 
-    /// Get the number of cycles elapsed in the current frame
-    pub fn elapsed() -> Cycles {
-        Cycles(Self::CLOCK.with(|clock| clock.cycles.get()))
+    /// Get the number of cycles completed in the current frame
+    pub fn cycles(&self) -> Cycles {
+        self.cycles.get()
     }
 
-    /// Run the CPU clock indefinitely
+    /// Advance the clock one tick
     ///
-    /// TODO
-    pub async fn run() {
-        let mut interval = time::interval(DOT_DURATION);
-        // If we can't keep up with the emulated speed, slow the whole thing
-        // down. We don't want to skip ticks.
-        //
-        // Alternatively we could use Burst which will shorten the delays
-        // between ticks, but that requires that there are actually delays.
-        // When debugging performance issues, it's easier to have things run
-        // slowly than not run at all.
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        loop {
-            interval.tick().await;
-            Self::CLOCK.with(|clock| {
-                // Increment the clock and wrap at the end of the frame
-                let next = (clock.cycles.get() + 1) % DOTS_PER_FRAME.0;
-                clock.cycles.set(next);
-            });
+    /// This will calculate how much time has elapsed since the last cycle was
+    /// completed. It will sleep the thread the remaining duration of this clock
+    /// cycle, then increment the cycle counter.
+    pub fn tick(&self) {
+        let last_tick = self.last_tick.get();
+        let elapsed = Instant::elapsed(&last_tick);
+        // Sleep for the rest of the dot
+        if elapsed < DOT_DURATION {
+            thread::sleep(elapsed);
+        } else {
+            // It's been longer than the dot time since the last tick, which
+            // means the future polling took longer than allowed. Unfortunately
+            // we can't make time go backward (yet), so just log it and pray
+            // we speed up.
+            warn!("Slow cycle: {elapsed:?} > {DOT_DURATION:?}");
         }
+
+        // Increment the clock and wrap at the end of the frame
+        let next = Cycles((self.cycles.get().0 + 1) % DOTS_PER_FRAME.0);
+        self.cycles.set(next);
+        self.last_tick.set(Instant::now());
     }
 
     /// Wait for the given number of cycles to elapse
@@ -81,11 +84,11 @@ impl Clock {
     /// number of cycles, then at the end performs whatever work was meant to
     /// be done during those cycles. This simulates the time elapsed during a
     /// CPU instruction, GPU operation, etc.
-    pub async fn wait(cycles: Cycles) {
-        let current = Self::elapsed();
+    pub async fn wait(&self, cycles: Cycles) {
+        let current = self.cycles.get();
         let target = current + cycles;
         future::poll_fn(|_| {
-            let current = Clock::elapsed();
+            let current = self.cycles.get();
             if current >= target {
                 // Missing the exact match is a bug, could affect the
                 // semantics
