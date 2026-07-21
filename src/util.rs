@@ -339,32 +339,32 @@ enum BytesDisplayMode {
     Hex,
 }
 
-/// A wrapper around [RefCell] that only exposes its value through closures
-///
-/// This constraint makes it impossible to hold onto a cell across an `await`
-/// boundary, which prevents concurrent access in this single-threaded world.
-#[derive(Debug, Default)]
-pub struct AsyncCell<T>(RefCell<T>);
-
-impl<T> AsyncCell<T> {
-    pub fn new(value: T) -> Self {
-        Self(RefCell::new(value))
-    }
-
+/// TODO
+pub trait TodoCell<T> {
     /// Run a function with read access to the inner value, returning its output
-    pub fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
-        f(&self.0.borrow())
-    }
+    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U;
 
     /// Run a function with mutable access to the inner value, returning its
     /// output
-    pub fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
-        f(&mut self.0.borrow_mut())
+    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U;
+}
+
+impl<T, C: TodoCell<T>> TodoCell<T> for &C {
+    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
+        (*self).with(f)
+    }
+
+    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
+        (*self).with_mut(f)
     }
 }
 
-impl<T> From<T> for AsyncCell<T> {
-    fn from(value: T) -> Self {
-        Self::new(value)
+impl<T> TodoCell<T> for RefCell<T> {
+    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
+        f(&self.borrow())
+    }
+
+    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
+        f(&mut self.borrow_mut())
     }
 }

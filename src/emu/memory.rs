@@ -1,6 +1,10 @@
-use crate::emu::{gpu::Gpu, instruction::Instruction, rom::Rom};
+use crate::{
+    emu::{gpu::Gpu, instruction::Instruction, rom::Rom},
+    util::TodoCell,
+};
 use std::{
     any,
+    cell::RefCell,
     fmt::{self, Debug, Display},
     mem, ptr,
     range::RangeInclusive,
@@ -109,7 +113,7 @@ impl MemoryBus<'_> {
         /// Helper to get a GPU register
         macro_rules! gpu_reg {
             ($register:ident) => {
-                self.gpu.registers.with(|r| r.$register.into())
+                self.gpu.registers().with(|r| r.$register.into())
             };
         }
 
@@ -126,10 +130,10 @@ impl MemoryBus<'_> {
                 0
             }
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data.with(|tile_data| tile_data.byte(address))
+                self.gpu.tile_data().byte(address)
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps.with(|tile_maps| tile_maps.byte(address))
+                self.gpu.tile_maps().byte(address)
             }
             0xA000..=0xBFFF => {
                 error!("TODO: Cartridge RAM read");
@@ -144,7 +148,7 @@ impl MemoryBus<'_> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.get8(address)
             }
-            OAM_START..=OAM_LAST => self.gpu.oam.with(|oam| oam.byte(address)),
+            OAM_START..=OAM_LAST => self.gpu.oam().byte(address),
             0xFEA0..=0xFEFF => 0, // Null mem
 
             // Hardware registers
@@ -175,7 +179,9 @@ impl MemoryBus<'_> {
         /// Helper to set a GPU register
         macro_rules! gpu_reg {
             ($register:ident) => {
-                self.gpu.registers.with_mut(|r| r.$register = value.into())
+                self.gpu
+                    .registers()
+                    .with_mut(|r| r.$register = value.into())
             };
         }
 
@@ -183,16 +189,14 @@ impl MemoryBus<'_> {
         match address.0 {
             // Game ROM
             0x0000..=0x7FFF => {} // TODO const for this
-            TILE_DATA_START..=TILE_DATA_LAST => self
-                .gpu
-                .tile_data
-                .with_mut(|tile_data| *tile_data.byte_mut(address) = value),
-            TILE_MAPS_START..=TILE_MAPS_LAST => self
-                .gpu
-                .tile_maps
-                .with_mut(|tile_maps| *tile_maps.byte_mut(address) = value),
+            TILE_DATA_START..=TILE_DATA_LAST => {
+                self.gpu.tile_data().set_byte(address, value);
+            }
+            TILE_MAPS_START..=TILE_MAPS_LAST => {
+                self.gpu.tile_maps().set_byte(address, value);
+            }
             0xA000..=0xBFFF => todo!("cartridge RAM"),
-            RAM_START..=RAM_LAST => *self.ram.byte_mut(address) = value,
+            RAM_START..=RAM_LAST => self.ram.set_byte(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
@@ -200,10 +204,7 @@ impl MemoryBus<'_> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            // TODO OAM write isn't allowed during draw mode 2 or 3
-            OAM_START..=OAM_LAST => {
-                self.gpu.oam.with_mut(|oam| *oam.byte_mut(address) = value);
-            }
+            OAM_START..=OAM_LAST => self.gpu.oam().set_byte(address, value),
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
@@ -217,8 +218,9 @@ impl MemoryBus<'_> {
             0xFF00..=0xFF7F => todo!("unmapped I/O register"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
-                *self.high_ram.byte_mut(address) = value;
+                self.high_ram.set_byte(address, value);
             }
+
             0xFFFF => todo!("TODO: Interrupt Enabled Register write"),
         }
     }
@@ -383,28 +385,6 @@ impl<T> Memory<T> {
         &self.memory
     }
 
-    /// Get the byte at the given memory address
-    pub fn byte(&self, address: Address) -> u8 {
-        let offset = self.byte_offset(address);
-        let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
-        // Safety:
-        // - byte_offset() ensures the offset is in range for self.memory
-        // - u8 is the smallest type so we don't have to worry about alignment
-        //   or corrupted bytes
-        unsafe { *ptr.add(offset) }
-    }
-
-    /// Get a mutable reference to the byte at the given memory address
-    pub fn byte_mut(&mut self, address: Address) -> &mut u8 {
-        let offset = self.byte_offset(address);
-        let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
-        // Safety:
-        // - byte_offset() ensures the offset is in range for self.memory
-        // - u8 is the smallest type so we don't have to worry about alignment
-        //   or corrupted bytes
-        unsafe { &mut *ptr.add(offset) }
-    }
-
     /// Translate a global memory address into an offset for a single byte in
     /// `self.memory`
     ///
@@ -420,5 +400,53 @@ impl<T> Memory<T> {
         // Double extra sanity check
         debug_assert!(offset < self.memory.len() * mem::size_of::<T>());
         offset
+    }
+}
+
+impl<T> MemoryRead for &Memory<T> {
+    fn byte(self, address: Address) -> u8 {
+        let offset = self.byte_offset(address);
+        let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
+        // Safety:
+        // - byte_offset() ensures the offset is in range for self.memory
+        // - u8 is the smallest type so we don't have to worry about alignment
+        //   or corrupted bytes
+        unsafe { *ptr.add(offset) }
+    }
+}
+
+impl<T> MemoryWrite for &mut Memory<T> {
+    fn set_byte(self, address: Address, value: u8) {
+        let offset = self.byte_offset(address);
+        let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
+        // Safety:
+        // - byte_offset() ensures the offset is in range for self.memory
+        // - u8 is the smallest type so we don't have to worry about alignment
+        //   or corrupted bytes
+        unsafe { *ptr.add(offset) = value }
+    }
+}
+
+/// TODO
+pub trait MemoryRead {
+    /// Get the byte at the given memory address
+    fn byte(self, address: Address) -> u8;
+}
+
+/// TODO
+pub trait MemoryWrite {
+    /// Set the value of the byte at the given memory address
+    fn set_byte(self, address: Address, value: u8);
+}
+
+impl<T> MemoryRead for &RefCell<Memory<T>> {
+    fn byte(self, address: Address) -> u8 {
+        self.borrow().byte(address)
+    }
+}
+
+impl<T> MemoryWrite for &RefCell<Memory<T>> {
+    fn set_byte(self, address: Address, value: u8) {
+        self.borrow_mut().set_byte(address, value);
     }
 }

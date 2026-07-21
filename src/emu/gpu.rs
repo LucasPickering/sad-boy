@@ -7,12 +7,12 @@ use crate::{
     emu::{
         Clock, SCREEN_WIDTH,
         cpu::Cycles,
-        memory::{self, Memory},
+        memory::{self, Address, Memory, MemoryRead, MemoryWrite},
     },
     screen::{Color, Screen},
-    util::{AsyncCell, Bit, Mask, PackedBits, impl_bit_pack},
+    util::{Bit, Mask, PackedBits, TodoCell, impl_bit_pack},
 };
-use std::{fmt::Debug, mem};
+use std::{cell::RefCell, fmt::Debug, mem};
 
 const SCANLINES_PER_FRAME: u8 = 154;
 /// Number of dots in [PpuMode::OamScan] for a single scanline
@@ -33,11 +33,11 @@ macro_rules! reg {
 #[derive(Debug)]
 pub struct Gpu {
     /// 1-byte control registers related to graphics processing
-    pub registers: AsyncCell<Registers>,
+    registers: RefCell<Registers>,
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    pub oam: AsyncCell<Memory<ObjectAttributes>>,
+    oam: RefCell<Memory<ObjectAttributes>>,
     /// Pixel data for tiles
     ///
     /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
@@ -45,17 +45,67 @@ pub struct Gpu {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    pub tile_data: AsyncCell<Memory<Tile>>,
+    tile_data: RefCell<Memory<Tile>>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    pub tile_maps: AsyncCell<Memory<TileIndex>>,
+    tile_maps: RefCell<Memory<TileIndex>>,
 }
 
 impl Gpu {
+    /// Access the GPU I/O registers
+    ///
+    /// This is abstracted through [TodoCell] to constrain the access to the
+    /// inner `RefCell`.
+    pub fn registers(&self) -> impl TodoCell<Registers> {
+        &self.registers
+    }
+
+    /// Access the Object Attribute Memory
+    ///
+    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
+    /// return 0 and writes will do nothing.
+    pub fn oam(&self) -> impl MemoryRead + MemoryWrite {
+        // OAM is only accessible to the CPU in blank modes
+        match self.mode() {
+            PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
+                ModalMemory::Rw(&self.oam)
+            }
+            PpuMode::OamScan | PpuMode::Drawing => ModalMemory::Null,
+        }
+    }
+
+    /// Access tile data memory
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
+    /// writes will do nothing.
+    pub fn tile_data(&self) -> impl MemoryRead + MemoryWrite {
+        // VRAM is not accessible in mode 3
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.tile_data),
+            PpuMode::Drawing => ModalMemory::Null,
+        }
+    }
+
+    /// Access tile map memory
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
+    /// writes will do nothing.
+    pub fn tile_maps(&self) -> impl MemoryRead + MemoryWrite {
+        // VRAM is not accessible in mode 3
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.tile_maps),
+            PpuMode::Drawing => ModalMemory::Null,
+        }
+    }
+
     /// Advance the current frame draw a certain number of dots
     pub async fn run(&self, screen: &mut Screen) {
         // Each iteration of this loop is one frame
@@ -226,6 +276,11 @@ impl Gpu {
         })
     }
 
+    /// Read the `ppu_mode` flag of the `STAT` register
+    fn mode(&self) -> PpuMode {
+        self.registers.with(|r| r.stat.unpack().ppu_mode)
+    }
+
     /// Set the `ppu_mode` flag of the `STAT` register
     fn set_mode(&self, mode: PpuMode) {
         self.registers.with_mut(|r| {
@@ -240,7 +295,7 @@ impl Gpu {
 impl Default for Gpu {
     fn default() -> Self {
         Self {
-            registers: AsyncCell::default(),
+            registers: RefCell::default(),
             oam: Memory::new(memory::OAM).into(),
             tile_data: Memory::new(memory::TILE_DATA).into(),
             tile_maps: Memory::new(memory::TILE_MAPS).into(),
@@ -487,7 +542,7 @@ enum ColorIndex {
 /// https://gbdev.io/pandocs/Tile_Data.html
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // Memory layout matters here
-pub struct Tile {
+struct Tile {
     lines: [TileLine; 8],
 }
 const _: () = assert!(mem::size_of::<Tile>() == 16);
@@ -534,7 +589,7 @@ const _: () = assert!(mem::size_of::<TileLine>() == 2);
 /// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-pub struct TileIndex(u8);
+struct TileIndex(u8);
 const _: () = assert!(mem::size_of::<TileIndex>() == 1);
 
 impl TileIndex {
@@ -605,7 +660,7 @@ impl Object {
 /// https://gbdev.io/pandocs/OAM.html
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)] // Memory layout matters here
-pub struct ObjectAttributes {
+struct ObjectAttributes {
     // Field order must match the doc above
     /// Vertical position of the object + 16
     ///
@@ -699,4 +754,37 @@ impl_bit_pack! {
     0b101 => Obp5,
     0b110 => Obp6,
     0b111 => Obp7,
+}
+
+/// A wrapper for a `RefCell<Memory<T>>` that restricts access
+///
+/// This wrapper implements [MemoryRead] and [MemoryWrite]. The variant is
+/// picked based on the PPU mode, as some GPU memory is restricted based on
+/// the mode.
+enum ModalMemory<'a, T> {
+    /// Memory is not readable or writable
+    ///
+    /// Reading always returns `0`, writing does nothing
+    Null,
+    /// Memory is readable and writable
+    Rw(&'a RefCell<Memory<T>>),
+}
+
+impl<T> MemoryRead for ModalMemory<'_, T> {
+    fn byte(self, address: Address) -> u8 {
+        // TODO inline the RefCell impl
+        match self {
+            ModalMemory::Null => 0,
+            ModalMemory::Rw(memory) => memory.byte(address),
+        }
+    }
+}
+
+impl<T> MemoryWrite for ModalMemory<'_, T> {
+    fn set_byte(self, address: Address, value: u8) {
+        match self {
+            ModalMemory::Null => {}
+            ModalMemory::Rw(memory) => memory.set_byte(address, value),
+        }
+    }
 }
