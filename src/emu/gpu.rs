@@ -16,8 +16,6 @@ use std::{cell::RefCell, fmt::Debug, mem};
 use tracing::trace;
 
 const SCANLINES_PER_FRAME: u8 = 154;
-/// Number of dots in [PpuMode::OamScan] for a single scanline
-const MODE_2_DOTS: Cycles = Cycles(80);
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
 const COLOR_DARK_GRAY: Color = Color::new(85, 85, 85);
 const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
@@ -146,11 +144,24 @@ impl Gpu {
     ///
     /// https://gbdev.io/pandocs/Rendering.html
     async fn draw_scanline(&self, clock: &Clock, screen: &mut Screen) {
+        /// Dots in a single scanline
+        const SCANLINE_CYCLES: Cycles = Cycles(456);
+        /// Number of dots in [PpuMode::OamScan] for a single scanline
+        const OAM_SCAN_CYCLES: Cycles = Cycles(80);
+        /// Minimum number of dots in mode 3 (drawing)
+        const DRAW_MIN_CYCLES: Cycles = Cycles(172);
+        /// Maximum number of dots in mode 3 (drawing)
+        const DRAW_MAX_CYCLES: Cycles = Cycles(289);
+        /// First scanline of mode 1 (vertical blank)
+        const VBLANK_SCANLINE: Scanline = Scanline(144);
+
         let scanline = reg!(self, ly);
-        // TODO wait before or after executing?
-        if scanline.0 >= 144 {
+
+        // Vblank - do nothing for this entire period
+        if scanline >= VBLANK_SCANLINE {
             self.set_mode(PpuMode::VerticalBlank);
-            clock.wait(Cycles(456)).await;
+            clock.wait(SCANLINE_CYCLES).await;
+            return;
         }
 
         // Mode 2 - OAM scan
@@ -166,7 +177,8 @@ impl Gpu {
             objects.is_sorted_by_key(|object| object.attributes.x),
             "Objects must be sorted ascending by x coordinate"
         );
-        clock.wait(MODE_2_DOTS).await;
+        // TODO wait before or after executing?
+        clock.wait(OAM_SCAN_CYCLES).await;
 
         // Mode 3 - draw pixels
         // https://gbdev.io/pandocs/Rendering.html#mode-3-length
@@ -189,8 +201,9 @@ impl Gpu {
         // Mode 0 - horizontal blank
         self.set_mode(PpuMode::HorizontalBlank);
         debug_assert!(
-            (172u32..=289).contains(&mode_3_length.0),
-            "Mode 3 should be take [127, 289] dots, but took {mode_3_length:?}"
+            (DRAW_MIN_CYCLES..=DRAW_MAX_CYCLES).contains(&mode_3_length),
+            "Mode 3 should be take [{DRAW_MIN_CYCLES:?}, {DRAW_MAX_CYCLES:?}] \
+            dots, but took {mode_3_length:?}"
         );
         clock.wait(Cycles(376) - mode_3_length).await;
     }
@@ -515,7 +528,7 @@ impl_bit_pack! {
 ///
 /// Range is `[0, 153]`. `[144, 153]` is the vblank period. Any value `>=154` is
 /// invalid.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Scanline(u8);
 
 impl From<u8> for Scanline {

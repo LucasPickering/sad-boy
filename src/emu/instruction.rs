@@ -243,7 +243,6 @@ pub enum Value8 {
     Hl,
 }
 
-// TODO remove?
 impl From<Register8> for Value8 {
     fn from(register: Register8) -> Self {
         Self::Register(register)

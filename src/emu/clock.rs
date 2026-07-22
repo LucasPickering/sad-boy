@@ -8,19 +8,19 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Number of dots (clock cycles) in a single frame
 ///
 /// - https://gbdev.io/pandocs/Rendering.html
 /// - https://josaphat.co/posts/gameboy-emulator/
-const DOTS_PER_FRAME: Cycles = Cycles(70224);
+const CYCLES_PER_FRAME: Cycles = Cycles(70224);
 /// Number of clock cycles per second (Hz)
 ///
 /// The clock frequency is 2^22 Hz (~4.194 MHz).
 const CLOCK_FREQUENCY: u32 = 1 << 22;
 /// Elapsed time per clock cycle (dot)
-const DOT_DURATION: Duration =
+const CYCLE_DURATION: Duration =
     Duration::from_secs(1).checked_div(CLOCK_FREQUENCY).unwrap();
 
 /// Emulated hardware clock
@@ -37,6 +37,8 @@ pub struct Clock {
     cycles: Cell<Cycles>,
     /// TODO
     last_tick: Cell<Instant>,
+    /// TODO
+    slow_cycles: Cell<u32>,
 }
 
 impl Clock {
@@ -45,6 +47,7 @@ impl Clock {
         Self {
             cycles: Cell::default(),
             last_tick: Instant::now().into(),
+            slow_cycles: Cell::default(),
         }
     }
 
@@ -59,22 +62,40 @@ impl Clock {
     /// completed. It will sleep the thread the remaining duration of this clock
     /// cycle, then increment the cycle counter.
     pub fn tick(&self) {
-        let last_tick = self.last_tick.get();
-        let elapsed = Instant::elapsed(&last_tick);
-        // Sleep for the rest of the dot
-        if elapsed < DOT_DURATION {
+        // TODO delete
+        // self.cycles
+        //     .update(|cycles| Cycles((cycles.0 + 1) % CYCLES_PER_FRAME.0));
+        // return;
+
+        // How much of the cycle has already been consumed by real work?
+        let elapsed = Instant::elapsed(&self.last_tick.get());
+        // Sleep for the rest of the cycle
+        if elapsed < CYCLE_DURATION {
             thread::sleep(elapsed);
         } else {
-            // It's been longer than the dot time since the last tick, which
+            // It's been longer than the cycle time since the last tick, which
             // means the future polling took longer than allowed. Unfortunately
             // we can't make time go backward (yet), so just log it and pray
             // we speed up.
-            warn!("Slow cycle: {elapsed:?} > {DOT_DURATION:?}");
+            debug!("Slow cycle: {elapsed:?} > {CYCLE_DURATION:?}");
+            self.slow_cycles.update(|v| v + 1);
         }
 
         // Increment the clock and wrap at the end of the frame
-        let next = Cycles((self.cycles.get().0 + 1) % DOTS_PER_FRAME.0);
-        self.cycles.set(next);
+        let next = self.cycles.get() + Cycles(1);
+        if next == CYCLES_PER_FRAME {
+            // Frame is done
+            self.cycles.set(Cycles(0));
+            let slow = self.slow_cycles.replace(0);
+            if slow > 0 {
+                warn!(
+                    "{slow}/{total} cycles in this frame were slow",
+                    total = CYCLES_PER_FRAME.0
+                );
+            }
+        } else {
+            self.cycles.set(next);
+        }
         self.last_tick.set(Instant::now());
     }
 

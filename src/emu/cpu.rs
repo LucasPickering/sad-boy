@@ -87,13 +87,8 @@ impl CpuExe<'_, '_> {
     /// Execute a single CPU instruction, returning the number of consumed CPU
     /// cycles
     fn execute(&mut self, instruction: Instruction) -> Cycles {
-        let _span = info_span!(
-            "Instruction",
-            ?instruction,
-            registers = ?self.registers,
-        )
-        .entered();
-        trace!("Executing instruction");
+        let _span = info_span!("Instruction", ?instruction).entered();
+        trace!(registers = ?self.registers, "Executing instruction");
         match instruction {
             Instruction::Adc(rhs) => self.add_carry(rhs),
             Instruction::Add(add) => self.add(add),
