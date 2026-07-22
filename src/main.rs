@@ -5,7 +5,7 @@ mod util;
 use crate::{emu::GameBoy, screen::Screen};
 use color_eyre::eyre;
 use lexopt::Arg;
-use std::{env, io, path::PathBuf, str::FromStr};
+use std::{env, fs::File, path::PathBuf, str::FromStr};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{
     filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
@@ -56,8 +56,9 @@ impl Args {
 
 /// Set up tracing to stderr
 fn initialize_tracing() {
+    let log_file = File::create("sad-boy.log").unwrap();
     let stderr_subscriber = tracing_subscriber::fmt::layer()
-        .with_writer(io::stderr)
+        .with_writer(log_file)
         .with_target(true)
         .with_span_events(FmtSpan::NONE);
 

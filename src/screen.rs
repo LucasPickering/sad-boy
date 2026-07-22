@@ -1,6 +1,4 @@
 //! Graphics bindings for the terminal
-//!
-//! This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
 use std::{
@@ -12,7 +10,9 @@ use tracing::error;
 /// Width of the screen in terminal columns
 const WIDTH_TERM: u16 = 80;
 
-/// TODO
+/// Interface to draw to the terminal
+///
+/// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 pub struct Screen {
     pixels: Box<[Color]>,
     width: u16,
@@ -20,7 +20,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    /// TODO
+    /// Initialize a new screen adapter with the given pixel dimensions
     pub fn new(width: u16, height: u16) -> Self {
         let len = (width * height) as usize;
         Self {

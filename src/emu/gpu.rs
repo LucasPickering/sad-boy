@@ -13,7 +13,6 @@ use crate::{
     util::{Bit, Mask, PackedBits, TodoCell, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
-use tracing::trace;
 
 const SCANLINES_PER_FRAME: u8 = 154;
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
@@ -63,15 +62,7 @@ impl Gpu {
         // For each frame, this will load the entire frame into the screen's
         // buffer, then draw then entire frame to the screen at the end.
         loop {
-            trace!("GPU frame");
-            // Make sure the GPU and clock stay in sync
-            debug_assert_eq!(
-                clock.cycles(),
-                Cycles(0),
-                "Clock should start at 0 for each frame"
-            );
             screen.reset();
-
             for scanline in 0..SCANLINES_PER_FRAME {
                 self.registers.with_mut(|r| r.ly = Scanline(scanline));
                 self.draw_scanline(clock, screen).await;

@@ -2,3 +2,4 @@ roms/
 target/
 .DS_Store
 *.json.gz
+*.log

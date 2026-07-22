@@ -158,11 +158,11 @@ impl MemoryBus<'_> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
-
             0xFF00..=0xFF7F => {
-                error!("TODO: I/O register read");
+                error!("TODO: unmapped I/O register {address}");
                 0
             }
+
             HIGH_RAM_START..=HIGH_RAM_LAST => self.high_ram.byte(address),
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
@@ -214,7 +214,7 @@ impl MemoryBus<'_> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
-            0xFF00..=0xFF7F => error!("unmapped I/O register"),
+            0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
                 self.high_ram.set_byte(address, value);
