@@ -93,14 +93,13 @@ impl MemoryBus<'_> {
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
     pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
-        if !GAME_ROM.contains(address) {
-            // Instructions *should* only be read from the ROM, but you could
-            // provide any valid address. This indicates either the ROM is buggy
-            // (possible, but unlikely), or it's an emulator bug (more likely).
-            error!(
-                "Requested instruction at {address} is out of range {GAME_ROM}"
-            );
-        }
+        // Instructions *should* only be read from the ROM, but you could
+        // provide any valid address. This indicates either the ROM is buggy
+        // (possible, but unlikely), or it's an emulator bug (more likely).
+        debug_assert!(
+            GAME_ROM.contains(address),
+            "Requested instruction at {address} is out of range {GAME_ROM}"
+        );
         self.rom.get_instruction(address).unwrap_or_else(|error| {
             panic!("Failed to parse instruction: {error}");
         })

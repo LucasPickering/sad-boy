@@ -57,6 +57,7 @@ pub struct Gpu {
 impl Gpu {
     /// Advance the current frame draw a certain number of dots
     pub async fn run(&self, clock: &Clock, screen: &mut Screen) {
+        screen.draw(); // Draw the initial frame
         // Each iteration of this loop is one frame
         //
         // For each frame, this will load the entire frame into the screen's

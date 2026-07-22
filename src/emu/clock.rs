@@ -2,6 +2,7 @@
 
 use std::{
     cell::Cell,
+    cmp::Ordering,
     future,
     ops::{Add, AddAssign, Sub},
     task::Poll,
@@ -30,14 +31,20 @@ const CYCLE_DURATION: Duration =
 /// future and still be ticked by the core emulator loop.
 #[derive(Debug)]
 pub struct Clock {
-    /// Number of elapsed cycles (dots) **in the current frame**
+    /// Number of elapsed cycles (dots)
     ///
-    /// The max value for this is [DOTS_PER_FRAME] and resets to 0 at the
-    /// beginning of every frame.
+    /// This is monotonically increasing. For a `u64`, that gives us:
+    /// ```
+    /// 2^64 dots / 2^22 dots per second = 2^42 seconds
+    /// ```
+    /// That's a lot of years.
     cycles: Cell<Cycles>,
     /// TODO
     last_tick: Cell<Instant>,
-    /// TODO
+    /// Number of cycles that missed the timing target **in the most recent
+    /// frame**
+    ///
+    /// This is used just for logging.
     slow_cycles: Cell<u32>,
 }
 
@@ -62,11 +69,6 @@ impl Clock {
     /// completed. It will sleep the thread the remaining duration of this clock
     /// cycle, then increment the cycle counter.
     pub fn tick(&self) {
-        // TODO delete
-        // self.cycles
-        //     .update(|cycles| Cycles((cycles.0 + 1) % CYCLES_PER_FRAME.0));
-        // return;
-
         // How much of the cycle has already been consumed by real work?
         let elapsed = Instant::elapsed(&self.last_tick.get());
         // Sleep for the rest of the cycle
@@ -82,10 +84,9 @@ impl Clock {
         }
 
         // Increment the clock and wrap at the end of the frame
-        let next = self.cycles.get() + Cycles(1);
-        if next == CYCLES_PER_FRAME {
-            // Frame is done
-            self.cycles.set(Cycles(0));
+        self.cycles.update(|cycles| cycles + Cycles(1));
+        if self.cycles.get().0.is_multiple_of(CYCLES_PER_FRAME.0) {
+            // Every frame, check the number of slow cycles
             let slow = self.slow_cycles.replace(0);
             if slow > 0 {
                 warn!(
@@ -93,8 +94,6 @@ impl Clock {
                     total = CYCLES_PER_FRAME.0
                 );
             }
-        } else {
-            self.cycles.set(next);
         }
         self.last_tick.set(Instant::now());
     }
@@ -110,15 +109,16 @@ impl Clock {
         let target = current + cycles;
         future::poll_fn(|_| {
             let current = self.cycles.get();
-            if current >= target {
-                // Missing the exact match is a bug, could affect the
-                // semantics
-                if current > target {
+            match current.cmp(&target) {
+                Ordering::Less => Poll::Pending,
+                Ordering::Equal => Poll::Ready(()),
+                Ordering::Greater => {
+                    // This *should* be impossible because every future gets
+                    // polled on every clock cycle. Missing
+                    // cycles could affect semantics
                     warn!(?current, ?target, "Missed target clock cycle");
+                    Poll::Ready(())
                 }
-                Poll::Ready(())
-            } else {
-                Poll::Pending
             }
         })
         .await;
@@ -127,11 +127,11 @@ impl Clock {
 
 /// Newtype for a number of clock cycles
 ///
-/// This makes it clearer what a value is, instead of passing around `u32`
-/// everywhere. Every executed instruction returns this value so the CPU can
-/// report how many cycles were consumed from the budget.
+/// This makes it clearer what a value is, instead of passing around a bare
+/// integer everywhere. Every executed instruction returns this value so the CPU
+/// can report how many cycles were consumed from the budget.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Cycles(pub u32);
+pub struct Cycles(pub u64);
 
 impl Add for Cycles {
     type Output = Self;
@@ -147,8 +147,8 @@ impl AddAssign for Cycles {
     }
 }
 
-impl From<u32> for Cycles {
-    fn from(value: u32) -> Self {
+impl From<u64> for Cycles {
+    fn from(value: u64) -> Self {
         Self(value)
     }
 }
