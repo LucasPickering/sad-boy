@@ -20,9 +20,14 @@ use crate::{
     screen::Screen,
 };
 use color_eyre::eyre;
+use signal_hook::consts::signal;
 use std::{
     path::Path,
     pin::pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll, Waker},
 };
 use tracing::{Instrument, error, info_span};
@@ -65,7 +70,12 @@ impl GameBoy {
     ///
     /// This will never return. To stop the Game Boy, kill the process.
     pub fn run(mut self, screen: &mut Screen) {
-        // TODO explain
+        // Start a signal listener for SIGINT and friends.
+        // We need to catch signals to allow the screen to clean up before exit.
+        let quit = Arc::new(AtomicBool::new(false));
+        register_signal_listeners(&quit);
+
+        // TODO explain main loop
         let clock = Clock::new();
         let memory_bus = MemoryBus {
             rom: &self.rom,
@@ -82,7 +92,7 @@ impl GameBoy {
             pin!(self.gpu.run(&clock, screen).instrument(info_span!("GPU")));
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
-        loop {
+        while !quit.load(Ordering::Relaxed) {
             // These futures are supposed to be infinite loops, so if they exit
             // that's... odd
             let polls = [
@@ -95,5 +105,20 @@ impl GameBoy {
             }
             clock.tick();
         }
+    }
+}
+
+/// Register exit signal listeners
+///
+/// The flag will be **enabled** when any exit signal is received.
+fn register_signal_listeners(flag: &Arc<AtomicBool>) {
+    let signals = [
+        signal::SIGINT,
+        signal::SIGHUP,
+        signal::SIGQUIT,
+        signal::SIGTERM,
+    ];
+    for signal in signals {
+        signal_hook::flag::register(signal, flag.clone()).unwrap();
     }
 }
