@@ -62,7 +62,6 @@ impl Gpu {
         // For each frame, this will load the entire frame into the screen's
         // buffer, then draw then entire frame to the screen at the end.
         loop {
-            screen.reset();
             for scanline in 0..SCANLINES_PER_FRAME {
                 self.registers.with_mut(|r| r.ly = Scanline(scanline));
                 self.draw_scanline(clock, screen).await;
