@@ -18,7 +18,7 @@ fn main() -> eyre::Result<()> {
     let args = Args::parse()?;
 
     let mut screen =
-        Screen::new(emu::SCREEN_WIDTH.into(), emu::SCREEN_HEIGHT.into());
+        Screen::new(emu::SCREEN_WIDTH.into(), emu::SCREEN_HEIGHT.into())?;
     let game_boy = GameBoy::boot(&args.rom)?;
     game_boy.run(&mut screen);
     Ok(())

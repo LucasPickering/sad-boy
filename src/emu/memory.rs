@@ -120,7 +120,7 @@ impl MemoryBus<'_> {
         match address.0 {
             // Game ROM
             0x0000..=0x3FFF => {
-                // Safety: TODO
+                // SAFETY: TODO
                 let index: usize = address.0.into();
                 self.rom.bytes()[index]
             }
@@ -406,7 +406,7 @@ impl<T> MemoryRead for &Memory<T> {
     fn byte(self, address: Address) -> u8 {
         let offset = self.byte_offset(address);
         let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
-        // Safety:
+        // SAFETY:
         // - byte_offset() ensures the offset is in range for self.memory
         // - u8 is the smallest type so we don't have to worry about alignment
         //   or corrupted bytes
@@ -418,7 +418,7 @@ impl<T> MemoryWrite for &mut Memory<T> {
     fn set_byte(self, address: Address, value: u8) {
         let offset = self.byte_offset(address);
         let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
-        // Safety:
+        // SAFETY:
         // - byte_offset() ensures the offset is in range for self.memory
         // - u8 is the smallest type so we don't have to worry about alignment
         //   or corrupted bytes

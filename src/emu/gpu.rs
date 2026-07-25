@@ -261,7 +261,7 @@ impl Gpu {
     fn get_tile(&self, index: TileIndex) -> Tile {
         // Select active tiles based on the LCDC flag
         let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
-        // Safety: tiles is an array of 256, so the index must be valid
+        // SAFETY: tiles is an array of 256, so the index must be valid
         tiles[index.0 as usize]
     }
 
@@ -654,7 +654,7 @@ impl Object {
             } else {
                 self.attributes.tile_index.next()
             };
-            // Safety: these won't underflow/overflow because of the bounds
+            // SAFETY: these won't underflow/overflow because of the bounds
             // checks above
             let x = x - self.attributes.x;
             let y = y - self.attributes.y;
