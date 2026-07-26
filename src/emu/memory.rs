@@ -21,6 +21,9 @@ pub const TILE_DATA: AddressRange =
 /// Video RAM containing both tile maps
 pub const TILE_MAPS: AddressRange =
     AddressRange::new("Tile Maps", 0x9800, 0x9FFF);
+/// Switchable RAM bank provided by the cartridge
+pub const CARTRIDGE_RAM: AddressRange =
+    AddressRange::new("Cartridge RAM", 0xA000, 0xBFFF);
 /// Address range for general-purpose writable RAM
 pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
@@ -56,7 +59,15 @@ macro_rules! bounds {
 }
 
 // Generate extra consts for pattern matching
-bounds!(TILE_DATA, TILE_MAPS, RAM, ECHO_RAM, OAM, HIGH_RAM);
+bounds!(
+    TILE_DATA,
+    TILE_MAPS,
+    CARTRIDGE_RAM,
+    RAM,
+    ECHO_RAM,
+    OAM,
+    HIGH_RAM
+);
 
 /// An abstraction over the addessable range of memory
 ///
@@ -77,6 +88,11 @@ pub struct MemoryBus<'a> {
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
     high_ram: Memory<u8>,
+    /// Additional RAM provided by the cartridge
+    ///
+    /// This is similar to the other two RAM blocks, except some cartridges can
+    /// provide multiple banks and switch between them.
+    cartridge_ram: Memory<u8>,
     /// Read-only memory from the cartridge
     rom: &'a Rom,
     /// Graphics processing
@@ -92,6 +108,7 @@ impl<'a> MemoryBus<'a> {
         Self {
             ram: Memory::new(RAM),
             high_ram: Memory::new(HIGH_RAM),
+            cartridge_ram: Memory::new(CARTRIDGE_RAM),
             rom,
             gpu,
         }
@@ -143,9 +160,8 @@ impl<'a> MemoryBus<'a> {
             TILE_MAPS_START..=TILE_MAPS_LAST => {
                 self.gpu.tile_maps().byte(address)
             }
-            0xA000..=0xBFFF => {
-                error!("TODO: Cartridge RAM read");
-                0
+            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
+                self.cartridge_ram.byte(address)
             }
             RAM_START..=RAM_LAST => self.ram.byte(address),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
@@ -203,7 +219,9 @@ impl<'a> MemoryBus<'a> {
             TILE_MAPS_START..=TILE_MAPS_LAST => {
                 self.gpu.tile_maps().set_byte(address, value);
             }
-            0xA000..=0xBFFF => error!("cartridge RAM"),
+            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
+                self.cartridge_ram.set_byte(address, value);
+            }
             RAM_START..=RAM_LAST => self.ram.set_byte(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
