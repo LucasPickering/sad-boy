@@ -5,7 +5,14 @@ mod util;
 use crate::{emu::GameBoy, screen::Screen};
 use color_eyre::eyre;
 use lexopt::Arg;
-use std::{env, fs::File, path::PathBuf, str::FromStr};
+use signal_hook::consts::signal;
+use std::{
+    env,
+    fs::File,
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, atomic::AtomicBool},
+};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{
     filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
@@ -17,9 +24,13 @@ fn main() -> eyre::Result<()> {
     initialize_tracing();
     let args = Args::parse()?;
 
+    // Start a signal listener for SIGINT and friends.
+    // We need to catch signals to allow the screen to clean up before exit.
+    let quit = Arc::new(AtomicBool::new(false));
+    register_signal_listeners(&quit);
     let mut screen =
         Screen::new(emu::SCREEN_WIDTH.into(), emu::SCREEN_HEIGHT.into())?;
-    let game_boy = GameBoy::boot(&args.rom)?;
+    let game_boy = GameBoy::boot(&args.rom, quit)?;
     game_boy.run(&mut screen);
     Ok(())
 }
@@ -70,4 +81,19 @@ fn initialize_tracing() {
         .with(targets)
         .with(stderr_subscriber)
         .init();
+}
+
+/// Register exit signal listeners
+///
+/// The flag will be **enabled** when any exit signal is received.
+fn register_signal_listeners(flag: &Arc<AtomicBool>) {
+    let signals = [
+        signal::SIGINT,
+        signal::SIGHUP,
+        signal::SIGQUIT,
+        signal::SIGTERM,
+    ];
+    for signal in signals {
+        signal_hook::flag::register(signal, flag.clone()).unwrap();
+    }
 }

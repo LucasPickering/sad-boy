@@ -14,7 +14,6 @@ use crate::{
     screen::Screen,
 };
 use color_eyre::eyre;
-use signal_hook::consts::signal;
 use std::{
     path::Path,
     pin::pin,
@@ -36,19 +35,21 @@ pub const SCREEN_HEIGHT: u8 = 144;
 pub struct GameBoy {
     cpu: Cpu,
     gpu: Gpu,
-
     /// Read-only memory from the cartridge
     rom: Rom,
+    /// Flag that will be set when the emulator should exit
+    quit: Arc<AtomicBool>,
 }
 
 impl GameBoy {
     /// Boot the Game Boy and load the ROM from a file
-    pub fn boot(path: &Path) -> eyre::Result<Self> {
+    pub fn boot(path: &Path, quit: Arc<AtomicBool>) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
         Ok(Self {
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
+            quit,
         })
     }
 
@@ -56,11 +57,6 @@ impl GameBoy {
     ///
     /// This will never return. To stop the Game Boy, kill the process.
     pub fn run(self, screen: &mut Screen) {
-        // Start a signal listener for SIGINT and friends.
-        // We need to catch signals to allow the screen to clean up before exit.
-        let quit = Arc::new(AtomicBool::new(false));
-        register_signal_listeners(&quit);
-
         // TODO explain main loop
         let clock = Clock::new();
         let memory_bus = MemoryBus::new(&self.rom, &self.gpu);
@@ -73,7 +69,7 @@ impl GameBoy {
             pin!(self.gpu.run(&clock, screen).instrument(info_span!("GPU")));
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
-        while !quit.load(Ordering::Relaxed) {
+        while !self.quit.load(Ordering::Relaxed) {
             // These futures are supposed to be infinite loops, so if they exit
             // that's... odd
             let polls = [
@@ -86,20 +82,5 @@ impl GameBoy {
             }
             clock.tick();
         }
-    }
-}
-
-/// Register exit signal listeners
-///
-/// The flag will be **enabled** when any exit signal is received.
-fn register_signal_listeners(flag: &Arc<AtomicBool>) {
-    let signals = [
-        signal::SIGINT,
-        signal::SIGHUP,
-        signal::SIGQUIT,
-        signal::SIGTERM,
-    ];
-    for signal in signals {
-        signal_hook::flag::register(signal, flag.clone()).unwrap();
     }
 }
