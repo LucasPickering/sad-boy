@@ -342,10 +342,7 @@ fn sub8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
 mod tests {
     use super::*;
     use crate::emu::{
-        cpu::Cpu,
-        gpu::Gpu,
-        instruction::Instruction,
-        memory::{Memory, MemoryBus},
+        cpu::Cpu, gpu::Gpu, instruction::Instruction, memory::MemoryBus,
         rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
@@ -396,12 +393,9 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::default();
-        let mut memory = MemoryBus {
-            rom: &Rom::empty(),
-            ram: &mut Memory::zero(),
-            high_ram: &mut Memory::zero(),
-            gpu: &Gpu::default(),
-        };
+        let rom = Rom::empty();
+        let gpu = Gpu::default();
+        let mut memory = MemoryBus::new(&rom, &gpu);
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");

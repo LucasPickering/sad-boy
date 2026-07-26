@@ -10,13 +10,7 @@ mod memory;
 mod rom;
 
 use crate::{
-    emu::{
-        clock::Clock,
-        cpu::Cpu,
-        gpu::Gpu,
-        memory::{Memory, MemoryBus},
-        rom::Rom,
-    },
+    emu::{clock::Clock, cpu::Cpu, gpu::Gpu, memory::MemoryBus, rom::Rom},
     screen::Screen,
 };
 use color_eyre::eyre;
@@ -45,12 +39,6 @@ pub struct GameBoy {
 
     /// Read-only memory from the cartridge
     rom: Rom,
-    /// General-purpose writable memory
-    ram: Memory<u8>,
-    /// Additional general-purpose writable memory
-    ///
-    /// This is most commonly used via the `LD HL, SP+imm8` instruction.
-    high_ram: Memory<u8>,
 }
 
 impl GameBoy {
@@ -61,15 +49,13 @@ impl GameBoy {
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
-            ram: Memory::new(memory::RAM),
-            high_ram: Memory::new(memory::HIGH_RAM),
         })
     }
 
     /// Run the Game Boy indefinitely
     ///
     /// This will never return. To stop the Game Boy, kill the process.
-    pub fn run(mut self, screen: &mut Screen) {
+    pub fn run(self, screen: &mut Screen) {
         // Start a signal listener for SIGINT and friends.
         // We need to catch signals to allow the screen to clean up before exit.
         let quit = Arc::new(AtomicBool::new(false));
@@ -77,12 +63,7 @@ impl GameBoy {
 
         // TODO explain main loop
         let clock = Clock::new();
-        let memory_bus = MemoryBus {
-            rom: &self.rom,
-            ram: &mut self.ram,
-            high_ram: &mut self.high_ram,
-            gpu: &self.gpu,
-        };
+        let memory_bus = MemoryBus::new(&self.rom, &self.gpu);
         let mut cpu_fut = pin!(
             self.cpu
                 .run(&clock, memory_bus)

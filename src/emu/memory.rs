@@ -60,34 +60,43 @@ bounds!(TILE_DATA, TILE_MAPS, RAM, ECHO_RAM, OAM, HIGH_RAM);
 
 /// An abstraction over the addessable range of memory
 ///
-/// This holds references to all the parts of memory that can be accessed, and
-/// aliases to each component based on given memory addresses. This allows each
-/// component of memory/registers/etc. to be owned by its relevant module and
-/// handed out to the CPU only as needed.
+/// Some parts of accessible memory are held as references. This aliases each
+/// component based on given memory addresses. This allows each component of
+/// memory/registers/etc. to be owned by its relevant module and handed out to
+/// the CPU only as needed.
 ///
 /// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
-    /// Read-only memory from the cartridge
-    pub rom: &'a Rom,
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    pub ram: &'a mut Memory<u8>,
+    ram: Memory<u8>,
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    pub high_ram: &'a mut Memory<u8>,
+    high_ram: Memory<u8>,
+    /// Read-only memory from the cartridge
+    rom: &'a Rom,
     /// Graphics processing
     ///
     /// This holds VRAM and graphics-related IO registers. This reference is
     /// shared with a separate GPU task, so it's an immutable reference with
     /// internal mutability.
-    pub gpu: &'a Gpu,
+    gpu: &'a Gpu,
 }
 
-impl MemoryBus<'_> {
+impl<'a> MemoryBus<'a> {
+    pub fn new(rom: &'a Rom, gpu: &'a Gpu) -> Self {
+        Self {
+            ram: Memory::new(RAM),
+            high_ram: Memory::new(HIGH_RAM),
+            rom,
+            gpu,
+        }
+    }
+
     /// Load the CPU instruction at the given address
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
@@ -283,10 +292,6 @@ pub struct AddressRange {
 }
 
 impl AddressRange {
-    /// Empty address range
-    #[cfg(test)]
-    const ZERO: Self = Self::new("Zero", 0, 0);
-
     /// Define a range of memory
     pub const fn new(name: &'static str, start: u16, end: u16) -> Self {
         Self {
@@ -367,15 +372,6 @@ impl<T> Memory<T> {
         Self {
             range,
             memory: vec![T::default(); len_t].into_boxed_slice(),
-        }
-    }
-
-    /// Initialize a zero-length block of memory
-    #[cfg(test)]
-    pub fn zero() -> Self {
-        Self {
-            range: AddressRange::ZERO,
-            memory: Box::new([]),
         }
     }
 
