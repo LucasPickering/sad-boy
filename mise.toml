@@ -1,0 +1,6 @@
+[tasks.profile]
+description = "Run the emulator with a profiler"
+run = [
+  "cargo build --release",
+  "samply record ./target/release/sad-boy -- ./roms/cpu_instrs.gb",
+]
