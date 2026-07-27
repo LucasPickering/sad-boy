@@ -473,7 +473,7 @@ pub struct LcdStatus {
     ///
     /// See [Registers] for those register definitions.
     lyc_equal_ly: bool,
-    /// TODO
+    /// Phase of the frame currently being drawn
     ppu_mode: PpuMode,
 }
 

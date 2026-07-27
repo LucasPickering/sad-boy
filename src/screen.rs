@@ -30,6 +30,31 @@ const SHM_NAME: &str = "/sad_boy_shm";
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
 const ESCAPE: &str = "\u{1b}";
 
+/// Write a graphics message to the given output (probably stdout)
+macro_rules! write_message {
+    ($out:expr, $payload:expr, $($key:ident = $value:expr),* $(,)?) => {{
+        write!($out, "{ESCAPE}_G")?;
+
+        // Control args are comma-separated with a semicolon at the end
+        let args = [
+            $(format_args!("{}={}", stringify!($key), $value),)*
+        ];
+        for (i, arg) in args.iter().enumerate() {
+            let terminator = if i < args.len() - 1 { ',' } else { ';' };
+            write!($out, "{arg}{terminator}")?;
+        }
+
+        // Payload is encoded as base64
+        // TODO if this is the only methodology long-term, pre-encode it and
+        // remove the base64 dep
+        let mut b64_writer = EncoderWriter::new(&mut $out, &STANDARD);
+        b64_writer.write_all($payload.as_bytes())?;
+        drop(b64_writer);
+
+        write!($out, "{ESCAPE}\\")
+    }};
+}
+
 /// An interface for a screen that can be drawn to
 ///
 /// This is an abstraction over screen hardware. The backend could be a
@@ -54,7 +79,7 @@ pub trait Screen {
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to the terminal.
 pub struct TerminalScreen {
-    out: ScreenOut,
+    out: AlternateScreen<Stdout>,
     /// The next frame to write to the screen
     ///
     /// Invariant: `len() == self.width * self.height`
@@ -67,7 +92,11 @@ impl TerminalScreen {
     /// Initialize a new screen adapter with the given pixel dimensions
     pub fn new(width: u16, height: u16) -> io::Result<Self> {
         let len = (width * height) as usize;
-        let out = ScreenOut::new()?;
+
+        let mut out = io::stdout().into_alternate_screen()?;
+        // Move the cursor to the top-left
+        write!(out, "{}", cursor::Goto(1, 1))?;
+
         Ok(Self {
             out,
             pixels: vec![Color::BLACK; len].into_boxed_slice(),
@@ -101,20 +130,19 @@ impl TerminalScreen {
             )?;
             libc::memcpy(addr.as_ptr(), pixels.as_ptr().cast::<c_void>(), len);
         }
-        self.out.write_message(
-            // TODO this should be possible without allocation?
-            &[
-                // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
-                ('a', "T"),  // action = Transmit + draw image
-                ('f', "24"), // format = RGB
-                ('s', &self.width.to_string()), // pixel width
-                ('v', &self.height.to_string()), // pixel height
-                ('c', &WIDTH_TERM.to_string()), // terminal width
-                ('C', "1"),  // disable cursor movement
-                ('t', "s"),  // transmit via shared memory
-                ('S', &len.to_string()), // shared memory length
-            ],
-            SHM_NAME.as_bytes(), // payload = shared memory name
+
+        write_message!(
+            self.out,
+            SHM_NAME, // Payload = shared memory name
+            // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
+            a = 'T',         // action = Transmit + draw image
+            f = 24,          // format = RGB
+            s = self.width,  // pixel width
+            v = self.height, // pixel height
+            c = WIDTH_TERM,  // terminal width
+            C = 1,           // disable cursor movement
+            t = 's',         // transmit via shared memory
+            S = len,         // shared memory length
         )
     }
 }
@@ -156,39 +184,5 @@ impl Color {
 
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }
-    }
-}
-
-/// Wrapper for the terminal output channel
-struct ScreenOut(AlternateScreen<Stdout>);
-
-impl ScreenOut {
-    /// Initialize the terminal
-    fn new() -> io::Result<ScreenOut> {
-        let mut stdout = io::stdout().into_alternate_screen()?;
-        // Move the cursor to the top-left
-        write!(stdout, "{}", cursor::Goto(1, 1))?;
-        Ok(Self(stdout))
-    }
-
-    /// Write a graphics message to the output buffer
-    fn write_message(
-        &mut self,
-        controls: &[(char, &str)],
-        payload: &[u8],
-    ) -> io::Result<()> {
-        write!(self.0, "{ESCAPE}_G")?;
-        for (i, (key, value)) in controls.iter().enumerate() {
-            let terminator = if i < controls.len() - 1 { ',' } else { ';' };
-            write!(self.0, "{key}={value}{terminator}")?;
-        }
-
-        // Payload is encoded as base64
-        let mut b64_writer = EncoderWriter::new(&mut self.0, &STANDARD);
-        b64_writer.write_all(payload)?;
-        drop(b64_writer);
-
-        write!(self.0, "{ESCAPE}\\")?;
-        Ok(())
     }
 }
