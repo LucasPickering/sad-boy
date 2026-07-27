@@ -1,6 +1,6 @@
 use crate::{
     emu::{gpu::Gpu, instruction::Instruction, rom::Rom},
-    util::TodoCell,
+    util::Shared,
 };
 use std::{
     any,
@@ -411,7 +411,7 @@ impl<T> Memory<T> {
         );
         let offset = (address.0 - self.range.start()) as usize;
         // Double extra sanity check
-        debug_assert!(offset < self.memory.len() * mem::size_of::<T>());
+        debug_assert!(offset < mem::size_of_val(&self.memory));
         offset
     }
 }
@@ -423,7 +423,7 @@ impl<T> MemoryRead for &Memory<T> {
         // SAFETY:
         // - byte_offset() ensures the offset is in range for self.memory
         // - u8 is the smallest type so we don't have to worry about alignment
-        //   or corrupted bytes
+        // - TODO how guarantee no padding?
         unsafe { *ptr.add(offset) }
     }
 }
@@ -440,13 +440,19 @@ impl<T> MemoryWrite for &mut Memory<T> {
     }
 }
 
-/// TODO
+/// A container that provides read access to some chunk of addressable memory
+///
+/// This is separate from [MemoryWrite] to allow that trait to selectively
+/// provide internal mutation.
 pub trait MemoryRead {
     /// Get the byte at the given memory address
     fn byte(self, address: Address) -> u8;
 }
 
-/// TODO
+/// A container that provides write access to some chunk of addressable memory
+///
+/// This takes `self` and is separate from [MemoryRead] so the implementor can
+/// selectively provide internal mutability.
 pub trait MemoryWrite {
     /// Set the value of the byte at the given memory address
     fn set_byte(self, address: Address, value: u8);

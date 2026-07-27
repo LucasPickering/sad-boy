@@ -339,8 +339,12 @@ enum BytesDisplayMode {
     Hex,
 }
 
-/// TODO
-pub trait TodoCell<T> {
+/// A constrained abstraction for shared hardware
+///
+/// The underlying implementation is probably a [RefCell]. This trait allows
+/// it to be exposed in a way that limits access. This prevents consumers from
+/// holding the cell open an async boundary.
+pub trait Shared<T> {
     /// Run a function with read access to the inner value, returning its output
     fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U;
 
@@ -349,7 +353,7 @@ pub trait TodoCell<T> {
     fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U;
 }
 
-impl<T, C: TodoCell<T>> TodoCell<T> for &C {
+impl<T, C: Shared<T>> Shared<T> for &C {
     fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
         (*self).with(f)
     }
@@ -359,7 +363,7 @@ impl<T, C: TodoCell<T>> TodoCell<T> for &C {
     }
 }
 
-impl<T> TodoCell<T> for RefCell<T> {
+impl<T> Shared<T> for RefCell<T> {
     fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
         f(&self.borrow())
     }

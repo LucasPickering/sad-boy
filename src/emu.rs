@@ -57,7 +57,10 @@ impl GameBoy {
     ///
     /// This will never return. To stop the Game Boy, kill the process.
     pub fn run(self, screen: &mut TerminalScreen) {
-        // TODO explain main loop
+        // The main loop uses futures to emulate components (CPU, GPU, etc.)
+        // running concurrently. Async is used to make each component
+        // incremental. Each component runs some discrete step then yields, and
+        // the components are synced together by the emulated clock.
         let clock = Clock::new();
         let memory_bus = MemoryBus::new(&self.rom, &self.gpu);
         let mut cpu_fut = pin!(

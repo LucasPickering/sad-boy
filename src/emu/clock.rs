@@ -39,7 +39,7 @@ pub struct Clock {
     /// ```
     /// That's a lot of years.
     cycles: Cell<Cycles>,
-    /// TODO
+    /// Moment when the clock cycle was last incremented
     last_tick: Cell<Instant>,
     /// Number of cycles that missed the timing target **in the most recent
     /// frame**

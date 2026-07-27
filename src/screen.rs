@@ -23,7 +23,7 @@ use tracing::error;
 
 /// Width of the screen in terminal columns
 const WIDTH_TERM: u16 = 80;
-/// TODO
+/// Name for the POSIX shared memory block that holds frame data
 const SHM_NAME: &str = "/sad_boy_shm";
 /// Terminal escape code to trigger graphics rendering
 ///

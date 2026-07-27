@@ -32,7 +32,9 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    /// TODO
+    /// Run the CPU loop
+    ///
+    /// Repeatedly execute CPU instructions from ROM.
     pub async fn run(mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
         // TODO should we execute _then_ wait?
         loop {

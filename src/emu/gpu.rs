@@ -10,7 +10,7 @@ use crate::{
         memory::{self, Address, Memory, MemoryRead, MemoryWrite},
     },
     screen::{Color, Screen},
-    util::{Bit, Mask, PackedBits, TodoCell, impl_bit_pack},
+    util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
 
@@ -54,7 +54,9 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    /// Advance the current frame draw a certain number of dots
+    /// Run the GPU loop
+    ///
+    /// Repeatedly render frames and push them to the screen.
     pub async fn run(&self, clock: &Clock, screen: &mut dyn Screen) {
         screen.draw(); // Draw the initial frame
         // Each iteration of this loop is one frame
@@ -79,9 +81,9 @@ impl Gpu {
 
     /// Access the GPU I/O registers
     ///
-    /// This is abstracted through [TodoCell] to constrain the access to the
+    /// This is abstracted through [Shared] to constrain the access to the
     /// inner `RefCell`.
-    pub fn registers(&self) -> impl TodoCell<Registers> {
+    pub fn registers(&self) -> impl Shared<Registers> {
         &self.registers
     }
 
@@ -782,7 +784,6 @@ enum ModalMemory<'a, T> {
 
 impl<T> MemoryRead for ModalMemory<'_, T> {
     fn byte(self, address: Address) -> u8 {
-        // TODO inline the RefCell impl
         match self {
             ModalMemory::Null => 0,
             ModalMemory::Rw(memory) => memory.byte(address),
