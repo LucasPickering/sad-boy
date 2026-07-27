@@ -30,16 +30,30 @@ const SHM_NAME: &str = "/sad_boy_shm";
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
 const ESCAPE: &str = "\u{1b}";
 
-/// Interface to draw to the terminal
+/// An interface for a screen that can be drawn to
+///
+/// This is an abstraction over screen hardware. The backend could be a
+/// terminal, web browser, etc.
+pub trait Screen {
+    /// Set the color value of a single pixel
+    ///
+    /// This will update the screen's internal frame buffer, but will not push
+    /// anything to the visible screen yet. Panics if the pixel is out of
+    /// bounds.
+    fn set(&mut self, x: u16, y: u16, color: Color);
+
+    /// Draw the current screen buffer to the terminal
+    ///
+    /// This will diff the current frame against the last frame. Any differences
+    /// will be written out to the terminal.
+    fn draw(&mut self);
+}
+
+/// A [Screen] implementation to draw to the terminal
 ///
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to the terminal.
-///
-/// Internally, this uses a double buffer to minimize the amount of data written
-/// out to the terminal. When each frame is drawn, it's diffed against the
-/// previous frame and only differences are written out. The terminal retains
-/// the unmodified pixels in the new frame.
-pub struct Screen {
+pub struct TerminalScreen {
     out: ScreenOut,
     /// The next frame to write to the screen
     ///
@@ -49,7 +63,7 @@ pub struct Screen {
     height: u16,
 }
 
-impl Screen {
+impl TerminalScreen {
     /// Initialize a new screen adapter with the given pixel dimensions
     pub fn new(width: u16, height: u16) -> io::Result<Self> {
         let len = (width * height) as usize;
@@ -60,34 +74,6 @@ impl Screen {
             width,
             height,
         })
-    }
-
-    /// Set the color value of a single pixel
-    ///
-    /// Panics if the pixel is out of bounds.
-    pub fn set(&mut self, x: u16, y: u16, color: Color) {
-        assert!(
-            x < self.width,
-            "x {x} must be less than width {width}",
-            width = self.width
-        );
-        assert!(
-            y < self.height,
-            "y {y} must be less than height {height}",
-            height = self.height
-        );
-        let index = (y * self.width + x) as usize;
-        self.pixels[index] = color;
-    }
-
-    /// Draw the current screen buffer to the terminal
-    ///
-    /// This will diff the current frame against the last frame. Any differences
-    /// will be written out to the terminal.
-    pub fn draw(&mut self) {
-        if let Err(error) = self.draw_inner() {
-            error!("Error drawing to screen: {error}");
-        }
     }
 
     fn draw_inner(&mut self) -> io::Result<()> {
@@ -130,6 +116,29 @@ impl Screen {
             ],
             SHM_NAME.as_bytes(), // payload = shared memory name
         )
+    }
+}
+
+impl Screen for TerminalScreen {
+    fn set(&mut self, x: u16, y: u16, color: Color) {
+        assert!(
+            x < self.width,
+            "x {x} must be less than width {width}",
+            width = self.width
+        );
+        assert!(
+            y < self.height,
+            "y {y} must be less than height {height}",
+            height = self.height
+        );
+        let index = (y * self.width + x) as usize;
+        self.pixels[index] = color;
+    }
+
+    fn draw(&mut self) {
+        if let Err(error) = self.draw_inner() {
+            error!("Error drawing to screen: {error}");
+        }
     }
 }
 

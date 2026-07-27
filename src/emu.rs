@@ -11,7 +11,7 @@ mod rom;
 
 use crate::{
     emu::{clock::Clock, cpu::Cpu, gpu::Gpu, memory::MemoryBus, rom::Rom},
-    screen::Screen,
+    screen::TerminalScreen,
 };
 use color_eyre::eyre;
 use std::{
@@ -56,7 +56,7 @@ impl GameBoy {
     /// Run the Game Boy indefinitely
     ///
     /// This will never return. To stop the Game Boy, kill the process.
-    pub fn run(self, screen: &mut Screen) {
+    pub fn run(self, screen: &mut TerminalScreen) {
         // TODO explain main loop
         let clock = Clock::new();
         let memory_bus = MemoryBus::new(&self.rom, &self.gpu);

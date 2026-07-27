@@ -2,7 +2,7 @@ mod emu;
 mod screen;
 mod util;
 
-use crate::{emu::GameBoy, screen::Screen};
+use crate::{emu::GameBoy, screen::TerminalScreen};
 use color_eyre::eyre;
 use lexopt::Arg;
 use signal_hook::consts::signal;
@@ -28,8 +28,10 @@ fn main() -> eyre::Result<()> {
     // We need to catch signals to allow the screen to clean up before exit.
     let quit = Arc::new(AtomicBool::new(false));
     register_signal_listeners(&quit);
-    let mut screen =
-        Screen::new(emu::SCREEN_WIDTH.into(), emu::SCREEN_HEIGHT.into())?;
+    let mut screen = TerminalScreen::new(
+        emu::SCREEN_WIDTH.into(),
+        emu::SCREEN_HEIGHT.into(),
+    )?;
     let game_boy = GameBoy::boot(&args.rom, quit)?;
     game_boy.run(&mut screen);
     Ok(())

@@ -55,7 +55,7 @@ pub struct Gpu {
 
 impl Gpu {
     /// Advance the current frame draw a certain number of dots
-    pub async fn run(&self, clock: &Clock, screen: &mut Screen) {
+    pub async fn run(&self, clock: &Clock, screen: &mut dyn Screen) {
         screen.draw(); // Draw the initial frame
         // Each iteration of this loop is one frame
         //
@@ -134,7 +134,7 @@ impl Gpu {
     /// calling this.
     ///
     /// https://gbdev.io/pandocs/Rendering.html
-    async fn draw_scanline(&self, clock: &Clock, screen: &mut Screen) {
+    async fn draw_scanline(&self, clock: &Clock, screen: &mut dyn Screen) {
         /// Dots in a single scanline
         const SCANLINE_CYCLES: Cycles = Cycles(456);
         /// Number of dots in [PpuMode::OamScan] for a single scanline
