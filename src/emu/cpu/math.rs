@@ -39,7 +39,6 @@ impl CpuExe<'_, '_> {
                 let flags = BcdFlags {
                     zero: new == 0,
                     subtract: false,
-                    // TODO write tests for this - who knows if it works
                     half_carry: half_carry16(lhs, rhs as u16, new),
                     carry,
                 };
@@ -294,16 +293,17 @@ fn add8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
 }
 
 /// Calculate the half-carry flag for 8-bit arithmetic
-fn half_carry8(rhs: u8, lhs: u8, out: u8) -> bool {
+fn half_carry8(lhs: u8, rhs: u8, out: u8) -> bool {
     // https://gist.github.com/meganesu/9e228b6b587decc783aa9be34ae27841?permalink_comment_id=5941562#gistcomment-5941562
     let b = Bit(4);
-    b.get(rhs ^ lhs ^ out)
+    b.get(lhs ^ rhs ^ out)
 }
 
 /// Calculate the half-carry flag for 16-bit arithmetic
-fn half_carry16(rhs: u16, lhs: u16, out: u16) -> bool {
+pub fn half_carry16(lhs: u16, rhs: u16, out: u16) -> bool {
     // Get the 8th bit (lowest bit of the upper nibble)
-    (rhs ^ lhs ^ out) & 0x0100 > 0
+    // TODO I think this is broken when rhs is a casted i8
+    (lhs ^ rhs ^ out) & 0x0100 > 0
 }
 
 /// Inner implementation for [GameBoy::daa]
@@ -371,7 +371,10 @@ fn sub8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
 mod tests {
     use super::*;
     use crate::emu::{
-        cpu::Cpu, gpu::Gpu, instruction::Instruction, memory::MemoryBus,
+        cpu::Cpu,
+        gpu::Gpu,
+        instruction::Instruction,
+        memory::{Address, MemoryBus},
         rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
@@ -428,6 +431,42 @@ mod tests {
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");
+        assert_eq!(cpu.registers.flags(), expected_flags, "flags");
+    }
+
+    /// Test addition to register `sp` (`ADD SP,e8`)
+    #[rstest]
+    #[case::zero(0x0000, 0x00, 0x0000, BcdFlags {
+        zero: true,
+        subtract: false,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::half_carry_add(0x00F0, 0x10, 0x0100, BcdFlags {
+        zero: false,
+        subtract: false,
+        half_carry: true,
+        carry: false,
+    })]
+    #[case::half_carry_sub(0x0100, -0x10, 0x00F0, BcdFlags {
+        zero: false,
+        subtract: false,
+        half_carry: true,
+        carry: false,
+    })]
+    fn add_sp(
+        #[case] lhs: u16,
+        #[case] rhs: i8,
+        #[case] expected_value: u16,
+        #[case] expected_flags: BcdFlags,
+    ) {
+        let mut cpu = Cpu::default();
+        let rom = Rom::empty();
+        let gpu = Gpu::default();
+        let mut memory = MemoryBus::new(&rom, &gpu);
+        cpu.registers.sp = Address(lhs);
+        cpu.execute(&mut memory, Instruction::Add(Add::Sp(rhs)));
+        assert_eq!(cpu.registers.sp.0, expected_value, "sum");
         assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }
 

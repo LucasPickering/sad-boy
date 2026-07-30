@@ -338,11 +338,15 @@ impl CpuExe<'_, '_> {
                 5.into()
             }
             Load::HlSpOffset { offset } => {
-                let value =
-                    self.registers.sp.0.wrapping_add_signed(offset.into());
+                let lhs = self.registers.sp.0;
+                let (value, carry) = lhs.overflowing_add_signed(offset.into());
                 *self.registers.hl_mut() = value;
-                // TODO set flags here
-                // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#LD_HL,SP+e8
+                self.registers.set_flags(BcdFlags {
+                    zero: false,
+                    subtract: false,
+                    half_carry: math::half_carry16(lhs, offset as u16, value),
+                    carry,
+                });
                 3.into()
             }
             Load::SpHl => {
@@ -453,7 +457,6 @@ impl CpuExe<'_, '_> {
 
     /// Pop a 16-bit value from the top of the stack
     fn pop(&mut self) -> u16 {
-        // TODO make sure the stack isn't empty
         let value = self.memory.get16(self.registers.sp);
         // SP points to the LAST OCCUPIED slot, so we need to increment it to
         // "deallocate" the value we just popped.
