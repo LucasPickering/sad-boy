@@ -121,7 +121,7 @@ impl CpuExe<'_, '_> {
                 });
                 1.into()
             }
-            Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, -1),
+            Instruction::Dec(dec_inc) => self.dec_inc(dec_inc, true),
             Instruction::Di => {
                 *self.interrupts_enabled = false;
                 1.into()
@@ -131,7 +131,7 @@ impl CpuExe<'_, '_> {
                 1.into()
             }
             Instruction::Halt => todo!("HALT"),
-            Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, 1),
+            Instruction::Inc(dec_inc) => self.dec_inc(dec_inc, false),
             Instruction::Jp(jump) => self.jump(jump),
             Instruction::Jr { offset, condition } => {
                 self.jump_relative(offset, condition)

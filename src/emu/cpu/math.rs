@@ -9,10 +9,6 @@ use crate::{
     util::Bit,
 };
 
-// Masks for the bottom half of 8/16-bit values
-const HALF8: u8 = 0xf;
-const HALF16: u16 = 0xff;
-
 impl CpuExe<'_, '_> {
     /// Execute an `ADD` instruction
     pub(super) fn add(&mut self, add: Add) -> Cycles {
@@ -31,7 +27,7 @@ impl CpuExe<'_, '_> {
                 let flags = BcdFlags {
                     zero: new == 0,
                     subtract: false,
-                    half_carry: (lhs & HALF16) + (rhs & HALF16) > HALF16,
+                    half_carry: half_carry16(lhs, rhs, new),
                     carry,
                 };
                 (flags, 2.into())
@@ -43,7 +39,8 @@ impl CpuExe<'_, '_> {
                 let flags = BcdFlags {
                     zero: new == 0,
                     subtract: false,
-                    half_carry: false, // TODO
+                    // TODO write tests for this - who knows if it works
+                    half_carry: half_carry16(lhs, rhs as u16, new),
                     carry,
                 };
                 (flags, 4.into())
@@ -203,23 +200,42 @@ impl CpuExe<'_, '_> {
     }
 
     /// Execute a `DEC` or `INC` instruction
-    ///
-    /// `delta` should be `-1` for `DEC`, `1` for `INC`
-    pub(super) fn dec_inc(&mut self, dec_inc: DecInc, delta: i8) -> Cycles {
-        // TODO set flags
+    pub(super) fn dec_inc(
+        &mut self,
+        dec_inc: DecInc,
+        subtract: bool,
+    ) -> Cycles {
+        let delta = if subtract { -1 } else { 1 };
         match dec_inc {
-            DecInc::V8(Value8::Register(register)) => {
-                let register = self.register8_mut(register);
-                *register = register.wrapping_add_signed(delta);
-                1.into()
-            }
-            DecInc::V8(Value8::Hl) => {
-                self.set_hl_mem(self.hl_mem().wrapping_add_signed(delta));
-                3.into()
+            DecInc::V8(dest) => {
+                let (cycles, lhs, out) = match dest {
+                    Value8::Register(register) => {
+                        let register = self.register8_mut(register);
+                        let lhs = *register;
+                        *register = lhs.wrapping_add_signed(delta);
+                        (1.into(), lhs, *register)
+                    }
+                    Value8::Hl => {
+                        let lhs = self.hl_mem();
+                        let out = lhs.wrapping_add_signed(delta);
+                        self.set_hl_mem(out);
+                        (3.into(), lhs, out)
+                    }
+                };
+                self.registers.set_flags(BcdFlags {
+                    zero: out == 0,
+                    subtract,
+                    // Casting the delta to u8 yields the same bits so the
+                    // bit arithmetic is the same
+                    half_carry: half_carry8(lhs, delta as u8, out),
+                    ..self.registers.flags() // Carry flag is retained
+                });
+                cycles
             }
             DecInc::R16(register) => {
                 let register = self.register16_mut(register);
                 *register = register.wrapping_add_signed(delta.into());
+                // Does not affect BCD flags
                 2.into()
             }
         }
@@ -271,10 +287,23 @@ fn add8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
     let flags = BcdFlags {
         zero: sum == 0,
         subtract: false,
-        half_carry: (lhs & HALF8) + (rhs & HALF8) > HALF8,
+        half_carry: half_carry8(lhs, rhs, sum),
         carry,
     };
     (sum, flags)
+}
+
+/// Calculate the half-carry flag for 8-bit arithmetic
+fn half_carry8(rhs: u8, lhs: u8, out: u8) -> bool {
+    // https://gist.github.com/meganesu/9e228b6b587decc783aa9be34ae27841?permalink_comment_id=5941562#gistcomment-5941562
+    let b = Bit(4);
+    b.get(rhs ^ lhs ^ out)
+}
+
+/// Calculate the half-carry flag for 16-bit arithmetic
+fn half_carry16(rhs: u16, lhs: u16, out: u16) -> bool {
+    // Get the 8th bit (lowest bit of the upper nibble)
+    (rhs ^ lhs ^ out) & 0x0100 > 0
 }
 
 /// Inner implementation for [GameBoy::daa]
@@ -332,7 +361,7 @@ fn sub8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
     let flags = BcdFlags {
         zero: difference == 0,
         subtract: true,
-        half_carry: (lhs & HALF8) < (rhs & HALF8),
+        half_carry: half_carry8(lhs, rhs, difference),
         carry,
     };
     (difference, flags)
