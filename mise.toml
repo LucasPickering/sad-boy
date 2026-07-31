@@ -4,3 +4,11 @@ run = [
   "cargo build --release",
   "samply record ./target/release/sad-boy -- ./roms/cpu_instrs.gb",
 ]
+
+[tasks.test-profile]
+description = "Run unit tests with profiling enabled"
+run = """
+#!/bin/sh
+BIN=$(cargo test --no-run 2>&1 | rg 'target/[^)]*' -o)
+samply record $BIN -- $@
+"""
