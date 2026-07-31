@@ -313,8 +313,12 @@ impl CpuExe<'_, '_> {
         condition: Option<ConditionCode>,
     ) -> Cycles {
         if condition.is_none_or(|cond| self.condition(cond)) {
-            self.registers.pc.0 =
-                self.registers.pc.0.strict_add_signed(offset.into());
+            // Offset is relative to the instruction *after* the jump, and this
+            // instruction is always 2 bytes
+            let bytes = 2;
+            self.registers.pc = Address(
+                self.registers.pc.0.strict_add_signed(offset.into()) + bytes,
+            );
             3.into()
         } else {
             2.into() // Quick exit

@@ -101,7 +101,7 @@ impl CpuExe<'_, '_> {
         };
         let carry = self.registers.flags().carry;
         self.registers.set_flags(BcdFlags {
-            zero: bit.get(value),
+            zero: !bit.get(value),
             // These two flags are hard-coded
             subtract: false,
             half_carry: true,
@@ -113,7 +113,7 @@ impl CpuExe<'_, '_> {
 
     /// Execute a `SET` or `RES` instruction
     ///
-    /// These instructions for not modify any flags.
+    /// These instructions do not modify any flags.
     pub(super) fn bit_set(
         &mut self,
         bit: Bit,

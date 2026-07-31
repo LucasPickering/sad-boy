@@ -115,13 +115,14 @@ mod tests {
     /// known state
     #[test]
     fn bootloader() {
+        const BOOTLOADER_CYCLES: Cycles = Cycles(23_580_484);
         initialize_tracing();
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
             HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         // TODO figure out correct cycle length
-        emu.run(&mut screen, |clock| clock.cycles() == Cycles(23_580_484));
+        emu.run(&mut screen, |clock| clock.cycles() == Cycles(100));
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         // TODO check memory/registers?
         // TODO look for logo
