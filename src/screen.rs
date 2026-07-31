@@ -210,9 +210,18 @@ impl HeadlessScreen {
         }
     }
 
-    /// Get the screen pixels
-    pub fn pixels(&self) -> &[Color] {
-        &self.pixels
+    /// Assert that the screen pixels match the given pixel array
+    #[track_caller]
+    pub fn assert_pixels(&self, expected: &[Color]) {
+        assert_eq!(
+            expected.len(),
+            self.pixels.len(),
+            "Expected pixel array must be length {} * {}",
+            self.width,
+            self.height
+        );
+        // TODO make this pretty like ratatui
+        assert_eq!(&*self.pixels, expected);
     }
 }
 

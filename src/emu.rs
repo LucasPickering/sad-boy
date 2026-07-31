@@ -107,6 +107,7 @@ mod tests {
     use crate::{
         emu::clock::Cycles,
         screen::{Color, HeadlessScreen},
+        util::initialize_tracing,
     };
     use pretty_assertions::assert_eq;
 
@@ -114,6 +115,7 @@ mod tests {
     /// known state
     #[test]
     fn bootloader() {
+        initialize_tracing();
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
@@ -122,10 +124,11 @@ mod tests {
         emu.run(&mut screen, |clock| clock.cycles() == Cycles(23_580_484));
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         // TODO check memory/registers?
-        assert_eq!(
-            screen.pixels(),
-            // TODO look for logo
-            vec![Color::BLACK; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize]
-        );
+        // TODO look for logo
+        screen.assert_pixels(&vec![
+            Color::new(255, 255, 255);
+            SCREEN_WIDTH as usize
+                * SCREEN_HEIGHT as usize
+        ]);
     }
 }

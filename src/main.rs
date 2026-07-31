@@ -5,24 +5,17 @@ mod util;
 use crate::{
     emu::{Clock, GameBoy},
     screen::TerminalScreen,
+    util::initialize_tracing,
 };
 use color_eyre::eyre;
 use lexopt::Arg;
 use signal_hook::consts::signal;
 use std::{
-    env,
-    fs::File,
     path::PathBuf,
-    str::FromStr,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-};
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{
-    filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
-    util::SubscriberInitExt,
 };
 
 fn main() -> eyre::Result<()> {
@@ -72,24 +65,6 @@ impl Args {
             rom: rom.ok_or("missing argument ROM")?,
         })
     }
-}
-
-/// Set up tracing to stderr
-fn initialize_tracing() {
-    let log_file = File::create("sad-boy.log").unwrap();
-    let stderr_subscriber = tracing_subscriber::fmt::layer()
-        .with_writer(log_file)
-        .with_target(true)
-        .with_span_events(FmtSpan::NONE);
-
-    let targets = match env::var("RUST_LOG") {
-        Ok(env_var) => Targets::from_str(&env_var).unwrap(),
-        Err(_) => Targets::new().with_default(LevelFilter::INFO),
-    };
-    tracing_subscriber::registry()
-        .with(targets)
-        .with(stderr_subscriber)
-        .init();
 }
 
 /// Register exit signal listeners

@@ -1,8 +1,12 @@
 use std::{
     cell::RefCell,
+    env,
     fmt::{self, Debug, Display},
+    fs::File,
+    io,
     marker::PhantomData,
     ops::{BitAnd, BitOr, Deref, DerefMut, Not},
+    str::FromStr,
 };
 
 /// Index of a single bit in a byte
@@ -189,6 +193,11 @@ macro_rules! impl_bit_pack {
     };
 }
 pub(crate) use impl_bit_pack;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{
+    Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
 /// A byte associated with a [BitPack]-implementing type
 ///
@@ -372,4 +381,36 @@ impl<T> Shared<T> for RefCell<T> {
     fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
         f(&mut self.borrow_mut())
     }
+}
+
+/// Set up tracing to stderr or a file
+pub fn initialize_tracing() {
+    // For tests, output to stderr but hide by default
+    let targets = match env::var("RUST_LOG") {
+        Ok(env_var) => Targets::from_str(&env_var).unwrap(),
+        Err(_) => Targets::new().with_default(if cfg!(test) {
+            LevelFilter::OFF
+        } else {
+            LevelFilter::INFO
+        }),
+    };
+    let subscriber = if cfg!(test) {
+        tracing_subscriber::fmt::layer()
+            .with_writer(io::stderr)
+            .with_target(true)
+            .with_span_events(FmtSpan::NONE)
+            .boxed()
+    } else {
+        let log_file = File::create("sad-boy.log").unwrap();
+        tracing_subscriber::fmt::layer()
+            .with_writer(log_file)
+            .with_target(true)
+            .with_span_events(FmtSpan::NONE)
+            .with_ansi(false)
+            .boxed()
+    };
+    tracing_subscriber::registry()
+        .with(targets)
+        .with(subscriber)
+        .init();
 }
