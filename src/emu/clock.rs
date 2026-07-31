@@ -72,8 +72,8 @@ impl Clock {
         // How much of the cycle has already been consumed by real work?
         let elapsed = Instant::elapsed(&self.last_tick.get());
         // Sleep for the rest of the cycle
-        if elapsed < CYCLE_DURATION {
-            thread::sleep(elapsed);
+        if let Some(remaining) = CYCLE_DURATION.checked_sub(elapsed) {
+            thread::sleep(remaining);
         } else {
             // It's been longer than the cycle time since the last tick, which
             // means the future polling took longer than allowed. Unfortunately
