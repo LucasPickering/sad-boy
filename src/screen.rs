@@ -180,9 +180,58 @@ pub struct Color {
 }
 
 impl Color {
-    const BLACK: Self = Self::new(0, 0, 0);
+    pub const BLACK: Self = Self::new(0, 0, 0);
 
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
         Self { red, green, blue }
     }
+}
+
+/// An in-memory screen for headless operation
+#[cfg(test)]
+#[derive(Debug)]
+pub struct HeadlessScreen {
+    /// The next frame to write to the screen
+    ///
+    /// Invariant: `len() == self.width * self.height`
+    pixels: Box<[Color]>,
+    width: u16,
+    height: u16,
+}
+
+#[cfg(test)]
+impl HeadlessScreen {
+    pub fn new(width: u16, height: u16) -> Self {
+        let len = (width * height) as usize;
+        Self {
+            pixels: vec![Color::BLACK; len].into_boxed_slice(),
+            width,
+            height,
+        }
+    }
+
+    /// Get the screen pixels
+    pub fn pixels(&self) -> &[Color] {
+        &self.pixels
+    }
+}
+
+#[cfg(test)]
+impl Screen for HeadlessScreen {
+    fn set(&mut self, x: u16, y: u16, color: Color) {
+        assert!(
+            x < self.width,
+            "x {x} must be less than width {width}",
+            width = self.width
+        );
+        assert!(
+            y < self.height,
+            "y {y} must be less than height {height}",
+            height = self.height
+        );
+        let index = (y * self.width + x) as usize;
+        self.pixels[index] = color;
+    }
+
+    fn draw(&mut self) {}
 }

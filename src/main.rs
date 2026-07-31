@@ -2,7 +2,10 @@ mod emu;
 mod screen;
 mod util;
 
-use crate::{emu::GameBoy, screen::TerminalScreen};
+use crate::{
+    emu::{Clock, GameBoy},
+    screen::TerminalScreen,
+};
 use color_eyre::eyre;
 use lexopt::Arg;
 use signal_hook::consts::signal;
@@ -11,7 +14,10 @@ use std::{
     fs::File,
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{
@@ -32,8 +38,9 @@ fn main() -> eyre::Result<()> {
         emu::SCREEN_WIDTH.into(),
         emu::SCREEN_HEIGHT.into(),
     )?;
-    let game_boy = GameBoy::boot(&args.rom, quit)?;
-    game_boy.run(&mut screen);
+    let stop_on = move |_: &Clock| quit.load(Ordering::Relaxed);
+    let mut game_boy = GameBoy::boot(&args.rom)?;
+    game_boy.run(&mut screen, stop_on);
     Ok(())
 }
 

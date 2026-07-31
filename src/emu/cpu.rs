@@ -23,7 +23,7 @@ use tracing::{error, info_span, trace};
 /// Central Processing Unit for a Game Boy
 ///
 /// This holds the CPU registers and executes instructions.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Cpu {
     /// Mutable values directly in the CPU
     registers: Registers,
@@ -35,7 +35,7 @@ impl Cpu {
     /// Run the CPU loop
     ///
     /// Repeatedly execute CPU instructions from ROM.
-    pub async fn run(mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
+    pub async fn run(&mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
         // TODO should we execute _then_ wait?
         loop {
             let cycles = self.execute_next(&mut memory);
@@ -447,10 +447,10 @@ impl CpuExe<'_, '_> {
         // BEFORE writing
         self.registers.sp.0 -= 2;
         debug_assert!(
-            memory::RAM.contains(self.registers.sp),
+            memory::HIGH_RAM.contains(self.registers.sp),
             "Stack pointer {} is outside range {}",
             self.registers.sp,
-            memory::RAM
+            memory::HIGH_RAM
         );
         self.memory.set16(self.registers.sp, value);
     }
@@ -462,10 +462,10 @@ impl CpuExe<'_, '_> {
         // "deallocate" the value we just popped.
         self.registers.sp.0 += 2;
         debug_assert!(
-            memory::RAM.contains(self.registers.sp),
+            memory::HIGH_RAM.contains(self.registers.sp),
             "Stack pointer {} is outside range {}",
             self.registers.sp,
-            memory::RAM
+            memory::HIGH_RAM
         );
 
         value
@@ -596,6 +596,7 @@ const _: () = assert!(
 );
 
 /// Registers in a Game Boy CPU
+#[derive(Default, PartialEq)]
 #[repr(C)] // Field ordering/alignment is important
 struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
@@ -647,26 +648,6 @@ impl Debug for Registers {
             .field("sp", &self.sp)
             .field("pc", &self.pc)
             .finish()
-    }
-}
-
-impl Default for Registers {
-    fn default() -> Self {
-        Self {
-            f: PackedBits::default(),
-            a: 0,
-            c: 0,
-            b: 0,
-            e: 0,
-            d: 0,
-            l: 0,
-            h: 0,
-            // Stack starts at the end of RAM
-            sp: Address(memory::RAM.last() + 1),
-            // Skip the boot ROM, go straight to the game's ROM
-            // https://gbdev.io/pandocs/Power_Up_Sequence.html
-            pc: Address(0x0100),
-        }
     }
 }
 
@@ -766,6 +747,29 @@ impl_bit_pack! {
     Bit(5).mask() => half_carry,
     Bit(4).mask() => carry,
 }
+
+/// Expected CPU state when exiting the bootloader
+///
+/// This is defined here so it can access private types/fields, but exported so
+/// it can be used in the emulator-level test. I think this is better than
+/// exposing a bunch of internals.
+#[cfg(test)]
+pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
+    registers: Registers {
+        f: PackedBits::new(0b1000_0000),
+        a: 1,
+        c: 0,
+        b: 0,
+        e: 0,
+        d: 0,
+        l: 0,
+        h: 0,
+        sp: Address(0xFFFE), // Stack is empty
+        pc: Address(0x0100), // First instruction of the ROM
+    },
+    // https://gbdev.io/pandocs/Interrupts.html#ime-interrupt-master-enable-flag-write-only
+    interrupts_enabled: false,
+};
 
 #[cfg(test)]
 mod tests {

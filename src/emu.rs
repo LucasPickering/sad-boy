@@ -9,18 +9,16 @@ mod instruction;
 mod memory;
 mod rom;
 
+pub use clock::Clock;
+
 use crate::{
-    emu::{clock::Clock, cpu::Cpu, gpu::Gpu, memory::MemoryBus, rom::Rom},
-    screen::TerminalScreen,
+    emu::{cpu::Cpu, gpu::Gpu, memory::MemoryBus, rom::Rom},
+    screen::Screen,
 };
 use color_eyre::eyre;
 use std::{
     path::Path,
     pin::pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     task::{Context, Poll, Waker},
 };
 use tracing::{Instrument, error, info_span};
@@ -37,26 +35,39 @@ pub struct GameBoy {
     gpu: Gpu,
     /// Read-only memory from the cartridge
     rom: Rom,
-    /// Flag that will be set when the emulator should exit
-    quit: Arc<AtomicBool>,
 }
 
 impl GameBoy {
     /// Boot the Game Boy and load the ROM from a file
-    pub fn boot(path: &Path, quit: Arc<AtomicBool>) -> eyre::Result<Self> {
+    pub fn boot(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
         Ok(Self {
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
-            quit,
         })
+    }
+
+    /// Initialize a Game Boy with a static ROM for testing
+    #[cfg(test)]
+    pub fn test(rom: Vec<u8>) -> Self {
+        let rom = Rom::test(rom);
+        Self {
+            cpu: Cpu::default(),
+            gpu: Gpu::default(),
+            rom,
+        }
     }
 
     /// Run the Game Boy indefinitely
     ///
-    /// This will never return. To stop the Game Boy, kill the process.
-    pub fn run(self, screen: &mut TerminalScreen) {
+    /// This will run until the given `stop_on` function returns `true`. It is
+    /// called on every clock cycle.
+    pub fn run(
+        &mut self,
+        screen: &mut dyn Screen,
+        stop_on: impl Fn(&Clock) -> bool,
+    ) {
         // The main loop uses futures to emulate components (CPU, GPU, etc.)
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
@@ -72,7 +83,9 @@ impl GameBoy {
             pin!(self.gpu.run(&clock, screen).instrument(info_span!("GPU")));
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
-        while !self.quit.load(Ordering::Relaxed) {
+
+        // Run until the caller says to stop
+        while !stop_on(&clock) {
             // These futures are supposed to be infinite loops, so if they exit
             // that's... odd
             let polls = [
@@ -85,5 +98,34 @@ impl GameBoy {
             }
             clock.tick();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        emu::clock::Cycles,
+        screen::{Color, HeadlessScreen},
+    };
+    use pretty_assertions::assert_eq;
+
+    /// Run the emulator until the bootloader exits, then verify it matches the
+    /// known state
+    #[test]
+    fn bootloader() {
+        let rom_data = vec![0; memory::GAME_ROM.len()];
+        let mut emu = GameBoy::test(rom_data);
+        let mut screen =
+            HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
+        // TODO figure out correct cycle length
+        emu.run(&mut screen, |clock| clock.cycles() == Cycles(23_580_484));
+        assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
+        // TODO check memory/registers?
+        assert_eq!(
+            screen.pixels(),
+            // TODO look for logo
+            vec![Color::BLACK; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize]
+        );
     }
 }

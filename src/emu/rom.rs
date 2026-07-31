@@ -46,7 +46,7 @@ pub struct Rom {
 }
 
 impl Rom {
-    /// Load and parse a ROM from a file
+    /// Load a ROM from a file
     pub fn load(path: &Path) -> eyre::Result<Self> {
         // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
@@ -56,44 +56,18 @@ impl Rom {
         Ok(Self { data })
     }
 
+    /// Initialize a static ROM for testing
+    #[cfg(test)]
+    pub fn test(data: Vec<u8>) -> Self {
+        Self { data }
+    }
+
     /// Create an empty ROM
     ///
     /// Useful for testing on the [GameBoy] when the ROM doesn't matter.
     #[cfg(test)]
     pub fn empty() -> Rom {
         Self { data: vec![] }
-    }
-
-    /// Parse the CPU instruction at the given address
-    ///
-    /// Return the instruction as well as the number of bytes it consumed. This
-    /// is the number of bytes that the PC should advance.
-    pub fn get_instruction(
-        &self,
-        address: Address,
-    ) -> Result<(Instruction, usize), RomParseError> {
-        // TODO make sure it's in bounds
-        let mut input = &self.data[(address.0 as usize)..];
-        let start = input.checkpoint(); // TODO this isn't right
-        // Don't use Parser::parse() because its error type doesn't print well
-        // for binary data
-        let (instruction, taken) = parse_instruction
-            .with_taken()
-            .parse_next(&mut input)
-            .map_err(|error| {
-                let error = error
-                    .into_inner()
-                    .expect("Complete parser should not return Incomplete");
-                RomParseError::new(&self.data, input.offset_from(&start), error)
-            })?;
-        let offset = input.offset_from(&start);
-        trace!(
-            ?instruction,
-            bytes = %BytesDisplay::binary(taken),
-            %address,
-            "Parsed instruction",
-        );
-        Ok((instruction, offset))
     }
 
     /// Get the raw ROM bytes
@@ -108,6 +82,43 @@ impl Debug for Rom {
             .field("data", &BytesDisplay::hex(&self.data)) // Truncate data
             .finish()
     }
+}
+
+/// Parse the CPU instruction at the given address
+///
+/// The input should be the **full** byte slice (either ROM or bootloader). The
+/// address defines the offset within that slice to start parsing.
+///
+/// Return the instruction as well as the number of bytes it consumed. This is
+/// the number of bytes that the PC should advance.
+///
+/// TODO rename
+pub fn get_instruction(
+    input: &[u8],
+    address: Address,
+) -> Result<(Instruction, usize), RomParseError> {
+    // TODO make sure it's in bounds
+    let mut input = &input[(address.0 as usize)..];
+    let start = input.checkpoint(); // TODO this isn't right
+    // Don't use Parser::parse() because its error type doesn't print well
+    // for binary data
+    let (instruction, taken) = parse_instruction
+        .with_taken()
+        .parse_next(&mut input)
+        .map_err(|error| {
+            let error = error
+                .into_inner()
+                .expect("Complete parser should not return Incomplete");
+            RomParseError::new(input, input.offset_from(&start), error)
+        })?;
+    let offset = input.offset_from(&start);
+    trace!(
+        ?instruction,
+        bytes = %BytesDisplay::binary(taken),
+        %address,
+        "Parsed instruction",
+    );
+    Ok((instruction, offset))
 }
 
 /// TODO

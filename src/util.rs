@@ -194,6 +194,7 @@ pub(crate) use impl_bit_pack;
 ///
 /// At runtime this is just the packed byte, but it carries an associated type
 /// so it can be unpacked easily with [Self::unpack].
+#[derive(PartialEq)]
 pub struct PackedBits<T> {
     value: u8,
     ty: PhantomData<T>,
@@ -203,7 +204,7 @@ impl<T: BitPack> PackedBits<T> {
     /// Create a [PackedBits] value from a byte
     ///
     /// The input byte is not validated in any way. It will be stored as-is.
-    pub fn new(value: u8) -> Self {
+    pub const fn new(value: u8) -> Self {
         Self {
             value,
             ty: PhantomData,

@@ -1,5 +1,9 @@
 use crate::{
-    emu::{gpu::Gpu, instruction::Instruction, rom::Rom},
+    emu::{
+        gpu::Gpu,
+        instruction::Instruction,
+        rom::{self, Rom},
+    },
     util::Shared,
 };
 use std::{
@@ -11,10 +15,25 @@ use std::{
 };
 use tracing::error;
 
+/// Code executed at boot, before entering the ROM
+///
+/// The last instruction executed by the bootloader will unmap itself by writing
+/// to the `BANK` register (`0xFF50`).
+///
+/// https://gbdev.io/pandocs/Power_Up_Sequence.html
+///
+/// Downloaded from https://gbdev.gg8.se/files/roms/bootroms/
+const BOOTLOADER_CODE: &[u8] = include_bytes!("../../bootloader/dmg_boot.bin");
 // ===== Memory Blocks =====
 // https://gbdev.io/pandocs/Memory_Map.html
+/// Range containing the bootloader code
+///
+/// This range is mapped *on top of* the ROM code while the bootloader is
+/// running.
+const BOOTLOADER: AddressRange =
+    AddressRange::new("Bootloader", 0x0000, 0x0100);
 /// Range of CPU instructions and data from a game cartridge
-const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
+pub const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
 /// Video RAM containing tile pixel data
 pub const TILE_DATA: AddressRange =
     AddressRange::new("Tile Data", 0x8000, 0x97FF);
@@ -42,6 +61,7 @@ pub const SCX: u16 = 0xFF43;
 pub const LY: u16 = 0xFF44;
 pub const LYC: u16 = 0xFF45;
 pub const DMA: u16 = 0xFF46;
+pub const BANK: u16 = 0xFF50;
 
 /// Generate `x_START` and `x_END` consts for a set of memory ranges
 ///
@@ -60,6 +80,7 @@ macro_rules! bounds {
 
 // Generate extra consts for pattern matching
 bounds!(
+    BOOTLOADER,
     TILE_DATA,
     TILE_MAPS,
     CARTRIDGE_RAM,
@@ -79,6 +100,8 @@ bounds!(
 /// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
+    /// TODO
+    registers: Registers,
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
@@ -106,6 +129,7 @@ pub struct MemoryBus<'a> {
 impl<'a> MemoryBus<'a> {
     pub fn new(rom: &'a Rom, gpu: &'a Gpu) -> Self {
         Self {
+            registers: Registers::default(),
             ram: Memory::new(RAM),
             high_ram: Memory::new(HIGH_RAM),
             cartridge_ram: Memory::new(CARTRIDGE_RAM),
@@ -119,14 +143,26 @@ impl<'a> MemoryBus<'a> {
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
     pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
-        // Instructions *should* only be read from the ROM, but you could
-        // provide any valid address. This indicates either the ROM is buggy
-        // (possible, but unlikely), or it's an emulator bug (more likely).
-        debug_assert!(
+        // Instruction parsing is set up to read from either the bootloader or
+        // the ROM. Reading from anywhere else is a bug.
+        //
+        // Since parsing requires a slice instead of accessing bytes one at a
+        // time, this is easier than supporting instruction parsing from
+        // arbitrary addresses.
+        assert!(
             GAME_ROM.contains(address),
             "Requested instruction at {address} is out of range {GAME_ROM}"
         );
-        self.rom.get_instruction(address).unwrap_or_else(|error| {
+        let source = if self.is_bootloading() {
+            // If the bootloader is enabled, then we should only be running
+            // bootloader code. Out-of-bounds here implies the bootloader exited
+            // without unmapping itself, or something else re-mapped the
+            // bootloader.
+            BOOTLOADER_CODE
+        } else {
+            self.rom.bytes()
+        };
+        rom::get_instruction(source, address).unwrap_or_else(|error| {
             panic!("Failed to parse instruction: {error}");
         })
     }
@@ -144,7 +180,12 @@ impl<'a> MemoryBus<'a> {
 
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
+            BOOTLOADER_START..=BOOTLOADER_LAST if self.is_bootloading() => {
+                let index: usize = address.0.into();
+                BOOTLOADER_CODE[index]
+            }
             // Game ROM
+            // TODO consts for these
             0x0000..=0x3FFF => {
                 // SAFETY: TODO
                 let index: usize = address.0.into();
@@ -183,6 +224,7 @@ impl<'a> MemoryBus<'a> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
+            BANK => self.registers.bank,
             0xFF00..=0xFF7F => {
                 error!("TODO: unmapped I/O register {address}");
                 0
@@ -211,7 +253,8 @@ impl<'a> MemoryBus<'a> {
 
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
-            // Game ROM
+            // ROM is immutable (bootloader too, so it doesn't matter if it's
+            // mapped or not)
             0x0000..=0x7FFF => {} // TODO const for this
             TILE_DATA_START..=TILE_DATA_LAST => {
                 self.gpu.tile_data().set_byte(address, value);
@@ -241,6 +284,7 @@ impl<'a> MemoryBus<'a> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
+            BANK => self.registers.bank = value,
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
@@ -267,6 +311,14 @@ impl<'a> MemoryBus<'a> {
         let [low, high] = value.to_le_bytes(); // Game Boy is little-endian
         self.set8(address, low);
         self.set8(address.next(), high);
+    }
+
+    /// Is the bootloader currently mapped?
+    ///
+    /// This is `true` only during initial boot. The bootloader unmaps itself
+    /// with its last instruction, at which point it should never be re-mapped.
+    fn is_bootloading(&self) -> bool {
+        self.registers.bank == 0
     }
 }
 
@@ -322,7 +374,7 @@ impl AddressRange {
     }
 
     /// Get the number of bytes in the range
-    const fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         // The end is inclusive, so we need +1 to count it
         (self.range.last.0 - self.range.start.0 + 1) as usize
     }
@@ -411,7 +463,11 @@ impl<T> Memory<T> {
         );
         let offset = (address.0 - self.range.start()) as usize;
         // Double extra sanity check
-        debug_assert!(offset < mem::size_of_val(&self.memory));
+        let len_bytes = mem::size_of_val(&*self.memory);
+        debug_assert!(
+            offset < len_bytes,
+            "Offset {offset} >= byte length {len_bytes}"
+        );
         offset
     }
 }
@@ -468,4 +524,14 @@ impl<T> MemoryWrite for &RefCell<Memory<T>> {
     fn set_byte(self, address: Address, value: u8) {
         self.borrow_mut().set_byte(address, value);
     }
+}
+
+/// Generic registers
+#[derive(Debug, Default)]
+struct Registers {
+    /// `BANK`: Boot ROM mapping control
+    ///
+    /// If this is 0, the boot ROM is mapped over bytes `0x0-0x100`. If it's
+    /// any other value, that range is mapped to the ROM instead.
+    bank: u8,
 }
