@@ -9,11 +9,12 @@ use crate::{
 use std::{
     any,
     cell::RefCell,
+    collections::HashMap,
     fmt::{self, Debug, Display},
     mem, ptr,
     range::RangeInclusive,
 };
-use tracing::error;
+use tracing::{error, info};
 
 /// Code executed at boot, before entering the ROM
 ///
@@ -124,6 +125,10 @@ pub struct MemoryBus<'a> {
     /// shared with a separate GPU task, so it's an immutable reference with
     /// internal mutability.
     gpu: &'a Gpu,
+    /// An extremely naive cache for instructions parsed from the ROM
+    ///
+    /// TODO more
+    instruction_cache: HashMap<Address, (Instruction, usize)>,
 }
 
 impl<'a> MemoryBus<'a> {
@@ -135,6 +140,7 @@ impl<'a> MemoryBus<'a> {
             cartridge_ram: Memory::new(CARTRIDGE_RAM),
             rom,
             gpu,
+            instruction_cache: HashMap::new(),
         }
     }
 
@@ -142,7 +148,10 @@ impl<'a> MemoryBus<'a> {
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
-    pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
+    pub fn get_instruction(
+        &mut self,
+        address: Address,
+    ) -> (Instruction, usize) {
         // Instruction parsing is set up to read from either the bootloader or
         // the ROM. Reading from anywhere else is a bug.
         //
@@ -153,17 +162,22 @@ impl<'a> MemoryBus<'a> {
             GAME_ROM.contains(address),
             "Requested instruction at {address} is out of range {GAME_ROM}"
         );
-        let source = if self.is_bootloading() {
-            // If the bootloader is enabled, then we should only be running
-            // bootloader code. Out-of-bounds here implies the bootloader exited
-            // without unmapping itself, or something else re-mapped the
-            // bootloader.
-            BOOTLOADER_CODE
-        } else {
-            self.rom.bytes()
-        };
-        rom::get_instruction(source, address).unwrap_or_else(|error| {
-            panic!("Failed to parse instruction: {error}");
+
+        // Cache instructions because parsing is expensive
+        let is_bootloading = self.is_bootloading();
+        *self.instruction_cache.entry(address).or_insert_with(|| {
+            let source = if is_bootloading {
+                // If the bootloader is enabled, then we should only be running
+                // bootloader code. Out-of-bounds here implies the bootloader
+                // exited without unmapping itself, or something
+                // else re-mapped the bootloader.
+                BOOTLOADER_CODE
+            } else {
+                self.rom.bytes()
+            };
+            rom::get_instruction(source, address).unwrap_or_else(|error| {
+                panic!("Failed to parse instruction: {error}");
+            })
         })
     }
 
@@ -284,7 +298,7 @@ impl<'a> MemoryBus<'a> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
-            BANK => self.registers.bank = value,
+            BANK => self.set_bank(value),
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
@@ -313,6 +327,17 @@ impl<'a> MemoryBus<'a> {
         self.set8(address.next(), high);
     }
 
+    /// Set the value of the `BANK` register
+    fn set_bank(&mut self, value: u8) {
+        // If exiting the bootloader, clear the instruction cache because new
+        // executable memory is loaded in that range
+        if self.is_bootloading() && value > 0 {
+            info!("Exiting bootloader");
+            self.instruction_cache = HashMap::new();
+        }
+        self.registers.bank = value;
+    }
+
     /// Is the bootloader currently mapped?
     ///
     /// This is `true` only during initial boot. The bootloader unmaps itself
@@ -328,7 +353,7 @@ impl<'a> MemoryBus<'a> {
 /// are valid.
 ///
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
-#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
 
 impl Address {

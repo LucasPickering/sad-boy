@@ -46,9 +46,8 @@ impl Cpu {
     /// Execute the next CPU instruction, returning the number of consumed CPU
     /// cycles (dots)
     fn execute_next<'a>(&'a mut self, memory: &'a mut MemoryBus<'_>) -> Cycles {
-        let (instruction, num_bytes) =
-            memory.get_instruction(self.registers.pc);
         let pc = self.registers.pc;
+        let (instruction, num_bytes) = memory.get_instruction(pc);
         let cycles = self.execute(memory, instruction);
 
         // If the instruction didn't modify the PC (e.g. jumps), then
