@@ -34,6 +34,12 @@ impl Bit {
     }
 }
 
+impl Display for Bit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "b{}", self.0)
+    }
+}
+
 /// Newtype for a bitmask
 ///
 /// There's a lot of `u8`s floating around in this file, so this helps keep them

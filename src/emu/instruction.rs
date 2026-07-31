@@ -1,6 +1,7 @@
 //! Game Boy CPU instructions
 
 use crate::{emu::memory::Address, util::Bit};
+use std::fmt::{self, Display};
 
 /// CPU instruction
 ///
@@ -130,6 +131,73 @@ impl Instruction {
     }
 }
 
+impl Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Adc(operand) => write!(f, "ADC {operand}"),
+            Self::Add(add) => write!(f, "ADD {add}"),
+            Self::And(operand) => write!(f, "AND {operand}"),
+            Self::Bit(bit, value) => write!(f, "BIT {bit},{value}"),
+            Self::Call {
+                address,
+                condition: None,
+            } => write!(f, "CALL {address}"),
+            Self::Call {
+                address,
+                condition: Some(condition),
+            } => write!(f, "CALL {condition},{address}"),
+            Self::Ccf => write!(f, "CCF"),
+            Self::Cp(operand) => write!(f, "CP {operand}"),
+            Self::Cpl => write!(f, "CPL"),
+            Self::Daa => write!(f, "DAA"),
+            Self::Dec(dec_inc) => write!(f, "DEC {dec_inc}"),
+            Self::Di => write!(f, "DI"),
+            Self::Ei => write!(f, "EI"),
+            Self::Halt => write!(f, "HALT"),
+            Self::Inc(dec_inc) => write!(f, "INC {dec_inc}"),
+            Self::Jp(jump) => write!(f, "JP {jump}"),
+            Self::Jr {
+                offset,
+                condition: None,
+            } => write!(f, "JR {offset}"),
+            Self::Jr {
+                offset,
+                condition: Some(condition),
+            } => write!(f, "JR {condition},{offset}"),
+            Self::Ld(load) => write!(f, "LD {load}"),
+            Self::Ldh(load_high) => write!(f, "LDH {load_high}"),
+            Self::Nop => write!(f, "NOP"),
+            Self::Or(operand) => write!(f, "OR {operand}"),
+            Self::Pop(register) => write!(f, "POP {register}"),
+            Self::Push(register) => write!(f, "PUSH {register}"),
+            Self::Res(bit, value) => write!(f, "RES {bit},{value}"),
+            Self::Ret(None) => write!(f, "RET"),
+            Self::Ret(Some(condition)) => write!(f, "RET {condition}"),
+            Self::Reti => write!(f, "RETI"),
+            Self::Rl(value) => write!(f, "RL {value}"),
+            Self::Rla => write!(f, "RLA"),
+            Self::Rlc(value) => write!(f, "RLC {value}"),
+            Self::Rlca => write!(f, "RLCA"),
+            Self::Rr(value) => write!(f, "RR {value}"),
+            Self::Rra => write!(f, "RRA"),
+            Self::Rrc(value) => write!(f, "RRC {value}"),
+            Self::Rrca => write!(f, "RRCA"),
+            Self::Rst(address) => write!(f, "RST {address}"),
+            Self::Sbc(operand) => write!(f, "SBC {operand}"),
+            Self::Scf => write!(f, "SCF"),
+            Self::Set(bit, value) => write!(f, "SET {bit},{value}"),
+            Self::Sla(value) => write!(f, "SLA {value}"),
+            Self::Sra(value) => write!(f, "SRA {value}"),
+            Self::Srl(value) => write!(f, "SRL {value}"),
+            Self::Sub(operand) => write!(f, "SUB {operand}"),
+            Self::Swap(value) => write!(f, "SWAP {value}"),
+            Self::Stop => write!(f, "STOP"),
+            Self::Xor(operand) => write!(f, "XOR {operand}"),
+            Self::Invalid => write!(f, "INVALID"),
+        }
+    }
+}
+
 /// Right-hand side of a math instruction (`r8` or `imm8`)
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Operand {
@@ -137,6 +205,15 @@ pub enum Operand {
     V8(Value8),
     /// Constant value
     Const(u8),
+}
+
+impl Display for Operand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Operand::V8(value) => write!(f, "{value}"),
+            Operand::Const(c) => write!(f, "{c}"),
+        }
+    }
 }
 
 impl From<u8> for Operand {
@@ -164,6 +241,16 @@ pub enum Add {
     Sp(i8),
 }
 
+impl Display for Add {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::A(operand) => write!(f, "a,{operand}"),
+            Self::Hl(register) => write!(f, "hl,{register}"),
+            Self::Sp(offset) => write!(f, "sp,{offset}"),
+        }
+    }
+}
+
 /// Variations of the `DEC` (decrement) and `INC` (increment) instructions
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DecInc {
@@ -171,6 +258,15 @@ pub enum DecInc {
     V8(Value8),
     /// Increment a 16-bit register
     R16(Register16),
+}
+
+impl Display for DecInc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::V8(value) => write!(f, "{value}"),
+            Self::R16(register) => write!(f, "{register}"),
+        }
+    }
 }
 
 impl From<Register8> for DecInc {
@@ -190,6 +286,18 @@ pub enum Jump {
     Hl,
 }
 
+impl Display for Jump {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Address(address) => write!(f, "{address}"),
+            Self::AddressCc(condition, address) => {
+                write!(f, "{condition},{address}")
+            }
+            Self::Hl => write!(f, "hl"),
+        }
+    }
+}
+
 /// Variations of the `LD` (load) instruction
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Load {
@@ -203,7 +311,7 @@ pub enum Load {
     HlSpOffset { offset: i8 },
     /// Load from `sp` to `hl`
     SpHl,
-    /// Load a constant into an 8-bit value
+    /// Load a constant into an 8-bit destination
     V8Const { dest: Value8, source: u8 },
     /// Load from one 8-bit value to another
     V8V8 { dest: Value8, source: Value8 },
@@ -213,6 +321,23 @@ pub enum Load {
     R16MemA { dest: Register16Memory },
     /// Load from the byte pointed to by [Register16Memory] into register `a`
     AR16Mem { source: Register16Memory },
+}
+
+impl Display for Load {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AddressA { dest } => write!(f, "[{dest}],a"),
+            Self::AAddress { source } => write!(f, "a,[{source}]"),
+            Self::AddressSp { dest } => write!(f, "[{dest}],sp"),
+            Self::HlSpOffset { offset } => write!(f, "hl,sp+{offset}"),
+            Self::SpHl => write!(f, "sp,hl"),
+            Self::V8Const { dest, source } => write!(f, "{dest},{source}"),
+            Self::V8V8 { dest, source } => write!(f, "{dest},{source}"),
+            Self::R16Const { dest, source } => write!(f, "{dest},{source}"),
+            Self::R16MemA { dest } => write!(f, "[{dest}],a"),
+            Self::AR16Mem { source } => write!(f, "a,[{source}]"),
+        }
+    }
 }
 
 /// Variations of the `LDH` (load high) instruction
@@ -232,6 +357,17 @@ pub enum LoadHigh {
     ConstA(u8),
 }
 
+impl Display for LoadHigh {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AC => write!(f, "a,[$FF00+c]"),
+            Self::AConst(value) => write!(f, "a,[$FF00+${value:2x}]"),
+            Self::CA => write!(f, "[$FF00+c],a"),
+            Self::ConstA(value) => write!(f, "[$FF00+${value:2x}],a"),
+        }
+    }
+}
+
 /// Source of an 8-bit value
 ///
 /// `r8` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
@@ -241,6 +377,15 @@ pub enum Value8 {
     Register(Register8),
     /// Byte pointed to by the address in register `hl`
     Hl,
+}
+
+impl Display for Value8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value8::Register(register) => write!(f, "{register}"),
+            Value8::Hl => write!(f, "[hl]"),
+        }
+    }
 }
 
 impl From<Register8> for Value8 {
@@ -264,6 +409,20 @@ pub enum Register8 {
     L,
 }
 
+impl Display for Register8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::A => write!(f, "a"),
+            Self::B => write!(f, "b"),
+            Self::C => write!(f, "c"),
+            Self::D => write!(f, "d"),
+            Self::E => write!(f, "e"),
+            Self::H => write!(f, "h"),
+            Self::L => write!(f, "l"),
+        }
+    }
+}
+
 /// Name of a 16-bit register
 ///
 /// `r16` on https://gbdev.io/pandocs/CPU_Instruction_Set.html
@@ -277,6 +436,17 @@ pub enum Register16 {
     Hl,
     /// Value in register `sp`
     Sp,
+}
+
+impl Display for Register16 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bc => write!(f, "bc"),
+            Self::De => write!(f, "de"),
+            Self::Hl => write!(f, "hl"),
+            Self::Sp => write!(f, "sp"),
+        }
+    }
 }
 
 /// Name of a general purpose 16-bit register for stack operations
@@ -297,6 +467,17 @@ pub enum Register16Stack {
     Hl,
 }
 
+impl Display for Register16Stack {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Af => write!(f, "af"),
+            Self::Bc => write!(f, "bc"),
+            Self::De => write!(f, "de"),
+            Self::Hl => write!(f, "hl"),
+        }
+    }
+}
+
 /// 16-bit register for load operations
 ///
 /// Most instructions use [Register16], but `LD` uses `hli` and `hld` (AKA `hl+`
@@ -313,6 +494,17 @@ pub enum Register16Memory {
     Hld,
 }
 
+impl Display for Register16Memory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bc => write!(f, "bc"),
+            Self::De => write!(f, "de"),
+            Self::Hli => write!(f, "hl+"),
+            Self::Hld => write!(f, "hl-"),
+        }
+    }
+}
+
 /// Condition for a conditional jump or call
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ConditionCode {
@@ -324,4 +516,15 @@ pub enum ConditionCode {
     C,
     /// Execute if `carry` flag is not set
     Nc,
+}
+
+impl Display for ConditionCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Z => write!(f, "Z"),
+            Self::Nz => write!(f, "NZ"),
+            Self::C => write!(f, "C"),
+            Self::Nc => write!(f, "NC"),
+        }
+    }
 }

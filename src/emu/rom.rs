@@ -113,7 +113,7 @@ pub fn get_instruction(
         })?;
     let offset = input.offset_from(&start);
     trace!(
-        ?instruction,
+        %instruction,
         bytes = %BytesDisplay::binary(taken),
         %address,
         "Parsed instruction",
