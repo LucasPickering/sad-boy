@@ -9,7 +9,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Number of dots (clock cycles) in a single frame
 ///
@@ -20,10 +20,24 @@ const CYCLES_PER_FRAME: Cycles = Cycles(70224);
 ///
 /// The clock frequency is 2^22 Hz (~4.194 MHz).
 const CLOCK_FREQUENCY: u32 = 1 << 22;
-/// Elapsed time per clock cycle (dot)
-const CYCLE_DURATION: Duration =
-    Duration::from_secs(1).checked_div(CLOCK_FREQUENCY).unwrap();
-
+/// Elapsed time per frame
+/// Intuitively it would make more sense to calculate this as `(1/f) * C`, but
+/// by doing the multiplication first, we avoid hitting nanosecond precision
+/// limits.
+///
+/// Just to be sure this is right, here's some dimensional analysis:
+///
+/// ```
+/// 1 * [C cy/fr] / [f cy/s]
+/// 1 * [C cy/fr] * [1/f s/cy]
+/// 1 * [C/f s/fr]
+/// C/f (s/fr)
+/// ```
+const FRAME_DURATION: Duration = Duration::from_secs(1)
+    .checked_mul(CYCLES_PER_FRAME.0 as u32)
+    .unwrap()
+    .checked_div(CLOCK_FREQUENCY)
+    .unwrap();
 /// Emulated hardware clock
 ///
 /// The clock drives the CPU, GPU, and whatever other components run off the
@@ -39,13 +53,8 @@ pub struct Clock {
     /// ```
     /// That's a lot of years.
     cycles: Cell<Cycles>,
-    /// Moment when the clock cycle was last incremented
-    last_tick: Cell<Instant>,
-    /// Number of cycles that missed the timing target **in the most recent
-    /// frame**
-    ///
-    /// This is used just for logging.
-    slow_cycles: Cell<u32>,
+    /// Moment when the final tick of the previous frame was completed
+    frame_start: Cell<Instant>,
 }
 
 impl Clock {
@@ -53,8 +62,7 @@ impl Clock {
     pub fn new() -> Self {
         Self {
             cycles: Cell::default(),
-            last_tick: Instant::now().into(),
-            slow_cycles: Cell::default(),
+            frame_start: Instant::now().into(),
         }
     }
 
@@ -65,37 +73,25 @@ impl Clock {
 
     /// Advance the clock one tick
     ///
-    /// This will calculate how much time has elapsed since the last cycle was
-    /// completed. It will sleep the thread the remaining duration of this clock
-    /// cycle, then increment the cycle counter.
+    /// This will increment the cycle counter. Then, it checks if this was the
+    /// last cycle in the frame. If so, it sleeps for the remaining time in the
+    /// frame. Ideally it could sleep once per tick, but the sleep function is
+    /// way too imprecise for that.
     pub fn tick(&self) {
-        // How much of the cycle has already been consumed by real work?
-        let elapsed = Instant::elapsed(&self.last_tick.get());
-        // Sleep for the rest of the cycle
-        if let Some(remaining) = CYCLE_DURATION.checked_sub(elapsed) {
-            thread::sleep(remaining);
-        } else {
-            // It's been longer than the cycle time since the last tick, which
-            // means the future polling took longer than allowed. Unfortunately
-            // we can't make time go backward (yet), so just log it and pray
-            // we speed up.
-            debug!("Slow cycle: {elapsed:?} > {CYCLE_DURATION:?}");
-            self.slow_cycles.update(|v| v + 1);
-        }
-
-        // Increment the clock and wrap at the end of the frame
         self.cycles.update(|cycles| cycles + Cycles(1));
         if self.cycles.get().0.is_multiple_of(CYCLES_PER_FRAME.0) {
-            // Every frame, check the number of slow cycles
-            let slow = self.slow_cycles.replace(0);
-            if slow > 0 {
-                warn!(
-                    "{slow}/{total} cycles in this frame were slow",
-                    total = CYCLES_PER_FRAME.0
-                );
+            let now = self.frame_start.get();
+            let elapsed = now.elapsed();
+            if elapsed < FRAME_DURATION {
+                sleep_until(now + FRAME_DURATION);
+            } else {
+                // Frame took too long, which means the future polling took
+                // longer than allowed. Unfortunately we can't make time go
+                // backward (yet), so just log it and pray we speed up.
+                warn!("Slow frame: {elapsed:?} > {FRAME_DURATION:?}");
             }
+            self.frame_start.set(Instant::now());
         }
-        self.last_tick.set(Instant::now());
     }
 
     /// Wait for the given number of cycles to elapse
@@ -159,4 +155,16 @@ impl Sub for Cycles {
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
     }
+}
+
+/// Sleep the thread until a given instant
+///
+/// Sleep in 1ms increments to minimize the error. If we sleep for the entire
+/// duration at once, the OS may sleep for a few ms too long.
+fn sleep_until(target: Instant) {
+    const SLEEP_INCREMENT: Duration = Duration::from_millis(1);
+    while Instant::now() + SLEEP_INCREMENT < target {
+        thread::sleep(SLEEP_INCREMENT);
+    }
+    // Whatever's left <1ms is ignored
 }
