@@ -93,30 +93,18 @@ bounds!(
 
 /// An abstraction over the addessable range of memory
 ///
-/// Some parts of accessible memory are held as references. This aliases each
+/// All parts of accessible memory are held as references. This aliases each
 /// component based on given memory addresses. This allows each component of
 /// memory/registers/etc. to be owned by its relevant module and handed out to
-/// the CPU only as needed.
+/// the CPU only as needed. This doesn't own any emulator state itself because
+/// this struct is ephemeral. It's thrown away at the end of emulation, which
+/// means its state can't be asserted on in tests.
 ///
 /// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
-    /// TODO
-    registers: &'a mut Registers,
-    /// General-purpose writable memory
-    ///
-    /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: Memory<u8>,
-    /// Additional general-purpose writable memory
-    ///
-    /// This is most commonly used when accessed by the `LD HL, SP+imm8`
-    /// instruction.
-    high_ram: Memory<u8>,
-    /// Additional RAM provided by the cartridge
-    ///
-    /// This is similar to the other two RAM blocks, except some cartridges can
-    /// provide multiple banks and switch between them.
-    cartridge_ram: Memory<u8>,
+    /// RAM and registers
+    memory: &'a mut Memory,
     /// Read-only memory from the cartridge
     rom: &'a Rom,
     /// Graphics processing
@@ -130,16 +118,10 @@ pub struct MemoryBus<'a> {
 }
 
 impl<'a> MemoryBus<'a> {
-    pub fn new(
-        rom: &'a Rom,
-        registers: &'a mut Registers,
-        gpu: &'a Gpu,
-    ) -> Self {
+    /// Construct a memory bus from references to each addressable component
+    pub fn new(memory: &'a mut Memory, rom: &'a Rom, gpu: &'a Gpu) -> Self {
         Self {
-            registers,
-            ram: Memory::new(RAM),
-            high_ram: Memory::new(HIGH_RAM),
-            cartridge_ram: Memory::new(CARTRIDGE_RAM),
+            memory,
             rom,
             gpu,
             instruction_cache: HashMap::new(),
@@ -218,9 +200,9 @@ impl<'a> MemoryBus<'a> {
                 self.gpu.tile_maps().byte(address)
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.cartridge_ram.byte(address)
+                self.memory.cartridge_ram.byte(address)
             }
-            RAM_START..=RAM_LAST => self.ram.byte(address),
+            RAM_START..=RAM_LAST => self.memory.ram.byte(address),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // TODO dedupe with set8
                 // Make sure mirrored references can't go out of bounds
@@ -240,13 +222,15 @@ impl<'a> MemoryBus<'a> {
             LY => gpu_reg!(ly),
             LYC => gpu_reg!(lyc),
             DMA => gpu_reg!(dma),
-            BANK => self.registers.bank,
+            BANK => self.memory.bank,
             0xFF00..=0xFF7F => {
                 error!("TODO: unmapped I/O register {address}");
                 0
             }
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => self.high_ram.byte(address),
+            HIGH_RAM_START..=HIGH_RAM_LAST => {
+                self.memory.high_ram.byte(address)
+            }
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
                 0
@@ -279,9 +263,9 @@ impl<'a> MemoryBus<'a> {
                 self.gpu.tile_maps().set_byte(address, value);
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.cartridge_ram.set_byte(address, value);
+                self.memory.cartridge_ram.set_byte(address, value);
             }
-            RAM_START..=RAM_LAST => self.ram.set_byte(address, value),
+            RAM_START..=RAM_LAST => self.memory.ram.set_byte(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
@@ -304,7 +288,7 @@ impl<'a> MemoryBus<'a> {
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
-                self.high_ram.set_byte(address, value);
+                self.memory.high_ram.set_byte(address, value);
             }
 
             0xFFFF => error!("TODO: Interrupt Enabled Register write"),
@@ -337,7 +321,7 @@ impl<'a> MemoryBus<'a> {
             info!("Exiting bootloader");
             self.instruction_cache = HashMap::new();
         }
-        self.registers.bank = value;
+        self.memory.bank = value;
     }
 
     /// Is the bootloader currently mapped?
@@ -345,7 +329,7 @@ impl<'a> MemoryBus<'a> {
     /// This is `true` only during initial boot. The bootloader unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
     fn is_bootloading(&self) -> bool {
-        self.registers.bank == 0
+        self.memory.bank == 0
     }
 }
 
@@ -437,7 +421,7 @@ impl Display for AddressRange {
 /// Use this for data that is accessible via the memory bus. If memory doesn't
 /// have any semantic meaning (e.g. general-purpose RAM), just use `Memory<u8>`.
 #[derive(Debug)]
-pub struct Memory<T> {
+pub struct MemoryBlock<T> {
     /// Range of memory addresses covered by this block
     range: AddressRange,
     /// Fixed-length binary data
@@ -450,7 +434,7 @@ pub struct Memory<T> {
     memory: Box<[T]>,
 }
 
-impl<T> Memory<T> {
+impl<T> MemoryBlock<T> {
     /// Initialize a new fixed-length block of memory with all zeroes
     pub fn new(range: AddressRange) -> Self
     where
@@ -499,7 +483,7 @@ impl<T> Memory<T> {
     }
 }
 
-impl<T> MemoryRead for &Memory<T> {
+impl<T> MemoryRead for &MemoryBlock<T> {
     fn byte(self, address: Address) -> u8 {
         let offset = self.byte_offset(address);
         let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
@@ -511,7 +495,7 @@ impl<T> MemoryRead for &Memory<T> {
     }
 }
 
-impl<T> MemoryWrite for &mut Memory<T> {
+impl<T> MemoryWrite for &mut MemoryBlock<T> {
     fn set_byte(self, address: Address, value: u8) {
         let offset = self.byte_offset(address);
         let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
@@ -541,24 +525,59 @@ pub trait MemoryWrite {
     fn set_byte(self, address: Address, value: u8);
 }
 
-impl<T> MemoryRead for &RefCell<Memory<T>> {
+impl<T> MemoryRead for &RefCell<MemoryBlock<T>> {
     fn byte(self, address: Address) -> u8 {
         self.borrow().byte(address)
     }
 }
 
-impl<T> MemoryWrite for &RefCell<Memory<T>> {
+impl<T> MemoryWrite for &RefCell<MemoryBlock<T>> {
     fn set_byte(self, address: Address, value: u8) {
         self.borrow_mut().set_byte(address, value);
     }
 }
 
-/// TODO move this
-#[derive(Debug, Default)]
-pub struct Registers {
+/// Container for RAM and memory-related registers
+#[derive(Debug)]
+pub struct Memory {
+    // ===== RAM =====
+    /// General-purpose writable memory
+    ///
+    /// This is boxed because 8KiB is too big to reasonably put on the stack.
+    ram: MemoryBlock<u8>,
+    /// Additional general-purpose writable memory
+    ///
+    /// This is most commonly used when accessed by the `LD HL, SP+imm8`
+    /// instruction.
+    high_ram: MemoryBlock<u8>,
+    /// Additional RAM provided by the cartridge
+    ///
+    /// This is similar to the other two RAM blocks, except some cartridges can
+    /// provide multiple banks and switch between them.
+    cartridge_ram: MemoryBlock<u8>,
+    // ===== Registers =====
     /// `BANK`: Boot ROM mapping control
     ///
     /// If this is 0, the boot ROM is mapped over bytes `0x0-0x100`. If it's
     /// any other value, that range is mapped to the ROM instead.
-    pub bank: u8,
+    bank: u8,
+}
+
+#[cfg(test)]
+impl Memory {
+    /// Get the value of the `BANK` register
+    pub fn bank(&self) -> u8 {
+        self.bank
+    }
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Self {
+            bank: 0,
+            ram: MemoryBlock::new(RAM),
+            high_ram: MemoryBlock::new(HIGH_RAM),
+            cartridge_ram: MemoryBlock::new(CARTRIDGE_RAM),
+        }
+    }
 }

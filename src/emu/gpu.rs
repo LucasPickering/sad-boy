@@ -7,7 +7,7 @@ use crate::{
     emu::{
         SCREEN_WIDTH,
         clock::{Clock, Cycles},
-        memory::{self, Address, Memory, MemoryRead, MemoryWrite},
+        memory::{self, Address, MemoryBlock, MemoryRead, MemoryWrite},
     },
     screen::{Color, Screen},
     util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
@@ -35,7 +35,7 @@ pub struct Gpu {
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    oam: RefCell<Memory<ObjectAttributes>>,
+    oam: RefCell<MemoryBlock<ObjectAttributes>>,
     /// Pixel data for tiles
     ///
     /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
@@ -43,14 +43,14 @@ pub struct Gpu {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: RefCell<Memory<Tile>>,
+    tile_data: RefCell<MemoryBlock<Tile>>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: RefCell<Memory<TileIndex>>,
+    tile_maps: RefCell<MemoryBlock<TileIndex>>,
 }
 
 impl Gpu {
@@ -308,9 +308,9 @@ impl Default for Gpu {
     fn default() -> Self {
         Self {
             registers: RefCell::default(),
-            oam: Memory::new(memory::OAM).into(),
-            tile_data: Memory::new(memory::TILE_DATA).into(),
-            tile_maps: Memory::new(memory::TILE_MAPS).into(),
+            oam: MemoryBlock::new(memory::OAM).into(),
+            tile_data: MemoryBlock::new(memory::TILE_DATA).into(),
+            tile_maps: MemoryBlock::new(memory::TILE_MAPS).into(),
         }
     }
 }
@@ -779,7 +779,7 @@ enum ModalMemory<'a, T> {
     /// Reading always returns `0`, writing does nothing
     Null,
     /// Memory is readable and writable
-    Rw(&'a RefCell<Memory<T>>),
+    Rw(&'a RefCell<MemoryBlock<T>>),
 }
 
 impl<T> MemoryRead for ModalMemory<'_, T> {

@@ -374,7 +374,7 @@ mod tests {
         cpu::Cpu,
         gpu::Gpu,
         instruction::Instruction,
-        memory::{Address, MemoryBus},
+        memory::{Address, Memory, MemoryBus},
         rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
@@ -425,9 +425,10 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::default();
+        let mut memory = Memory::default();
         let rom = Rom::empty();
         let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&rom, todo!(), &gpu);
+        let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");
@@ -461,9 +462,10 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::default();
+        let mut memory = Memory::default();
         let rom = Rom::empty();
         let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&rom, todo!(), &gpu);
+        let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
         cpu.registers.sp = Address(lhs);
         cpu.execute(&mut memory, Instruction::Add(Add::Sp(rhs)));
         assert_eq!(cpu.registers.sp.0, expected_value, "sum");

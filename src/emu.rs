@@ -12,7 +12,12 @@ mod rom;
 pub use clock::Clock;
 
 use crate::{
-    emu::{cpu::Cpu, gpu::Gpu, memory::MemoryBus, rom::Rom},
+    emu::{
+        cpu::Cpu,
+        gpu::Gpu,
+        memory::{Memory, MemoryBus},
+        rom::Rom,
+    },
     screen::Screen,
 };
 use color_eyre::eyre;
@@ -36,7 +41,7 @@ pub struct GameBoy {
     gpu: Gpu,
     /// Read-only memory from the cartridge
     rom: Rom,
-    registers: memory::Registers,
+    memory: Memory,
 }
 
 impl GameBoy {
@@ -58,7 +63,7 @@ impl GameBoy {
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
-            registers: memory::Registers::default(),
+            memory: Memory::default(),
         }
     }
 
@@ -71,8 +76,7 @@ impl GameBoy {
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
         // the components are synced together by the emulated clock.
-        let memory_bus =
-            MemoryBus::new(&self.rom, &mut self.registers, &self.gpu);
+        let memory_bus = MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
         let mut cpu_fut = pin!(
             self.cpu
                 .run(&self.clock, memory_bus)
@@ -136,8 +140,7 @@ mod tests {
         );
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
-        assert_eq!(emu.registers.bank, 1);
-        // TODO figure out correct cycle length
+        assert_eq!(emu.memory.bank(), 1);
         assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
         // TODO look for logo
         screen.assert_pixels(&vec![
