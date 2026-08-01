@@ -72,6 +72,16 @@ impl Cpu {
         }
         .execute(instruction)
     }
+
+    /// Get a reference to the program counter register
+    ///
+    /// An unethical programmer might use this reference to access the PC
+    /// register via unsafe pointer dereference. And maybe that might be useful
+    /// during a test?
+    #[cfg(test)]
+    pub fn pc(&self) -> &Address {
+        &self.registers.pc
+    }
 }
 
 /// Helper for executing CPU instructions

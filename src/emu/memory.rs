@@ -31,7 +31,7 @@ const BOOTLOADER_CODE: &[u8] = include_bytes!("../../bootloader/dmg_boot.bin");
 ///
 /// This range is mapped *on top of* the ROM code while the bootloader is
 /// running.
-const BOOTLOADER: AddressRange =
+pub const BOOTLOADER: AddressRange =
     AddressRange::new("Bootloader", 0x0000, 0x0100);
 /// Range of CPU instructions and data from a game cartridge
 pub const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
@@ -72,8 +72,8 @@ macro_rules! bounds {
     ($($range:expr),* $(,)?) => {
         paste::paste! {
             $(
-                const [<$range _START>]: u16 = $range.start();
-                const [<$range _LAST>]: u16 = $range.last();
+                const [<$range _START>]: u16 = $range.start().0;
+                const [<$range _LAST>]: u16 = $range.last().0;
             )*
         }
     };
@@ -405,13 +405,13 @@ impl AddressRange {
     }
 
     /// First address included in the range
-    pub const fn start(&self) -> u16 {
-        self.range.start.0
+    pub const fn start(&self) -> Address {
+        self.range.start
     }
 
     /// Last address included in the range
-    pub const fn last(&self) -> u16 {
-        self.range.last.0
+    pub const fn last(&self) -> Address {
+        self.range.last
     }
 
     pub fn contains(&self, address: Address) -> bool {
@@ -486,7 +486,7 @@ impl<T> Memory<T> {
             "Address {address} out of bounds {range}",
             range = self.range
         );
-        let offset = (address.0 - self.range.start()) as usize;
+        let offset = (address.0 - self.range.start().0) as usize;
         // Double extra sanity check
         let len_bytes = mem::size_of_val(&*self.memory);
         debug_assert!(

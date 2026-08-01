@@ -3,7 +3,7 @@ mod screen;
 mod util;
 
 use crate::{
-    emu::{Clock, GameBoy},
+    emu::GameBoy,
     screen::{HeadlessScreen, Screen, TerminalScreen},
     util::{TracingOutput, initialize_tracing},
 };
@@ -42,7 +42,7 @@ fn main() -> eyre::Result<()> {
             emu::SCREEN_HEIGHT.into(),
         )?)
     };
-    let stop_on = move |_: &Clock| quit.load(Ordering::Relaxed);
+    let stop_on = move || quit.load(Ordering::Relaxed);
     let mut game_boy = GameBoy::boot(&args.rom)?;
     game_boy.run(&mut *screen, stop_on);
     Ok(())

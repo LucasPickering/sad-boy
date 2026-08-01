@@ -31,6 +31,7 @@ pub const SCREEN_HEIGHT: u8 = 144;
 /// Game Boy emulator
 #[derive(Debug)]
 pub struct GameBoy {
+    clock: Clock,
     cpu: Cpu,
     gpu: Gpu,
     /// Read-only memory from the cartridge
@@ -42,6 +43,7 @@ impl GameBoy {
     pub fn boot(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
         Ok(Self {
+            clock: Clock::new(),
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
@@ -53,6 +55,7 @@ impl GameBoy {
     pub fn test(rom: Vec<u8>) -> Self {
         let rom = Rom::test(rom);
         Self {
+            clock: Clock::new(),
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
@@ -63,29 +66,27 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(
-        &mut self,
-        screen: &mut dyn Screen,
-        stop_on: impl Fn(&Clock) -> bool,
-    ) {
+    pub fn run(&mut self, screen: &mut dyn Screen, stop_on: impl Fn() -> bool) {
         // The main loop uses futures to emulate components (CPU, GPU, etc.)
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
         // the components are synced together by the emulated clock.
-        let clock = Clock::new();
         let memory_bus = MemoryBus::new(&self.rom, &self.gpu);
         let mut cpu_fut = pin!(
             self.cpu
-                .run(&clock, memory_bus)
+                .run(&self.clock, memory_bus)
                 .instrument(info_span!("CPU"))
         );
-        let mut gpu_fut =
-            pin!(self.gpu.run(&clock, screen).instrument(info_span!("GPU")));
+        let mut gpu_fut = pin!(
+            self.gpu
+                .run(&self.clock, screen)
+                .instrument(info_span!("GPU"))
+        );
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
 
         // Run until the caller says to stop
-        while !stop_on(&clock) {
+        while !stop_on() {
             let polls = [
                 cpu_fut.as_mut().poll(&mut context),
                 gpu_fut.as_mut().poll(&mut context),
@@ -96,7 +97,7 @@ impl GameBoy {
                 error!("Future exited early");
                 break;
             }
-            clock.tick();
+            self.clock.tick();
         }
     }
 }
@@ -105,26 +106,37 @@ impl GameBoy {
 mod tests {
     use super::*;
     use crate::{
-        emu::clock::Cycles,
+        emu::{clock::Cycles, memory::Address},
         screen::{Color, HeadlessScreen},
         util::{TracingOutput, initialize_tracing},
     };
     use pretty_assertions::assert_eq;
+    use std::ptr;
 
     /// Run the emulator until the bootloader exits, then verify it matches the
     /// known state
     #[test]
     fn bootloader() {
-        const BOOTLOADER_CYCLES: Cycles = Cycles(23_580_484);
         initialize_tracing(TracingOutput::Stderr);
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
             HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
+
+        // Run until the program counter hits the end of the bootloader. We
+        // can't get safe access to the CPU registers because the CPU needs
+        // mutable access to itself constantly. This raw pointer access is
+        // pretty harmless.
+        let pc_ptr = ptr::from_ref::<Address>(emu.cpu.pc());
+        emu.run(
+            &mut screen,
+            // SAFETY: The emulator and CPU are never moved in memory
+            || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
+        );
+
         // TODO figure out correct cycle length
-        emu.run(&mut screen, |clock| clock.cycles() == BOOTLOADER_CYCLES);
+        assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
-        // TODO check memory/registers?
         // TODO look for logo
         screen.assert_pixels(&vec![
             Color::new(255, 255, 255);
