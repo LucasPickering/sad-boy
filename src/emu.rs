@@ -86,12 +86,12 @@ impl GameBoy {
 
         // Run until the caller says to stop
         while !stop_on(&clock) {
-            // These futures are supposed to be infinite loops, so if they exit
-            // that's... odd
             let polls = [
                 cpu_fut.as_mut().poll(&mut context),
                 gpu_fut.as_mut().poll(&mut context),
             ];
+            // These futures are supposed to be infinite loops, so if they exit
+            // that's... odd
             if polls.iter().any(Poll::is_ready) {
                 error!("Future exited early");
                 break;
@@ -107,7 +107,7 @@ mod tests {
     use crate::{
         emu::clock::Cycles,
         screen::{Color, HeadlessScreen},
-        util::initialize_tracing,
+        util::{TracingOutput, initialize_tracing},
     };
     use pretty_assertions::assert_eq;
 
@@ -116,13 +116,13 @@ mod tests {
     #[test]
     fn bootloader() {
         const BOOTLOADER_CYCLES: Cycles = Cycles(23_580_484);
-        initialize_tracing();
+        initialize_tracing(TracingOutput::Stderr);
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
             HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         // TODO figure out correct cycle length
-        emu.run(&mut screen, |clock| clock.cycles() == Cycles(100));
+        emu.run(&mut screen, |clock| clock.cycles() == BOOTLOADER_CYCLES);
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         // TODO check memory/registers?
         // TODO look for logo

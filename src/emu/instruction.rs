@@ -361,9 +361,9 @@ impl Display for LoadHigh {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AC => write!(f, "a,[$FF00+c]"),
-            Self::AConst(value) => write!(f, "a,[$FF00+${value:2x}]"),
+            Self::AConst(value) => write!(f, "a,[$FF00+${value:0>2X}]"),
             Self::CA => write!(f, "[$FF00+c],a"),
-            Self::ConstA(value) => write!(f, "[$FF00+${value:2x}],a"),
+            Self::ConstA(value) => write!(f, "[$FF00+${value:0>2X}],a"),
         }
     }
 }

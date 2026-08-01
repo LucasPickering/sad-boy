@@ -188,7 +188,6 @@ impl Color {
 }
 
 /// An in-memory screen for headless operation
-#[cfg(test)]
 #[derive(Debug)]
 pub struct HeadlessScreen {
     /// The next frame to write to the screen
@@ -199,7 +198,6 @@ pub struct HeadlessScreen {
     height: u16,
 }
 
-#[cfg(test)]
 impl HeadlessScreen {
     pub fn new(width: u16, height: u16) -> Self {
         let len = (width * height) as usize;
@@ -211,6 +209,7 @@ impl HeadlessScreen {
     }
 
     /// Assert that the screen pixels match the given pixel array
+    #[cfg(test)]
     #[track_caller]
     pub fn assert_pixels(&self, expected: &[Color]) {
         assert_eq!(
@@ -225,7 +224,6 @@ impl HeadlessScreen {
     }
 }
 
-#[cfg(test)]
 impl Screen for HeadlessScreen {
     fn set(&mut self, x: u16, y: u16, color: Color) {
         assert!(

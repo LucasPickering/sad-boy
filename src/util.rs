@@ -390,33 +390,41 @@ impl<T> Shared<T> for RefCell<T> {
 }
 
 /// Set up tracing to stderr or a file
-pub fn initialize_tracing() {
-    // For tests, output to stderr but hide by default
+pub fn initialize_tracing(output: TracingOutput) {
     let targets = match env::var("RUST_LOG") {
         Ok(env_var) => Targets::from_str(&env_var).unwrap(),
+        // For tests, hide by default
         Err(_) => Targets::new().with_default(if cfg!(test) {
             LevelFilter::OFF
         } else {
             LevelFilter::INFO
         }),
     };
-    let subscriber = if cfg!(test) {
-        tracing_subscriber::fmt::layer()
+    let subscriber = match output {
+        TracingOutput::File => {
+            let log_file = File::create("sad-boy.log").unwrap();
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_file)
+                .with_target(true)
+                .with_span_events(FmtSpan::NONE)
+                .with_ansi(false)
+                .boxed()
+        }
+        TracingOutput::Stderr => tracing_subscriber::fmt::layer()
             .with_writer(io::stderr)
             .with_target(true)
             .with_span_events(FmtSpan::NONE)
-            .boxed()
-    } else {
-        let log_file = File::create("sad-boy.log").unwrap();
-        tracing_subscriber::fmt::layer()
-            .with_writer(log_file)
-            .with_target(true)
-            .with_span_events(FmtSpan::NONE)
-            .with_ansi(false)
-            .boxed()
+            .boxed(),
     };
     tracing_subscriber::registry()
         .with(targets)
         .with(subscriber)
         .init();
+}
+
+pub enum TracingOutput {
+    /// Write tracing to a log file
+    File,
+    /// Print tracing to stderr
+    Stderr,
 }
