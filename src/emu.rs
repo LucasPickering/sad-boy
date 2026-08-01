@@ -36,29 +36,29 @@ pub struct GameBoy {
     gpu: Gpu,
     /// Read-only memory from the cartridge
     rom: Rom,
+    registers: memory::Registers,
 }
 
 impl GameBoy {
     /// Boot the Game Boy and load the ROM from a file
     pub fn boot(path: &Path) -> eyre::Result<Self> {
         let rom = Rom::load(path)?;
-        Ok(Self {
-            clock: Clock::new(),
-            cpu: Cpu::default(),
-            gpu: Gpu::default(),
-            rom,
-        })
+        Ok(Self::new(rom))
     }
 
     /// Initialize a Game Boy with a static ROM for testing
     #[cfg(test)]
     pub fn test(rom: Vec<u8>) -> Self {
-        let rom = Rom::test(rom);
+        Self::new(Rom::test(rom))
+    }
+
+    fn new(rom: Rom) -> Self {
         Self {
             clock: Clock::new(),
             cpu: Cpu::default(),
             gpu: Gpu::default(),
             rom,
+            registers: memory::Registers::default(),
         }
     }
 
@@ -71,7 +71,8 @@ impl GameBoy {
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
         // the components are synced together by the emulated clock.
-        let memory_bus = MemoryBus::new(&self.rom, &self.gpu);
+        let memory_bus =
+            MemoryBus::new(&self.rom, &mut self.registers, &self.gpu);
         let mut cpu_fut = pin!(
             self.cpu
                 .run(&self.clock, memory_bus)
@@ -117,7 +118,7 @@ mod tests {
     /// known state
     #[test]
     fn bootloader() {
-        initialize_tracing(TracingOutput::Stderr);
+        initialize_tracing(TracingOutput::File);
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
@@ -134,9 +135,10 @@ mod tests {
             || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
         );
 
+        assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
+        assert_eq!(emu.registers.bank, 1);
         // TODO figure out correct cycle length
         assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
-        assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         // TODO look for logo
         screen.assert_pixels(&vec![
             Color::new(255, 255, 255);

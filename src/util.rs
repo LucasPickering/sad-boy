@@ -393,12 +393,7 @@ impl<T> Shared<T> for RefCell<T> {
 pub fn initialize_tracing(output: TracingOutput) {
     let targets = match env::var("RUST_LOG") {
         Ok(env_var) => Targets::from_str(&env_var).unwrap(),
-        // For tests, hide by default
-        Err(_) => Targets::new().with_default(if cfg!(test) {
-            LevelFilter::OFF
-        } else {
-            LevelFilter::INFO
-        }),
+        Err(_) => Targets::new().with_default(LevelFilter::INFO),
     };
     let subscriber = match output {
         TracingOutput::File => {
@@ -414,6 +409,7 @@ pub fn initialize_tracing(output: TracingOutput) {
             .with_writer(io::stderr)
             .with_target(true)
             .with_span_events(FmtSpan::NONE)
+            .without_time()
             .boxed(),
     };
     tracing_subscriber::registry()

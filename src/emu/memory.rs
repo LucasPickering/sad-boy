@@ -102,7 +102,7 @@ bounds!(
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
     /// TODO
-    registers: Registers,
+    registers: &'a mut Registers,
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
@@ -126,15 +126,17 @@ pub struct MemoryBus<'a> {
     /// internal mutability.
     gpu: &'a Gpu,
     /// An extremely naive cache for instructions parsed from the ROM
-    ///
-    /// TODO more
     instruction_cache: HashMap<Address, (Instruction, usize)>,
 }
 
 impl<'a> MemoryBus<'a> {
-    pub fn new(rom: &'a Rom, gpu: &'a Gpu) -> Self {
+    pub fn new(
+        rom: &'a Rom,
+        registers: &'a mut Registers,
+        gpu: &'a Gpu,
+    ) -> Self {
         Self {
-            registers: Registers::default(),
+            registers,
             ram: Memory::new(RAM),
             high_ram: Memory::new(HIGH_RAM),
             cartridge_ram: Memory::new(CARTRIDGE_RAM),
@@ -551,12 +553,12 @@ impl<T> MemoryWrite for &RefCell<Memory<T>> {
     }
 }
 
-/// Generic registers
+/// TODO move this
 #[derive(Debug, Default)]
-struct Registers {
+pub struct Registers {
     /// `BANK`: Boot ROM mapping control
     ///
     /// If this is 0, the boot ROM is mapped over bytes `0x0-0x100`. If it's
     /// any other value, that range is mapped to the ROM instead.
-    bank: u8,
+    pub bank: u8,
 }

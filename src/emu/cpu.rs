@@ -769,14 +769,20 @@ impl_bit_pack! {
 #[cfg(test)]
 pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
     registers: Registers {
-        f: PackedBits::new(0b1000_0000),
         a: 1,
-        c: 0,
+        f: PackedBits::new(0b0000_0000),
         b: 0,
-        e: 0,
-        d: 0,
-        l: 0,
-        h: 0,
+        c: 19,
+        // The final bootloader routine is to compare the Nintendo logo in the
+        // bootloader to the one in the cartridge. DE points to the logo in the
+        // the bootloader, HL in the cart.
+        //
+        // Starts at $00A8, +$30 for the logo comparison
+        d: 0x00,
+        e: 0xD8,
+        // Starts at $0104, +$30 for the logo comparison, +$19 for the checksum
+        h: 0x01,
+        l: 0x4D,
         sp: Address(0xFFFE), // Stack is empty
         pc: Address(0x0100), // First instruction of the ROM
     },

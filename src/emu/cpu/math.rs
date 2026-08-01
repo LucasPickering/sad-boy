@@ -427,7 +427,7 @@ mod tests {
         let mut cpu = Cpu::default();
         let rom = Rom::empty();
         let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&rom, &gpu);
+        let mut memory = MemoryBus::new(&rom, todo!(), &gpu);
         cpu.registers.a = lhs;
         cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");
@@ -463,7 +463,7 @@ mod tests {
         let mut cpu = Cpu::default();
         let rom = Rom::empty();
         let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&rom, &gpu);
+        let mut memory = MemoryBus::new(&rom, todo!(), &gpu);
         cpu.registers.sp = Address(lhs);
         cpu.execute(&mut memory, Instruction::Add(Add::Sp(rhs)));
         assert_eq!(cpu.registers.sp.0, expected_value, "sum");
