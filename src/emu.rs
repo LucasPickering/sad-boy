@@ -122,7 +122,7 @@ mod tests {
     /// known state
     #[test]
     fn bootloader() {
-        initialize_tracing(TracingOutput::File);
+        initialize_tracing(TracingOutput::File); // TODO remove
         let rom_data = vec![0; memory::GAME_ROM.len()];
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
@@ -141,12 +141,12 @@ mod tests {
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);
-        assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
         // TODO look for logo
         screen.assert_pixels(&vec![
-            Color::new(255, 255, 255);
+            Color::new(255, 0, 0);
             SCREEN_WIDTH as usize
                 * SCREEN_HEIGHT as usize
         ]);
+        assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
     }
 }
