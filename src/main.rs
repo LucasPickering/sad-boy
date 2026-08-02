@@ -7,8 +7,8 @@ use crate::{
     screen::{HeadlessScreen, Screen, TerminalScreen},
     util::{TracingOutput, initialize_tracing},
 };
+use clap::Parser;
 use color_eyre::eyre;
-use lexopt::Arg;
 use signal_hook::consts::signal;
 use std::{
     path::PathBuf,
@@ -19,8 +19,8 @@ use std::{
 };
 
 fn main() -> eyre::Result<()> {
+    let args = Args::parse();
     color_eyre::install()?;
-    let args = Args::parse()?;
     initialize_tracing(if args.headless {
         TracingOutput::Stderr
     } else {
@@ -48,43 +48,16 @@ fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-/// CLI args
+/// Game Boy emulator
+#[derive(Debug, Parser)]
 struct Args {
     /// Path to the ROM file to load
     rom: PathBuf,
     /// Run the emulator without a screen
     ///
     /// This is useful for testing the CPU. Tracing will be printed to stderr.
+    #[clap(long)]
     headless: bool,
-}
-
-impl Args {
-    fn parse() -> Result<Self, lexopt::Error> {
-        // lexopt is a little clunk but it's much lighter than clap
-        let mut rom: Option<PathBuf> = None;
-        let mut headless = false;
-        let mut parser = lexopt::Parser::from_env();
-        while let Some(arg) = parser.next()? {
-            match arg {
-                Arg::Value(value) if rom.is_none() => {
-                    rom = Some(PathBuf::from(value));
-                }
-                Arg::Long("help") | Arg::Short('h') => {
-                    println!("Usage: sad-boy ROM");
-                    std::process::exit(0);
-                }
-                Arg::Long("headless") => {
-                    headless = true;
-                }
-                _ => return Err(arg.unexpected()),
-            }
-        }
-
-        Ok(Self {
-            rom: rom.ok_or("missing argument ROM")?,
-            headless,
-        })
-    }
 }
 
 /// Register exit signal listeners
