@@ -9,10 +9,11 @@ use crate::{
         clock::{Clock, Cycles},
         memory::{self, Address, MemoryBlock, MemoryRead, MemoryWrite},
     },
-    screen::{Color, Screen},
+    screen::{Color, FrameBuffer},
     util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
+use tracing::{Instrument, info_span};
 
 const SCANLINES_PER_FRAME: u8 = 154;
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
@@ -54,19 +55,14 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    /// Run the GPU loop
+    /// Render a single frame to the frame buffer
     ///
-    /// Repeatedly render frames and push them to the screen.
-    pub async fn run(&self, clock: &Clock, screen: &mut dyn Screen) {
-        screen.draw(); // Draw the initial frame
-        // Each iteration of this loop is one frame
-        //
-        // For each frame, this will load the entire frame into the screen's
-        // buffer, then draw then entire frame to the screen at the end.
-        loop {
+    /// This will take exactly 70,224 cycles.
+    pub async fn frame(&self, clock: &Clock, frame: &mut FrameBuffer) {
+        async move {
             for scanline in 0..SCANLINES_PER_FRAME {
                 self.registers.with_mut(|r| r.ly = Scanline(scanline));
-                self.draw_scanline(clock, screen).await;
+                self.draw_scanline(clock, frame).await;
                 // Set bit 2 of STAT to match LY==LYC
                 self.registers.with_mut(|r| {
                     r.stat.update(|stat| LcdStatus {
@@ -75,8 +71,9 @@ impl Gpu {
                     });
                 });
             }
-            screen.draw();
         }
+        .instrument(info_span!("GPU frame"))
+        .await;
     }
 
     /// Access the GPU I/O registers
@@ -135,7 +132,7 @@ impl Gpu {
     /// calling this.
     ///
     /// https://gbdev.io/pandocs/Rendering.html
-    async fn draw_scanline(&self, clock: &Clock, screen: &mut dyn Screen) {
+    async fn draw_scanline(&self, clock: &Clock, frame: &mut FrameBuffer) {
         /// Dots in a single scanline
         const SCANLINE_CYCLES: Cycles = Cycles(456);
         /// Number of dots in [PpuMode::OamScan] for a single scanline
@@ -182,7 +179,7 @@ impl Gpu {
             // TODO simulate pixel FIFO
             // https://gbdev.io/pandocs/pixel_fifo.html
             let color_index = self.get_pixel(&objects, x, y);
-            screen.set(x.into(), y.into(), self.get_color(color_index));
+            frame.set(x.into(), y.into(), self.get_color(color_index));
             // TODO include penalty waits
             clock.wait(Cycles(1)).await;
         }

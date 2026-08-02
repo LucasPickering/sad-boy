@@ -12,27 +12,26 @@ mod rom;
 pub use clock::Clock;
 
 use crate::{
+    backend::Backend,
     emu::{
         cpu::Cpu,
         gpu::Gpu,
         memory::{Memory, MemoryBus},
         rom::Rom,
     },
-    input::Input,
-    screen::Screen,
+    screen::FrameBuffer,
 };
 use color_eyre::eyre;
 use std::{
     path::Path,
     pin::pin,
-    task::{Context, Poll, Waker},
+    task::{Context, Waker},
 };
-use tracing::{Instrument, error, info_span};
 
 /// Width of the screen in pixels
-pub const SCREEN_WIDTH: u8 = 160;
+const SCREEN_WIDTH: u8 = 160;
 /// Height of the screen in pixels
-pub const SCREEN_HEIGHT: u8 = 144;
+const SCREEN_HEIGHT: u8 = 144;
 
 /// Game Boy emulator
 #[derive(Debug)]
@@ -72,43 +71,51 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(
-        &mut self,
-        input: &mut dyn Input,
-        screen: &mut dyn Screen,
-        debug: bool,
-    ) {
+    pub fn run(&mut self, backend: &mut dyn Backend) {
+        let mut frame =
+            FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
+        backend.draw(&frame); // Initialize the screen
+
         // The main loop uses futures to emulate components (CPU, GPU, etc.)
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
         // the components are synced together by the emulated clock.
         let memory_bus = MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
-        let mut cpu_fut = pin!(
-            self.cpu
-                .run(&self.clock, memory_bus)
-                .instrument(info_span!("CPU"))
-        );
-        let mut gpu_fut = pin!(
-            self.gpu
-                .run(&self.clock, screen)
-                .instrument(info_span!("GPU"))
-        );
+        let mut cpu_fut = pin!(self.cpu.run(&self.clock, memory_bus));
+
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
+        macro_rules! poll {
+            ($fut:expr) => {
+                $fut.as_mut().poll(&mut context)
+            };
+        }
 
-        // Run until the caller says to stop
-        while !input.should_quit() {
-            let polls = [
-                cpu_fut.as_mut().poll(&mut context),
-                gpu_fut.as_mut().poll(&mut context),
-            ];
-            // These futures are supposed to be infinite loops, so if they exit
-            // that's... odd
-            if polls.iter().any(Poll::is_ready) {
-                error!("Future exited early");
-                break;
+        // Run until the caller says to stop. Each iteration of this outer loop
+        // is one frame
+        while !backend.should_quit() {
+            // Run ticks until the end of the frame. This will tick as quickly
+            // as possible, limited just by processing speed.
+            //
+            // Each frame uses a different future in the GPU so we can read back
+            // from the frame buffer after writing to it.
+            {
+                let mut gpu_fut = pin!(self.gpu.frame(&self.clock, &mut frame));
+                while poll!(gpu_fut).is_pending() {
+                    // Run the CPU on each tick too
+                    let cpu_poll = poll!(cpu_fut);
+                    // The CPU future is supposed to run indefinitely
+                    assert!(cpu_poll.is_pending(), "CPU future exited early");
+                    // Advance the clock one tick
+                    self.clock.tick();
+                }
             }
-            self.clock.tick();
+
+            // Draw the frame to the screen, then sleep until the end of the
+            // frame so we stay synced up with the emulated clock speed
+            backend.draw(&frame);
+            // TODO reset the frame buffer?
+            self.clock.sleep();
         }
     }
 }
@@ -117,9 +124,9 @@ impl GameBoy {
 mod tests {
     use super::*;
     use crate::{
+        backend::HeadlessBackend,
         emu::{clock::Cycles, memory::Address},
-        input::HeadlessInput,
-        screen::{Color, HeadlessScreen},
+        screen::Color,
         util::{TracingOutput, initialize_tracing},
     };
     use pretty_assertions::assert_eq;
@@ -154,19 +161,17 @@ mod tests {
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
         let pc_ptr = ptr::from_ref::<Address>(emu.cpu.pc());
-        let mut input = HeadlessInput::new(
+        let mut backend = HeadlessBackend::new(
             // SAFETY: The emulator and CPU are never moved in memory
             move || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
         );
-        let mut screen =
-            HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
 
-        emu.run(&mut input, &mut screen, false);
+        emu.run(&mut backend);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);
         // TODO look for logo
-        screen.assert_pixels(&vec![
+        backend.assert_pixels(&vec![
             Color::new(255, 255, 255);
             SCREEN_WIDTH as usize
                 * SCREEN_HEIGHT as usize

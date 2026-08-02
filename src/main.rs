@@ -1,12 +1,12 @@
+mod backend;
 mod emu;
 mod input;
 mod screen;
 mod util;
 
 use crate::{
+    backend::{Backend, HeadlessBackend, TerminalBackend},
     emu::GameBoy,
-    input::{HeadlessInput, Input, TerminalInput},
-    screen::{HeadlessScreen, Screen, TerminalScreen},
     util::{TracingOutput, initialize_tracing},
 };
 use clap::Parser;
@@ -25,21 +25,12 @@ fn main() -> eyre::Result<()> {
     let mut game_boy = GameBoy::boot(&args.rom)?;
 
     // Select hardware based on the input flags
-    let screen_width = emu::SCREEN_WIDTH.into();
-    let screen_height = emu::SCREEN_HEIGHT.into();
-    let (mut input, mut screen): (Box<dyn Input>, Box<dyn Screen>) =
-        if args.headless {
-            (
-                Box::new(HeadlessInput::new(|| false)),
-                Box::new(HeadlessScreen::new(screen_width, screen_height)),
-            )
-        } else {
-            (
-                Box::new(TerminalInput::new()),
-                Box::new(TerminalScreen::new(screen_width, screen_height)?),
-            )
-        };
-    game_boy.run(&mut *input, &mut *screen, args.debug);
+    let mut backend: Box<dyn Backend> = if args.headless {
+        Box::new(HeadlessBackend::new(|| false))
+    } else {
+        Box::new(TerminalBackend::new()?)
+    };
+    game_boy.run(&mut *backend);
 
     Ok(())
 }
