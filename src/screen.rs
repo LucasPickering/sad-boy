@@ -1,5 +1,6 @@
 //! Graphics bindings for the terminal
 
+use crate::emu::GameBoy;
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
 use nix::{
     fcntl::OFlag,
@@ -48,6 +49,9 @@ pub trait Screen {
     /// This will diff the current frame against the last frame. Any differences
     /// will be written out to the terminal.
     fn draw(&mut self);
+
+    /// Display emulator debug info to the user
+    fn debug(&mut self, emu: &GameBoy);
 }
 
 /// A [Screen] implementation to draw to the terminal
@@ -55,6 +59,7 @@ pub trait Screen {
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to the terminal.
 pub struct TerminalScreen {
+    /// Channel to write output to (stdout)
     out: AlternateScreen<Stdout>,
     /// The next frame to write to the screen
     ///
@@ -110,6 +115,8 @@ impl Screen for TerminalScreen {
             error!("Error drawing to screen: {error}");
         }
     }
+
+    fn debug(&mut self, emu: &GameBoy) {}
 }
 
 /// 24-bit RGB color
@@ -238,6 +245,8 @@ impl Screen for HeadlessScreen {
     }
 
     fn draw(&mut self) {}
+
+    fn debug(&mut self, _emu: &GameBoy) {}
 }
 
 /// Write a graphics message to the given output (probably stdout)

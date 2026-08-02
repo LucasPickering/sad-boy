@@ -18,6 +18,7 @@ use crate::{
         memory::{Memory, MemoryBus},
         rom::Rom,
     },
+    input::Input,
     screen::Screen,
 };
 use color_eyre::eyre;
@@ -71,7 +72,12 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(&mut self, screen: &mut dyn Screen, stop_on: impl Fn() -> bool) {
+    pub fn run(
+        &mut self,
+        input: &mut dyn Input,
+        screen: &mut dyn Screen,
+        debug: bool,
+    ) {
         // The main loop uses futures to emulate components (CPU, GPU, etc.)
         // running concurrently. Async is used to make each component
         // incremental. Each component runs some discrete step then yields, and
@@ -91,7 +97,7 @@ impl GameBoy {
         let mut context = Context::from_waker(waker);
 
         // Run until the caller says to stop
-        while !stop_on() {
+        while !input.should_quit() {
             let polls = [
                 cpu_fut.as_mut().poll(&mut context),
                 gpu_fut.as_mut().poll(&mut context),
@@ -112,6 +118,7 @@ mod tests {
     use super::*;
     use crate::{
         emu::{clock::Cycles, memory::Address},
+        input::HeadlessInput,
         screen::{Color, HeadlessScreen},
         util::{TracingOutput, initialize_tracing},
     };
@@ -142,19 +149,19 @@ mod tests {
             .copy_from_slice(NINTENDO_LOGO);
 
         let mut emu = GameBoy::test(rom_data);
-        let mut screen =
-            HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
-
         // Run until the program counter hits the end of the bootloader. We
         // can't get safe access to the CPU registers because the CPU needs
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
         let pc_ptr = ptr::from_ref::<Address>(emu.cpu.pc());
-        emu.run(
-            &mut screen,
+        let mut input = HeadlessInput::new(
             // SAFETY: The emulator and CPU are never moved in memory
-            || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
+            move || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
         );
+        let mut screen =
+            HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
+
+        emu.run(&mut input, &mut screen, false);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);
