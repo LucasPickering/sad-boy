@@ -118,12 +118,29 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::ptr;
 
+    /// Encoded Nintendo logo and TM symbol
+    ///
+    /// https://gbdev.gg8.se/wiki/articles/Gameboy_Bootstrap_ROM#The_DMG_bootstrap
+    const NINTENDO_LOGO: &[u8] = &[
+        0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83,
+        0x00, 0x0C, 0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E,
+        0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63,
+        0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
+        0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C,
+    ];
+
     /// Run the emulator until the bootloader exits, then verify it matches the
     /// known state
     #[test]
     fn bootloader() {
-        initialize_tracing(TracingOutput::File); // TODO remove
-        let rom_data = vec![0; memory::GAME_ROM.len()];
+        initialize_tracing(TracingOutput::Stderr); // TODO remove
+
+        // Create an empty ROM that just holds the Nintendo logo. The bootloader
+        // will load and display the logo from here
+        let mut rom_data = vec![0; memory::GAME_ROM.len()];
+        rom_data[0x104..(0x104 + NINTENDO_LOGO.len())]
+            .copy_from_slice(NINTENDO_LOGO);
+
         let mut emu = GameBoy::test(rom_data);
         let mut screen =
             HeadlessScreen::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
@@ -143,7 +160,7 @@ mod tests {
         assert_eq!(emu.memory.bank(), 1);
         // TODO look for logo
         screen.assert_pixels(&vec![
-            Color::new(255, 0, 0);
+            Color::new(255, 255, 255);
             SCREEN_WIDTH as usize
                 * SCREEN_HEIGHT as usize
         ]);

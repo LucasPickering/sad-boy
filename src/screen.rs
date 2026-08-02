@@ -17,7 +17,6 @@ use std::{
     num::NonZero,
 };
 use termion::{
-    color::{Bg, Reset, Rgb},
     cursor,
     screen::{AlternateScreen, IntoAlternateScreen},
 };
@@ -132,16 +131,7 @@ impl Color {
 
 impl Display for Color {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{bg}{r},{g},{b}{reset}",
-            r = self.red,
-            g = self.green,
-            b = self.blue,
-            // This is a little silly but it's fun
-            bg = Bg(Rgb(self.red, self.green, self.blue)),
-            reset = Bg(Reset),
-        )
+        write!(f, "{},{},{}", self.red, self.green, self.blue)
     }
 }
 
@@ -196,7 +186,7 @@ impl HeadlessScreen {
             // Print the screens
             // TODO the expected overwites the actual right now
             self.draw_pixels("Actual", &self.pixels);
-            self.draw_pixels("Expected", expected);
+            // self.draw_pixels("Expected", expected);
 
             // Show mismatched cells, but cap it to prevent absurd amounts of
             // output

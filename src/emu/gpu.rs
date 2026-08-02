@@ -131,7 +131,6 @@ impl Gpu {
 
     /// Draw the current scanline to the screen
     ///
-    ///
     /// The `LY` register should be set to the current scanline **before**
     /// calling this.
     ///
