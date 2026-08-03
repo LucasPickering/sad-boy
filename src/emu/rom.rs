@@ -7,7 +7,7 @@ use crate::{
             Operand, Register8, Register16, Register16Memory, Register16Stack,
             Value8,
         },
-        memory::Address,
+        memory::{Address, CARTRIDGE_ROM},
     },
     util::{Bit, BytesDisplay, Mask},
 };
@@ -48,11 +48,18 @@ pub struct Rom {
 impl Rom {
     /// Load a ROM from a file
     pub fn load(path: &Path) -> eyre::Result<Self> {
-        // TODO can we parse the file without loading the whole thing?
         let data = fs::read(path)
             .context(format!("Error reading ROM from {}", path.display()))?;
         info!("Loaded ROM from {}", path.display());
-        assert!(data.len() > 0x3FFF, "TODO");
+
+        // Make sure we can cover the accessible memory range
+        assert!(
+            data.len() >= CARTRIDGE_ROM.len(),
+            "ROM must be at least {} bytes, but was {}",
+            CARTRIDGE_ROM.len(),
+            data.len()
+        );
+
         Ok(Self { data })
     }
 
@@ -96,7 +103,7 @@ impl Debug for Rom {
 pub fn get_instruction(
     input: &[u8],
     address: Address,
-) -> Result<(Instruction, usize), RomParseError> {
+) -> Result<(Instruction, usize), InstructionParseError> {
     // TODO make sure it's in bounds
     let mut input = &input[(address.0 as usize)..];
     let start = input.checkpoint(); // TODO this isn't right
@@ -109,7 +116,7 @@ pub fn get_instruction(
             let error = error
                 .into_inner()
                 .expect("Complete parser should not return Incomplete");
-            RomParseError::new(input, input.offset_from(&start), error)
+            InstructionParseError::new(input, input.offset_from(&start), error)
         })?;
     let offset = input.offset_from(&start);
     trace!(
@@ -121,9 +128,9 @@ pub fn get_instruction(
     Ok((instruction, offset))
 }
 
-/// TODO
+/// An error that occurs while parsing a CPU instruction from ROM
 #[derive(Debug)]
-pub struct RomParseError {
+pub struct InstructionParseError {
     /// A subslice of the parsing input, with a certain amount of bytes
     /// before/after the error location
     ///
@@ -139,7 +146,7 @@ pub struct RomParseError {
     error: ContextError,
 }
 
-impl RomParseError {
+impl InstructionParseError {
     /// How many bytes before/after the error to retain
     const WINDOW_SIZE: usize = 16;
 
@@ -156,7 +163,7 @@ impl RomParseError {
     }
 }
 
-impl Display for RomParseError {
+impl Display for InstructionParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const BYTES_PER_ROW: usize = 4;
         // Max ROM size is 8MB so we need 6 hex digits to fit all addresses
@@ -192,7 +199,7 @@ impl Display for RomParseError {
     }
 }
 
-impl Error for RomParseError {}
+impl Error for InstructionParseError {}
 
 type ParseError = ErrMode<ContextError>;
 

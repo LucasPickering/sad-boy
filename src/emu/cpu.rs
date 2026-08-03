@@ -39,7 +39,6 @@ impl Cpu {
     #[instrument(name = "CPU", skip_all)]
     pub async fn run(&mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
         loop {
-            // TODO should we execute _then_ wait?
             let cycles = self.execute_next(&mut memory);
             clock.wait(cycles).await;
         }
@@ -288,7 +287,8 @@ impl CpuExe<'_, '_> {
     ) -> Cycles {
         if condition.is_none_or(|cond| self.condition(cond)) {
             // Push the address of the instruction *after* this one
-            self.push(self.registers.pc.next().0);
+            // TODO this isn't the right byte offset - depends on instruction
+            self.push((self.registers.pc + 1).0);
             self.registers.pc = address;
             6.into()
         } else {

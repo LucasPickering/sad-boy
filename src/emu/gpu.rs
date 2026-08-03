@@ -163,7 +163,6 @@ impl Gpu {
             objects.is_sorted_by_key(|object| object.attributes.x),
             "Objects must be sorted ascending by x coordinate"
         );
-        // TODO wait before or after executing?
         clock.wait(OAM_SCAN_CYCLES).await;
 
         // Mode 3 - draw pixels
@@ -252,7 +251,7 @@ impl Gpu {
         objects
     }
 
-    /// TODO
+    /// Look up a tile by index
     fn get_tile(&self, index: TileIndex) -> Tile {
         // Select active tiles based on the LCDC flag
         let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
@@ -261,7 +260,6 @@ impl Gpu {
     }
 
     /// Get the block of accessible tiles for the given addressing mode
-    ///
     ///
     /// Each addressing mode can access exactly 256 tiles, so that's encoded in
     /// the return type.
@@ -529,7 +527,9 @@ impl From<Scanline> for u8 {
     }
 }
 
-/// TODO
+/// Index of a color within the active palette
+///
+/// https://gbdev.io/pandocs/Palettes.html
 enum ColorIndex {
     Zero,
     One,
@@ -635,7 +635,10 @@ impl Object {
         bottom > line && top <= line
     }
 
-    /// TODO
+    /// Look up a single pixel in an object
+    ///
+    /// Return the tile that the pixel should be grabbed from, as well as the
+    /// `(x, y)` offset into that tile.
     fn get_pixel(&self, x: u8, y: u8) -> Option<(TileIndex, u8, u8)> {
         let x = x + 8;
         let y = y + 16;
@@ -683,7 +686,7 @@ struct ObjectAttributes {
     /// only tile. For 8x16 tiles, it's the index of the first (upper) tile,
     /// and the lower tile is the subsequent tile in the map.
     tile_index: TileIndex,
-    /// TODO
+    /// Additional object metadata affecting its presentation
     flags: PackedBits<ObjectFlags>,
 }
 const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
@@ -695,11 +698,17 @@ const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 ///
 /// https://gbdev.io/pandocs/OAM.html#byte-3--attributesflags
 struct ObjectFlags {
+    /// TODO
     priority: bool,
+    /// Flip the object vertically?
     y_flip: bool,
+    /// Flip the object horizontall??
     x_flip: bool,
+    /// TODO
     dmg_palette: DmgPalette,
+    /// TODO
     bank: VramBank,
+    /// TODO
     cgb_palette: CgbPalette,
 }
 

@@ -9,6 +9,7 @@ use crate::{
 use signal_hook::consts::signal;
 use std::{
     io::{self, Stdout, Write},
+    panic,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,7 +22,7 @@ use termion::{
     event::Key,
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
-    screen::{AlternateScreen, IntoAlternateScreen},
+    screen::{AlternateScreen, IntoAlternateScreen, ToMainScreen},
 };
 use tracing::error;
 
@@ -53,7 +54,10 @@ pub trait Backend {
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to stdout. It reads input from stdin.
 pub struct TerminalBackend {
-    /// TODO
+    /// Queue of events to be handled
+    ///
+    /// A background thread listens for input events and pushes them into this
+    /// queue. The main loop pops off the queue via [Self::next_event].
     input_rx: mpsc::Receiver<InputEvent>,
     /// Channel to write output to (stdout)
     out: AlternateScreen<RawTerminal<Stdout>>,
@@ -64,6 +68,8 @@ pub struct TerminalBackend {
 impl TerminalBackend {
     /// Initialize a new screen adapter with the given pixel dimensions
     pub fn new() -> io::Result<Self> {
+        Self::init_panic_hook()?;
+
         let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
         // Move the cursor to the top-left
         write!(out, "{}", cursor::Goto(1, 1))?;
@@ -95,10 +101,18 @@ impl TerminalBackend {
         })
     }
 
+    /// Monitor stdin for input
+    ///
+    /// When a relevant event is received, it's pushed into the given channel.
     fn handle_input(input_tx: mpsc::Sender<InputEvent>) {
         for result in io::stdin().keys() {
             match result.map(Self::map_key) {
-                Ok(Some(event)) => input_tx.send(event).expect("TODO"),
+                Ok(Some(event)) => {
+                    // If the channel is closed, we can just exit
+                    if input_tx.send(event).is_err() {
+                        break;
+                    }
+                }
                 Ok(None) => {}
                 Err(error) => error!("Error reading input: {error}"),
             }
@@ -112,6 +126,23 @@ impl TerminalBackend {
             Key::Right => Some(InputEvent::StepNext),
             _ => None,
         }
+    }
+
+    /// Initialize a panic hook that will reset the terminal state on panic
+    ///
+    /// The termion output wrappers will reset termianl state on _drop_, but
+    /// drop handlers aren't called on panic.
+    fn init_panic_hook() -> io::Result<()> {
+        let raw_output = io::stdout().into_raw_mode()?;
+        let original_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            // intentionally ignore errors here since we're already in a panic
+            let _ = raw_output.suspend_raw_mode();
+            let _ = write!(io::stdout(), "{ToMainScreen}");
+            let _ = io::stdout().flush();
+            original_hook(panic_info);
+        }));
+        Ok(())
     }
 }
 
@@ -187,7 +218,7 @@ impl HeadlessBackend {
 
         if !mismatched.is_empty() {
             // Print the screens
-            // TODO the expected overwites the actual right now
+            // TODO the expected overwrites the actual right now
             self.draw_pixels("Actual", frame);
             // self.draw_pixels("Expected", expected);
 

@@ -137,7 +137,6 @@ mod tests {
         backend::HeadlessBackend,
         emu::{clock::Cycles, memory::Address},
         screen::Color,
-        util::{TracingOutput, initialize_tracing},
     };
     use pretty_assertions::assert_eq;
     use std::ptr;
@@ -157,11 +156,9 @@ mod tests {
     /// known state
     #[test]
     fn bootloader() {
-        initialize_tracing(TracingOutput::Stderr); // TODO remove
-
         // Create an empty ROM that just holds the Nintendo logo. The bootloader
         // will load and display the logo from here
-        let mut rom_data = vec![0; memory::GAME_ROM.len()];
+        let mut rom_data = vec![0; memory::CARTRIDGE_ROM_0.len()];
         rom_data[0x104..(0x104 + NINTENDO_LOGO.len())]
             .copy_from_slice(NINTENDO_LOGO);
 

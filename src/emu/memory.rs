@@ -11,7 +11,9 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fmt::{self, Debug, Display},
-    mem, ptr,
+    mem,
+    ops::Add,
+    ptr,
     range::RangeInclusive,
 };
 use tracing::{error, info};
@@ -33,8 +35,19 @@ const BOOTLOADER_CODE: &[u8] = include_bytes!("../../bootloader/dmg_boot.bin");
 /// running.
 pub const BOOTLOADER: AddressRange =
     AddressRange::new("Bootloader", 0x0000, 0x0100);
-/// Range of CPU instructions and data from a game cartridge
-pub const GAME_ROM: AddressRange = AddressRange::new("ROM", 0x0000, 0x7FFF);
+/// Static portion of the cartridge ROM
+///
+/// This is the first bank of the ROM, which **cannot** be switched.
+pub const CARTRIDGE_ROM_0: AddressRange =
+    AddressRange::new("Cartridge ROM Bank 0", 0x0000, 0x3FFF);
+/// Switchable bank of the cartridge ROM
+///
+/// A cartridge can have any number of secondary banks and switch between them.
+pub const CARTRIDGE_ROM_N: AddressRange =
+    AddressRange::new("Cartridge ROM Bank N", 0x4000, 0x7FFF);
+/// All read-only cartridge memory
+pub const CARTRIDGE_ROM: AddressRange =
+    CARTRIDGE_ROM_0.union("Cartridge ROM", CARTRIDGE_ROM_N);
 /// Video RAM containing tile pixel data
 pub const TILE_DATA: AddressRange =
     AddressRange::new("Tile Data", 0x8000, 0x97FF);
@@ -82,6 +95,8 @@ macro_rules! bounds {
 // Generate extra consts for pattern matching
 bounds!(
     BOOTLOADER,
+    CARTRIDGE_ROM_0,
+    CARTRIDGE_ROM_N,
     TILE_DATA,
     TILE_MAPS,
     CARTRIDGE_RAM,
@@ -143,8 +158,8 @@ impl<'a> MemoryBus<'a> {
         // time, this is easier than supporting instruction parsing from
         // arbitrary addresses.
         assert!(
-            GAME_ROM.contains(address),
-            "Requested instruction at {address} is out of range {GAME_ROM}"
+            CARTRIDGE_ROM.contains(address),
+            "Requested instruction at {address} is out of range {CARTRIDGE_ROM}"
         );
 
         // Cache instructions because parsing is expensive
@@ -182,14 +197,13 @@ impl<'a> MemoryBus<'a> {
                 let index: usize = address.0.into();
                 BOOTLOADER_CODE[index]
             }
-            // Game ROM
-            // TODO consts for these
-            0x0000..=0x3FFF => {
-                // SAFETY: TODO
+            // Cartridge ROM
+            CARTRIDGE_ROM_0_START..=CARTRIDGE_ROM_0_LAST => {
+                // SAFETY: Cartridge ROM asserts its own length
                 let index: usize = address.0.into();
                 self.rom.bytes()[index]
             }
-            0x4000..=0x7FFF => {
+            CARTRIDGE_ROM_N_START..=CARTRIDGE_ROM_N_LAST => {
                 error!("TODO: Game ROM bank N");
                 0
             }
@@ -301,7 +315,7 @@ impl<'a> MemoryBus<'a> {
     /// Get a 2-byte value from memory
     pub fn get16(&self, address: Address) -> u16 {
         let low = self.get8(address);
-        let high = self.get8(address.next());
+        let high = self.get8(address + 1);
         u16::from_le_bytes([low, high]) // Game Boy is little-endian
     }
 
@@ -313,7 +327,7 @@ impl<'a> MemoryBus<'a> {
         // is annoying to deal with
         let [low, high] = value.to_le_bytes(); // Game Boy is little-endian
         self.set8(address, low);
-        self.set8(address.next(), high);
+        self.set8(address + 1, high);
     }
 
     /// Set the value of the `BANK` register
@@ -345,13 +359,11 @@ impl<'a> MemoryBus<'a> {
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
 
-impl Address {
-    /// Get the next address after this one (+1 byte)
-    ///
-    /// Useful for accessing 16-bit values as two separate bytes.
-    pub fn next(self) -> Self {
-        // TODO check if self == 0xffff
-        Self(self.0 + 1)
+impl Add<u16> for Address {
+    type Output = Self;
+
+    fn add(self, rhs: u16) -> Self::Output {
+        Self(self.0 + rhs)
     }
 }
 
@@ -377,12 +389,28 @@ pub struct AddressRange {
 
 impl AddressRange {
     /// Define a range of memory
-    pub const fn new(name: &'static str, start: u16, end: u16) -> Self {
+    ///
+    ///
+    /// The given bounds are **inclusive**: `[start, end]`.
+    pub const fn new(name: &'static str, start: u16, last: u16) -> Self {
         Self {
             name,
             range: RangeInclusive {
                 start: Address(start),
-                last: Address(end),
+                last: Address(last),
+            },
+        }
+    }
+
+    /// Join two contiguous ranges
+    ///
+    /// `self` must be the lower range and `other` is the upper range.
+    const fn union(self, name: &'static str, other: AddressRange) -> Self {
+        Self {
+            name,
+            range: RangeInclusive {
+                start: self.start(),
+                last: other.last(),
             },
         }
     }

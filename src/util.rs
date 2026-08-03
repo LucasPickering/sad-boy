@@ -186,7 +186,7 @@ macro_rules! impl_bit_pack {
             fn from_bits(bits: u8) -> Self {
                 match bits {
                     $($value => Self::$variant,)*
-                    _ => unreachable!("TODO"),
+                    _ => panic!("Unrecognized bit pattern: {bits:0<8b}" ),
                 }
             }
 
