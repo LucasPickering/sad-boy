@@ -3,6 +3,7 @@
 #[cfg(test)]
 use crate::screen::Color;
 use crate::{
+    emu::GameBoy,
     input::InputEvent,
     screen::{FrameBuffer, draw_frame},
 };
@@ -42,11 +43,11 @@ pub trait Backend {
     /// Should the emulator exit?
     ///
     /// This is called by the emulator on each tick and should be used to
-    /// monitor external exit conditions (such as process signals).
+    /// monitor exit conditions (such as process signals).
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
-    fn should_quit(&self) -> bool;
+    fn should_quit(&self, emu: &GameBoy) -> bool;
 }
 
 /// A [Backend] implementation to draw to the terminal
@@ -162,7 +163,7 @@ impl Backend for TerminalBackend {
         }
     }
 
-    fn should_quit(&self) -> bool {
+    fn should_quit(&self, _emu: &GameBoy) -> bool {
         self.quit.load(Ordering::Relaxed)
     }
 }
@@ -174,11 +175,11 @@ pub struct HeadlessBackend {
     /// Callback to check if the app should quit
     ///
     /// Tests use this to define custom termination conditions.
-    should_quit: Box<dyn Fn() -> bool>,
+    should_quit: Box<dyn Fn(&GameBoy) -> bool>,
 }
 
 impl HeadlessBackend {
-    pub fn new(should_quit: impl 'static + Fn() -> bool) -> Self {
+    pub fn new(should_quit: impl 'static + Fn(&GameBoy) -> bool) -> Self {
         Self {
             last_frame: None,
             should_quit: Box::new(should_quit),
@@ -257,7 +258,7 @@ impl Backend for HeadlessBackend {
         None
     }
 
-    fn should_quit(&self) -> bool {
-        (self.should_quit)()
+    fn should_quit(&self, emu: &GameBoy) -> bool {
+        (self.should_quit)(emu)
     }
 }

@@ -26,7 +26,7 @@ fn main() -> eyre::Result<()> {
 
     // Select hardware based on the input flags
     let mut backend: Box<dyn Backend> = if args.headless {
-        Box::new(HeadlessBackend::new(|| false))
+        Box::new(HeadlessBackend::new(|_| false))
     } else {
         Box::new(TerminalBackend::new()?)
     };

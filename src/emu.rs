@@ -92,8 +92,15 @@ impl GameBoy {
         let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
 
-        while !backend.should_quit() {
+        loop {
             if poll!(cpu_fut) {
+                drop(cpu_fut);
+
+                // After each instruction, check the exit condition
+                if backend.should_quit(self) {
+                    break;
+                }
+
                 cpu_fut = Some(Box::pin(self.cpu.execute_next(
                     &self.clock,
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
@@ -129,13 +136,8 @@ impl GameBoy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        backend::HeadlessBackend,
-        emu::{clock::Cycles, memory::Address},
-        screen::Color,
-    };
+    use crate::{backend::HeadlessBackend, emu::clock::Cycles, screen::Color};
     use pretty_assertions::assert_eq;
-    use std::ptr;
 
     /// Encoded Nintendo logo and TM symbol
     ///
@@ -163,11 +165,9 @@ mod tests {
         // can't get safe access to the CPU registers because the CPU needs
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
-        let pc_ptr = ptr::from_ref::<Address>(emu.cpu.pc());
-        let mut backend = HeadlessBackend::new(
-            // SAFETY: The emulator and CPU are never moved in memory
-            move || unsafe { *pc_ptr } == memory::BOOTLOADER.last(),
-        );
+        let mut backend = HeadlessBackend::new(move |emu| {
+            emu.cpu.pc() == memory::BOOTLOADER.last()
+        });
 
         emu.run(&mut backend);
 
