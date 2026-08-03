@@ -36,11 +36,11 @@ impl Cpu {
     ///
     /// This will take a variable number of CPU cycles based on the instruction
     /// executed.
-    pub fn execute_next<'clock>(
+    pub async fn execute_next(
         &mut self,
-        clock: &'clock Clock,
+        clock: &Clock,
         mut memory: MemoryBus<'_>,
-    ) -> impl 'clock + Future<Output = ()> {
+    ) {
         let pc = self.registers.pc;
         let (instruction, num_bytes) = memory.get_instruction(pc);
         let cycles = self.execute(&mut memory, instruction);
@@ -51,7 +51,8 @@ impl Cpu {
             self.registers.pc.0 += num_bytes as u16;
         }
 
-        clock.wait(cycles)
+        // TODO wait BEFORE executing
+        clock.wait(cycles).await;
     }
 
     /// Execute a CPU instruction, returning the number of consumed CPU cycles
@@ -69,7 +70,6 @@ impl Cpu {
     }
 
     /// Get the address of the next instruction to execute
-    #[cfg(test)]
     pub fn pc(&self) -> Address {
         self.registers.pc
     }

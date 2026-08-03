@@ -72,13 +72,16 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(&mut self, backend: &mut dyn Backend) {
+    ///
+    /// TODO document debug
+    pub fn run(&mut self, backend: &mut dyn Backend, debug: bool) {
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         backend.draw(&frame); // Initialize the screen
 
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
+        // Macros are fun!
         macro_rules! poll {
             ($fut:expr) => {
                 $fut.as_mut().is_none_or(|fut| {
@@ -96,11 +99,15 @@ impl GameBoy {
             if poll!(cpu_fut) {
                 drop(cpu_fut);
 
-                // After each instruction, check the exit condition
+                // Post-instruction updates
+                if debug {
+                    backend.debug(self);
+                }
                 if backend.should_quit(self) {
                     break;
                 }
 
+                // Prep the next instruction
                 cpu_fut = Some(Box::pin(self.cpu.execute_next(
                     &self.clock,
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
@@ -130,6 +137,11 @@ impl GameBoy {
 
             self.clock.tick();
         }
+    }
+
+    /// TODO
+    pub fn cpu(&self) -> &Cpu {
+        &self.cpu
     }
 }
 
@@ -169,7 +181,7 @@ mod tests {
             emu.cpu.pc() == memory::BOOTLOADER.last()
         });
 
-        emu.run(&mut backend);
+        emu.run(&mut backend, false);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);

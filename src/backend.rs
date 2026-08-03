@@ -32,6 +32,9 @@ use tracing::error;
 /// This is an abstraction over hardware. The backend could be a terminal, web
 /// browser, etc.
 pub trait Backend {
+    /// TODO
+    fn debug(&mut self, emu: &GameBoy);
+
     /// Draw the given frame buffer to the terminal
     fn draw(&mut self, frame: &FrameBuffer);
 
@@ -148,6 +151,14 @@ impl TerminalBackend {
 }
 
 impl Backend for TerminalBackend {
+    fn debug(&mut self, emu: &GameBoy) {
+        let pc = emu.cpu().pc();
+
+        // Move the cursor to the top-left
+        let _ = write!(self.out, "{}", cursor::Goto(1, 161));
+        let _ = write!(self.out, "{pc}");
+    }
+
     fn draw(&mut self, frame: &FrameBuffer) {
         if let Err(error) = draw_frame(frame, false, &mut self.out) {
             error!("Error drawing to screen: {error}");
@@ -250,6 +261,8 @@ impl HeadlessBackend {
 }
 
 impl Backend for HeadlessBackend {
+    fn debug(&mut self, _emu: &GameBoy) {}
+
     fn draw(&mut self, frame: &FrameBuffer) {
         self.last_frame = Some(frame.clone());
     }

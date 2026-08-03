@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
     } else {
         Box::new(TerminalBackend::new()?)
     };
-    game_boy.run(&mut *backend);
+    game_boy.run(&mut *backend, args.debug);
 
     Ok(())
 }
