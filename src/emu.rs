@@ -115,6 +115,7 @@ impl GameBoy {
             // Draw the frame to the screen, then sleep until the end of the
             // frame so we stay synced up with the emulated clock speed
             backend.draw(&frame);
+            frame.reset(); // Revert to all black
 
             // Check for input
             while let Some(event) = backend.next_event() {
@@ -124,7 +125,6 @@ impl GameBoy {
                 }
             }
 
-            // TODO reset the frame buffer?
             self.clock.sleep();
         }
     }

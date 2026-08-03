@@ -164,22 +164,23 @@ impl HeadlessBackend {
             .last_frame
             .as_ref()
             .expect("Screen has not been drawn to");
+        let actual = frame.pixels();
         assert_eq!(
+            actual.len(),
             expected.len(),
-            frame.pixels.len(),
             "Expected pixel array must be length {} * {}",
-            frame.width,
-            frame.height
+            frame.width(),
+            frame.height()
         );
 
         let mut mismatched: Vec<(u16, u16, Color, Color)> = vec![];
         for (i, (color_actual, color_expected)) in
-            frame.pixels.iter().zip(expected).enumerate()
+            actual.iter().zip(expected).enumerate()
         {
             if color_actual != color_expected {
                 let i = i as u16;
-                let x = i % frame.width;
-                let y = i / frame.width;
+                let x = i % frame.width();
+                let y = i / frame.width();
                 mismatched.push((x, y, *color_actual, *color_expected));
             }
         }

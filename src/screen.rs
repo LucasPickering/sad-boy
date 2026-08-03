@@ -32,11 +32,11 @@ pub struct FrameBuffer {
     /// Pixel data in column-major format
     ///
     /// Invariant: `len() == self.width * self.height`
-    pub pixels: Box<[Color]>,
+    pixels: Box<[Color]>,
     /// Pixel width of the frame
-    pub width: u16,
+    width: u16,
     /// Pixel height of the frame
-    pub height: u16,
+    height: u16,
 }
 
 impl FrameBuffer {
@@ -64,6 +64,26 @@ impl FrameBuffer {
         );
         let index = (y * self.width + x) as usize;
         self.pixels[index] = color;
+    }
+
+    /// Reset all pixels to black
+    pub fn reset(&mut self) {
+        self.pixels.fill(Color::BLACK);
+    }
+
+    #[cfg(test)]
+    pub fn pixels(&self) -> &[Color] {
+        &self.pixels
+    }
+
+    #[cfg(test)]
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    #[cfg(test)]
+    pub fn height(&self) -> u16 {
+        self.height
     }
 }
 
