@@ -13,7 +13,7 @@ use crate::{
     util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
-use tracing::{Instrument, info_span};
+use tracing::instrument;
 
 const SCANLINES_PER_FRAME: u8 = 154;
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
@@ -58,22 +58,19 @@ impl Gpu {
     /// Render a single frame to the frame buffer
     ///
     /// This will take exactly 70,224 cycles.
+    #[instrument(name = "GPU frame", skip_all)]
     pub async fn frame(&self, clock: &Clock, frame: &mut FrameBuffer) {
-        async move {
-            for scanline in 0..SCANLINES_PER_FRAME {
-                self.registers.with_mut(|r| r.ly = Scanline(scanline));
-                self.draw_scanline(clock, frame).await;
-                // Set bit 2 of STAT to match LY==LYC
-                self.registers.with_mut(|r| {
-                    r.stat.update(|stat| LcdStatus {
-                        lyc_equal_ly: r.ly == r.lyc,
-                        ..stat
-                    });
+        for scanline in 0..SCANLINES_PER_FRAME {
+            self.registers.with_mut(|r| r.ly = Scanline(scanline));
+            self.draw_scanline(clock, frame).await;
+            // Set bit 2 of STAT to match LY==LYC
+            self.registers.with_mut(|r| {
+                r.stat.update(|stat| LcdStatus {
+                    lyc_equal_ly: r.ly == r.lyc,
+                    ..stat
                 });
-            }
+            });
         }
-        .instrument(info_span!("GPU frame"))
-        .await;
     }
 
     /// Access the GPU I/O registers

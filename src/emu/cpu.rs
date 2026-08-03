@@ -18,7 +18,7 @@ use std::{
     fmt::{self, Debug},
     ops::{BitAnd, BitOr, BitXor},
 };
-use tracing::{Instrument, error, info_span, trace};
+use tracing::{error, info_span, instrument, trace};
 
 /// Central Processing Unit for a Game Boy
 ///
@@ -36,16 +36,13 @@ impl Cpu {
     ///
     /// Repeatedly execute CPU instructions from ROM. This future will never
     /// return.
+    #[instrument(name = "CPU", skip_all)]
     pub async fn run(&mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
-        async move {
-            loop {
-                // TODO should we execute _then_ wait?
-                let cycles = self.execute_next(&mut memory);
-                clock.wait(cycles).await;
-            }
+        loop {
+            // TODO should we execute _then_ wait?
+            let cycles = self.execute_next(&mut memory);
+            clock.wait(cycles).await;
         }
-        .instrument(info_span!("CPU"))
-        .await;
     }
 
     /// Execute the next CPU instruction, returning the number of consumed CPU
