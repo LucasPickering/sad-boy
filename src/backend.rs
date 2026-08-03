@@ -8,16 +8,19 @@ use crate::{
 };
 use signal_hook::consts::signal;
 use std::{
-    io::{self, Stdin, Stdout, Write},
+    io::{self, Stdout, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
+    thread,
 };
 use termion::{
     cursor,
     event::Key,
-    input::{Keys, TermRead},
+    input::TermRead,
+    raw::{IntoRawMode, RawTerminal},
     screen::{AlternateScreen, IntoAlternateScreen},
 };
 use tracing::error;
@@ -30,7 +33,9 @@ pub trait Backend {
     /// Draw the given frame buffer to the terminal
     fn draw(&mut self, frame: &FrameBuffer);
 
-    /// TODO
+    /// Get the next queued input event
+    ///
+    /// Return `None` if no inputs are pending.
     fn next_event(&mut self) -> Option<InputEvent>;
 
     /// Should the emulator exit?
@@ -48,10 +53,10 @@ pub trait Backend {
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to stdout. It reads input from stdin.
 pub struct TerminalBackend {
-    /// Channel for reading user input
-    keys: Keys<Stdin>,
+    /// TODO
+    input_rx: mpsc::Receiver<InputEvent>,
     /// Channel to write output to (stdout)
-    out: AlternateScreen<Stdout>,
+    out: AlternateScreen<RawTerminal<Stdout>>,
     /// Flag set by the signal handler when a termination signal is received
     quit: Arc<AtomicBool>,
 }
@@ -59,7 +64,7 @@ pub struct TerminalBackend {
 impl TerminalBackend {
     /// Initialize a new screen adapter with the given pixel dimensions
     pub fn new() -> io::Result<Self> {
-        let mut out = io::stdout().into_alternate_screen()?;
+        let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
         // Move the cursor to the top-left
         write!(out, "{}", cursor::Goto(1, 1))?;
 
@@ -76,11 +81,37 @@ impl TerminalBackend {
             signal_hook::flag::register(signal, quit.clone()).unwrap();
         }
 
+        // Listen for input in a background thread. Termion only exposes a fully
+        // blocking interator for input handling, so we can't access it in the
+        // main thread. The background thread will put any relevant events in
+        // the queue.
+        let (input_tx, input_rx) = mpsc::channel();
+        thread::spawn(move || Self::handle_input(input_tx));
+
         Ok(Self {
-            keys: io::stdin().keys(),
+            input_rx,
             out,
             quit,
         })
+    }
+
+    fn handle_input(input_tx: mpsc::Sender<InputEvent>) {
+        for result in io::stdin().keys() {
+            match result.map(Self::map_key) {
+                Ok(Some(event)) => input_tx.send(event).expect("TODO"),
+                Ok(None) => {}
+                Err(error) => error!("Error reading input: {error}"),
+            }
+        }
+    }
+
+    /// Map a key event to an [InputEvent]
+    fn map_key(key: Key) -> Option<InputEvent> {
+        match key {
+            Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
+            Key::Right => Some(InputEvent::StepNext),
+            _ => None,
+        }
     }
 }
 
@@ -92,17 +123,11 @@ impl Backend for TerminalBackend {
     }
 
     fn next_event(&mut self) -> Option<InputEvent> {
-        match self.keys.next() {
-            Some(Ok(key)) => match key {
-                Key::Char('q') => Some(InputEvent::Quit),
-                Key::Right => Some(InputEvent::StepNext),
-                _ => None,
-            },
-            Some(Err(error)) => {
-                error!("Error reading input: {error}");
-                None
-            }
-            None => None,
+        // Grab the next event off the queue
+        match self.input_rx.try_recv() {
+            Ok(event) => Some(event),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => todo!(),
         }
     }
 

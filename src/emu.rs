@@ -19,6 +19,7 @@ use crate::{
         memory::{Memory, MemoryBus},
         rom::Rom,
     },
+    input::InputEvent,
     screen::FrameBuffer,
 };
 use color_eyre::eyre;
@@ -114,6 +115,15 @@ impl GameBoy {
             // Draw the frame to the screen, then sleep until the end of the
             // frame so we stay synced up with the emulated clock speed
             backend.draw(&frame);
+
+            // Check for input
+            while let Some(event) = backend.next_event() {
+                match event {
+                    InputEvent::Quit => return, // We done
+                    InputEvent::StepNext => {}
+                }
+            }
+
             // TODO reset the frame buffer?
             self.clock.sleep();
         }
