@@ -107,7 +107,8 @@ impl CpuExe<'_, '_> {
             Instruction::And(rhs) => self.bit_binary(u8::bitand, rhs, true),
             Instruction::Bit(bit, source) => self.bit_get(bit, source),
             Instruction::Call { address, condition } => {
-                self.call(address, condition)
+                // CALL instruction is 3 bytes
+                self.call(3, address, condition)
             }
             Instruction::Ccf => {
                 let flags = self.registers.flags();
@@ -235,7 +236,7 @@ impl CpuExe<'_, '_> {
                 });
                 1.into()
             }
-            Instruction::Rst(address) => self.call(address, None),
+            Instruction::Rst(address) => self.call(1, address, None),
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
             Instruction::Scf => {
                 let flags = self.registers.flags();
@@ -282,14 +283,15 @@ impl CpuExe<'_, '_> {
     /// Execute a function call
     fn call(
         &mut self,
-        address: Address,
+        instruction_size: u16,
+        target: Address,
         condition: Option<ConditionCode>,
     ) -> Cycles {
         if condition.is_none_or(|cond| self.condition(cond)) {
-            // Push the address of the instruction *after* this one
-            // TODO this isn't the right byte offset - depends on instruction
-            self.push((self.registers.pc + 1).0);
-            self.registers.pc = address;
+            // Push the return address, which is the instruction *after* the
+            // CALL/RST
+            self.push(self.registers.pc.0 + instruction_size);
+            self.registers.pc = target;
             6.into()
         } else {
             3.into() // Quick exit
