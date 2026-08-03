@@ -25,7 +25,7 @@ use crate::{
 use color_eyre::eyre;
 use std::{
     path::Path,
-    pin::pin,
+    pin::Pin,
     task::{Context, Waker},
 };
 
@@ -77,55 +77,51 @@ impl GameBoy {
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         backend.draw(&frame); // Initialize the screen
 
-        // The main loop uses futures to emulate components (CPU, GPU, etc.)
-        // running concurrently. Async is used to make each component
-        // incremental. Each component runs some discrete step then yields, and
-        // the components are synced together by the emulated clock.
-        let memory_bus = MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
-        let mut cpu_fut = pin!(self.cpu.run(&self.clock, memory_bus));
-
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
         macro_rules! poll {
             ($fut:expr) => {
-                $fut.as_mut().poll(&mut context)
+                $fut.as_mut().is_none_or(|fut| {
+                    fut.as_mut().poll(&mut context).is_ready()
+                })
             };
         }
 
-        // Run until the caller says to stop. Each iteration of this outer loop
-        // is one frame
+        // TODO explain all this shit
+        // TODO remove boxing/dynamic shit
+        let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
+        let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
+
         while !backend.should_quit() {
-            // Run ticks until the end of the frame. This will tick as quickly
-            // as possible, limited just by processing speed.
-            //
-            // Each frame uses a different future in the GPU so we can read back
-            // from the frame buffer after writing to it.
-            {
-                let mut gpu_fut = pin!(self.gpu.frame(&self.clock, &mut frame));
-                while poll!(gpu_fut).is_pending() {
-                    // Run the CPU on each tick too
-                    let cpu_poll = poll!(cpu_fut);
-                    // The CPU future is supposed to run indefinitely
-                    assert!(cpu_poll.is_pending(), "CPU future exited early");
-                    // Advance the clock one tick
-                    self.clock.tick();
-                }
+            if poll!(cpu_fut) {
+                cpu_fut = Some(Box::pin(self.cpu.execute_next(
+                    &self.clock,
+                    MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
+                )));
             }
 
-            // Draw the frame to the screen, then sleep until the end of the
-            // frame so we stay synced up with the emulated clock speed
-            backend.draw(&frame);
-            frame.reset(); // Revert to all black
+            if poll!(gpu_fut) {
+                drop(gpu_fut);
+                // Draw the frame to the screen, then sleep until the end of the
+                // frame so we stay synced up with the emulated clock speed
+                backend.draw(&frame);
+                frame.reset(); // Revert to all black
 
-            // Check for input
-            while let Some(event) = backend.next_event() {
-                match event {
-                    InputEvent::Quit => return, // We done
-                    InputEvent::StepNext => {}
+                // Check for input
+                while let Some(event) = backend.next_event() {
+                    match event {
+                        InputEvent::Quit => return,
+                        InputEvent::StepNext => {}
+                    }
                 }
+
+                self.clock.sleep();
+                gpu_fut = Some(Box::pin(
+                    self.gpu.render_frame(&self.clock, &mut frame),
+                ));
             }
 
-            self.clock.sleep();
+            self.clock.tick();
         }
     }
 }

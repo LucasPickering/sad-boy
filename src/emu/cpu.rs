@@ -18,7 +18,7 @@ use std::{
     fmt::{self, Debug},
     ops::{BitAnd, BitOr, BitXor},
 };
-use tracing::{error, info_span, instrument, trace};
+use tracing::{error, info_span, trace};
 
 /// Central Processing Unit for a Game Boy
 ///
@@ -32,24 +32,18 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    /// Run the CPU loop
+    /// Execute the next CPU instruction
     ///
-    /// Repeatedly execute CPU instructions from ROM. This future will never
-    /// return.
-    #[instrument(name = "CPU", skip_all)]
-    pub async fn run(&mut self, clock: &Clock, mut memory: MemoryBus<'_>) {
-        loop {
-            let cycles = self.execute_next(&mut memory);
-            clock.wait(cycles).await;
-        }
-    }
-
-    /// Execute the next CPU instruction, returning the number of consumed CPU
-    /// cycles (dots)
-    fn execute_next<'a>(&'a mut self, memory: &'a mut MemoryBus<'_>) -> Cycles {
+    /// This will take a variable number of CPU cycles based on the instruction
+    /// executed.
+    pub fn execute_next<'clock>(
+        &mut self,
+        clock: &'clock Clock,
+        mut memory: MemoryBus<'_>,
+    ) -> impl 'clock + Future<Output = ()> {
         let pc = self.registers.pc;
         let (instruction, num_bytes) = memory.get_instruction(pc);
-        let cycles = self.execute(memory, instruction);
+        let cycles = self.execute(&mut memory, instruction);
 
         // If the instruction didn't modify the PC (e.g. jumps), then
         // advance it automatically
@@ -57,7 +51,7 @@ impl Cpu {
             self.registers.pc.0 += num_bytes as u16;
         }
 
-        cycles
+        clock.wait(cycles)
     }
 
     /// Execute a CPU instruction, returning the number of consumed CPU cycles
