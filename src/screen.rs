@@ -184,5 +184,6 @@ pub fn draw_frame(
         C = u8::from(!move_cursor), // enable/disable cursor movement
         t = 's',                    // transmit via shared memory
         S = len,                    // shared memory length
-    )
+    )?;
+    out.flush()
 }

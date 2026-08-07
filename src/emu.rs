@@ -94,8 +94,32 @@ impl GameBoy {
         // TODO remove boxing/dynamic shit
         let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
+        // If the debugger is enabled, is execution paused?
+        let mut debug_paused = true;
 
         loop {
+            // If paused, we'll just block for input
+            if debug && debug_paused {
+                match backend.next_event_blocking() {
+                    // Unpausing breaks out of this loop
+                    InputEvent::DebugPauseToggle => debug_paused = false,
+                    InputEvent::DebugStepNext => {} // Step one cycle
+                    InputEvent::Quit => return,
+                    // Any other input event while paused is ignored. Skip the
+                    // rest of the loop and go back to waiting for input.
+                    _ => continue,
+                }
+            } else if self.clock.is_frame_start() {
+                // On the first cycle of each frame, check for input
+                while let Some(event) = backend.next_event() {
+                    match event {
+                        InputEvent::DebugPauseToggle => debug_paused ^= true,
+                        InputEvent::DebugStepNext => {} // Does nothing
+                        InputEvent::Quit => return,
+                    }
+                }
+            }
+
             if poll!(cpu_fut) {
                 drop(cpu_fut);
 
@@ -121,14 +145,6 @@ impl GameBoy {
                 backend.draw(&frame);
                 frame.reset(); // Revert to all black
 
-                // Check for input
-                while let Some(event) = backend.next_event() {
-                    match event {
-                        InputEvent::Quit => return,
-                        InputEvent::StepNext => {}
-                    }
-                }
-
                 self.clock.sleep();
                 gpu_fut = Some(Box::pin(
                     self.gpu.render_frame(&self.clock, &mut frame),
@@ -137,6 +153,11 @@ impl GameBoy {
 
             self.clock.tick();
         }
+    }
+
+    /// TODO
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     /// TODO

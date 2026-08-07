@@ -43,6 +43,9 @@ pub trait Backend {
     /// Return `None` if no inputs are pending.
     fn next_event(&mut self) -> Option<InputEvent>;
 
+    /// Get the next queued input event, blocking until an event is available
+    fn next_event_blocking(&mut self) -> InputEvent;
+
     /// Should the emulator exit?
     ///
     /// This is called by the emulator on each tick and should be used to
@@ -126,8 +129,9 @@ impl TerminalBackend {
     /// Map a key event to an [InputEvent]
     fn map_key(key: Key) -> Option<InputEvent> {
         match key {
+            Key::Char(' ') => Some(InputEvent::DebugPauseToggle),
+            Key::Right => Some(InputEvent::DebugStepNext),
             Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
-            Key::Right => Some(InputEvent::StepNext),
             _ => None,
         }
     }
@@ -152,11 +156,9 @@ impl TerminalBackend {
 
 impl Backend for TerminalBackend {
     fn debug(&mut self, emu: &GameBoy) {
-        let pc = emu.cpu().pc();
-
         // Move the cursor to the top-left
         let _ = write!(self.out, "{}", cursor::Goto(1, 161));
-        let _ = write!(self.out, "{pc}");
+        let _ = write!(self.out, "{:?}", emu.clock().cycles());
     }
 
     fn draw(&mut self, frame: &FrameBuffer) {
@@ -172,6 +174,11 @@ impl Backend for TerminalBackend {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => todo!(),
         }
+    }
+
+    fn next_event_blocking(&mut self) -> InputEvent {
+        // Grab the next event off the queue
+        self.input_rx.recv().expect("TODO")
     }
 
     fn should_quit(&self, _emu: &GameBoy) -> bool {
@@ -269,6 +276,10 @@ impl Backend for HeadlessBackend {
 
     fn next_event(&mut self) -> Option<InputEvent> {
         None
+    }
+
+    fn next_event_blocking(&mut self) -> InputEvent {
+        todo!()
     }
 
     fn should_quit(&self, emu: &GameBoy) -> bool {
