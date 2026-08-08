@@ -3,13 +3,13 @@
 #[cfg(test)]
 use crate::screen::Color;
 use crate::{
-    emu::GameBoy,
+    emu::{DebugInfo, GameBoy, Instruction},
     input::InputEvent,
     screen::{FrameBuffer, draw_frame},
 };
 use signal_hook::consts::signal;
 use std::{
-    fmt,
+    fmt::{self, Display},
     io::{self, Stdout, Write},
     panic,
     sync::{
@@ -34,7 +34,7 @@ use tracing::error;
 /// browser, etc.
 pub trait Backend {
     /// TODO
-    fn debug(&mut self, emu: &GameBoy);
+    fn debug(&mut self, info: &DebugInfo);
 
     /// Draw the given frame buffer to the terminal
     fn draw(&mut self, frame: &FrameBuffer);
@@ -163,26 +163,52 @@ impl TerminalBackend {
             // Terminal is in raw mode so we have to move the cursor manually
             write!(self.out, "{cmd}{line}", cmd = cursor::Goto(1, y))?;
         }
-        Ok(())
+        self.out.flush()
     }
 }
 
 impl Backend for TerminalBackend {
-    fn debug(&mut self, emu: &GameBoy) {
-        let reg = emu.cpu().registers();
+    fn debug(&mut self, info: &DebugInfo) {
+        struct V8(u8);
+
+        impl Display for V8 {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{v} (0x{v:0>2X})", v = self.0)
+            }
+        }
+
+        struct V16(u16);
+
+        impl Display for V16 {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{v} (0x{v:0>4X})", v = self.0)
+            }
+        }
+
+        let cpu = &info.cpu;
         let result = self.write_debug(&[
-            format_args!("Clock: {}", emu.clock().cycles().0),
+            format_args!("Clock: {}", info.clock_cycles.0),
+            format_args!("=== CPU ==="),
             format_args!(
-                "a/f/af: {}/{}/{}",
-                reg.a(),
-                reg.f().as_u8(),
-                reg.af()
+                "Prev: {}",
+                cpu.previous_instruction.unwrap_or(Instruction::Nop)
             ),
-            format_args!("b/c/bc: {}/{}/{}", reg.b(), reg.c(), reg.bc()),
-            format_args!("d/e/de: {}/{}/{}", reg.d(), reg.e(), reg.de()),
-            format_args!("h/l/hl: {}/{}/{}", reg.h(), reg.l(), reg.hl()),
-            format_args!("pc: {}", reg.pc()),
-            format_args!("sp: {}", reg.sp()),
+            // Registers
+            format_args!("a: {}", V8(cpu.a)),
+            format_args!("f: {}", cpu.f.as_u8()),
+            format_args!("af: {}", V16(cpu.af)),
+            format_args!("b: {}", V8(cpu.b)),
+            format_args!("c: {}", V8(cpu.c)),
+            format_args!("bc: {}", V16(cpu.bc)),
+            format_args!("d: {}", V8(cpu.d)),
+            format_args!("e: {}", V8(cpu.e)),
+            format_args!("de: {}", V16(cpu.de)),
+            format_args!("h: {}", V8(cpu.h)),
+            format_args!("l: {}", V8(cpu.l)),
+            format_args!("hl: {}", V16(cpu.hl)),
+            format_args!("pc: {}", cpu.pc),
+            format_args!("sp: {}", cpu.sp),
+            format_args!("Int enable: {}", cpu.interrupts_enabled),
         ]);
         if let Err(error) = result {
             error!("Error writing debug info to terminal: {error}");
@@ -296,7 +322,7 @@ impl HeadlessBackend {
 }
 
 impl Backend for HeadlessBackend {
-    fn debug(&mut self, _emu: &GameBoy) {}
+    fn debug(&mut self, _info: &DebugInfo) {}
 
     fn draw(&mut self, frame: &FrameBuffer) {
         self.last_frame = Some(frame.clone());

@@ -29,6 +29,10 @@ pub struct Cpu {
     registers: Registers,
     /// IME flag
     interrupts_enabled: bool,
+    /// Mostly recently executed instruction
+    ///
+    /// `None` only on startup.
+    previous_instruction: Option<Instruction>,
 }
 
 impl Cpu {
@@ -53,6 +57,7 @@ impl Cpu {
 
         // TODO wait BEFORE executing
         clock.wait(cycles).await;
+        self.previous_instruction = Some(instruction);
     }
 
     /// Execute a CPU instruction, returning the number of consumed CPU cycles
@@ -69,10 +74,57 @@ impl Cpu {
         .execute(instruction)
     }
 
-    /// Get CPU registers, for debuggery
-    pub fn registers(&self) -> &Registers {
-        &self.registers
+    /// Get debug info about the CPU
+    ///
+    /// This is a read-only summary of current CPU state for the debugger.
+    pub fn debug_info(&self) -> CpuDebugInfo {
+        let reg = &self.registers;
+        CpuDebugInfo {
+            a: reg.a,
+            f: reg.f,
+            af: reg.af(),
+            b: reg.b,
+            c: reg.c,
+            bc: reg.bc(),
+            d: reg.d,
+            e: reg.e,
+            de: reg.de(),
+            h: reg.h,
+            l: reg.l,
+            hl: reg.hl(),
+            pc: reg.pc,
+            sp: reg.sp,
+            interrupts_enabled: self.interrupts_enabled,
+            previous_instruction: self.previous_instruction,
+        }
     }
+}
+
+/// Exposed debug state for the CPU
+#[derive(Default)]
+pub struct CpuDebugInfo {
+    // ===== Registers ====
+    pub a: u8,
+    pub f: PackedBits<BcdFlags>,
+    pub af: u16,
+    pub b: u8,
+    pub c: u8,
+    pub bc: u16,
+    pub d: u8,
+    pub e: u8,
+    pub de: u16,
+    pub h: u8,
+    pub l: u8,
+    pub hl: u16,
+    pub pc: Address,
+    pub sp: Address,
+
+    /// Interrupt enable flag
+    pub interrupts_enabled: bool,
+    /// Mostly recently executed instruction
+    ///
+    /// `None` only on startup.
+    pub previous_instruction: Option<Instruction>,
 }
 
 /// Helper for executing CPU instructions
@@ -605,7 +657,7 @@ const _: () = assert!(
 /// Registers in a Game Boy CPU
 #[derive(Default, PartialEq)]
 #[repr(C)] // Field ordering/alignment is important
-pub struct Registers {
+struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
     // accessed as separate bytes or a pair together. The pairs are SWAPPED
     // here because `af` means `a` is the high byte and `f` is the low byte.
@@ -634,48 +686,6 @@ pub struct Registers {
     /// on the stack*, meaning the SP must be decremented *before* pushing
     /// and incremented *after* popping.
     sp: Address,
-}
-
-impl Registers {
-    pub fn a(&self) -> u8 {
-        self.a
-    }
-
-    pub fn f(&self) -> PackedBits<BcdFlags> {
-        self.f
-    }
-
-    pub fn b(&self) -> u8 {
-        self.b
-    }
-
-    pub fn c(&self) -> u8 {
-        self.c
-    }
-
-    pub fn d(&self) -> u8 {
-        self.d
-    }
-
-    pub fn e(&self) -> u8 {
-        self.e
-    }
-
-    pub fn h(&self) -> u8 {
-        self.h
-    }
-
-    pub fn l(&self) -> u8 {
-        self.l
-    }
-
-    pub fn pc(&self) -> Address {
-        self.pc
-    }
-
-    pub fn sp(&self) -> Address {
-        self.sp
-    }
 }
 
 impl Debug for Registers {
@@ -718,7 +728,7 @@ macro_rules! register_pair {
     // Internal branch
     ($pair:ident, $pair_mut:ident, $r_low:ident) => {
         /// Get the value of the `$pair` register pair
-        pub fn $pair(&self) -> u16 {
+        fn $pair(&self) -> u16 {
             // SAFETY: Safety is predicated on the macro being called with
             // registers that are paired together in the struct layout.
             // - Alignment is safe because u16 is 2-byte aligned and the
@@ -824,6 +834,7 @@ pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
     },
     // https://gbdev.io/pandocs/Interrupts.html#ime-interrupt-master-enable-flag-write-only
     interrupts_enabled: false,
+    previous_instruction: Some(Instruction::Ldh(LoadHigh::ConstA(0x50))),
 };
 
 #[cfg(test)]

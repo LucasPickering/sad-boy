@@ -10,11 +10,13 @@ mod memory;
 mod rom;
 
 pub use clock::Clock;
+pub use instruction::Instruction;
 
 use crate::{
     backend::Backend,
     emu::{
-        cpu::Cpu,
+        clock::Cycles,
+        cpu::{Cpu, CpuDebugInfo},
         gpu::Gpu,
         memory::{Memory, MemoryBus},
         rom::Rom,
@@ -90,16 +92,24 @@ impl GameBoy {
             };
         }
 
+        // If the debugger is enabled, is execution paused?
+        let mut debug_paused = true;
+        // TODO
+        let mut debug_info = DebugInfo::default();
+        if debug {
+            // Show initial debug state
+            backend.debug(&debug_info);
+        }
+
         // TODO explain all this shit
         // TODO remove boxing/dynamic shit
         let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
-        // If the debugger is enabled, is execution paused?
-        let mut debug_paused = true;
 
         loop {
-            // If paused, we'll just block for input
+            // Check for input
             if debug && debug_paused {
+                // If paused, we'll just block for input
                 match backend.next_event_blocking() {
                     // Unpausing breaks out of this loop
                     InputEvent::DebugPauseToggle => debug_paused = false,
@@ -121,12 +131,14 @@ impl GameBoy {
                 }
             }
 
+            // Progress the CPU
             if poll!(cpu_fut) {
                 drop(cpu_fut);
 
-                // Post-instruction updates
+                // Run some checks that we can only do between instructions,
+                // because they require read access to &self
                 if debug {
-                    backend.debug(self);
+                    debug_info.cpu = self.cpu.debug_info();
                 }
                 if backend.should_quit(self) {
                     break;
@@ -139,32 +151,36 @@ impl GameBoy {
                 )));
             }
 
+            // Progress the GPU
             if poll!(gpu_fut) {
                 drop(gpu_fut);
+
                 // Draw the frame to the screen, then sleep until the end of the
                 // frame so we stay synced up with the emulated clock speed
                 backend.draw(&frame);
                 frame.reset(); // Revert to all black
-
                 self.clock.sleep();
+
                 gpu_fut = Some(Box::pin(
                     self.gpu.render_frame(&self.clock, &mut frame),
                 ));
             }
 
+            // Update the debugger on each tick
             self.clock.tick();
+            if debug {
+                debug_info.clock_cycles = self.clock.cycles();
+                backend.debug(&debug_info);
+            }
         }
     }
+}
 
-    /// TODO
-    pub fn clock(&self) -> &Clock {
-        &self.clock
-    }
-
-    /// TODO
-    pub fn cpu(&self) -> &Cpu {
-        &self.cpu
-    }
+/// Exposed debug state for the emulator
+#[derive(Default)]
+pub struct DebugInfo {
+    pub clock_cycles: Cycles,
+    pub cpu: CpuDebugInfo,
 }
 
 #[cfg(test)]
@@ -200,7 +216,7 @@ mod tests {
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
         let mut backend = HeadlessBackend::new(move |emu| {
-            emu.cpu.pc() == memory::BOOTLOADER.last()
+            emu.cpu.debug_info().pc == memory::BOOTLOADER.last()
         });
 
         emu.run(&mut backend, false);
