@@ -9,13 +9,12 @@ mod instruction;
 mod memory;
 mod rom;
 
-pub use clock::Clock;
+pub use clock::{Clock, Cycles};
 pub use instruction::Instruction;
 
 use crate::{
     backend::Backend,
     emu::{
-        clock::Cycles,
         cpu::{Cpu, CpuDebugInfo},
         gpu::Gpu,
         memory::{Memory, MemoryBus},
@@ -107,6 +106,11 @@ impl GameBoy {
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
 
         loop {
+            // Check for exit
+            if backend.should_quit(&debug_info) {
+                break;
+            }
+
             // Check for input
             if debug && debug_paused {
                 // If paused, we'll just block for input
@@ -135,20 +139,13 @@ impl GameBoy {
             if poll!(cpu_fut) {
                 drop(cpu_fut);
 
-                // Run some checks that we can only do between instructions,
-                // because they require read access to &self
-                if debug {
-                    debug_info.cpu = self.cpu.debug_info();
-                }
-                if backend.should_quit(self) {
-                    break;
-                }
-
                 // Prep the next instruction
-                cpu_fut = Some(Box::pin(self.cpu.execute_next(
+                let (fut, debug) = self.cpu.execute_next(
                     &self.clock,
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
-                )));
+                );
+                cpu_fut = Some(Box::pin(fut));
+                debug_info.cpu = debug;
             }
 
             // Progress the GPU
@@ -215,8 +212,8 @@ mod tests {
         // can't get safe access to the CPU registers because the CPU needs
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
-        let mut backend = HeadlessBackend::new(move |emu| {
-            emu.cpu.debug_info().pc == memory::BOOTLOADER.last()
+        let mut backend = HeadlessBackend::new(move |debug_info| {
+            debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
 
         emu.run(&mut backend, false);

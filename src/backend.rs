@@ -3,7 +3,7 @@
 #[cfg(test)]
 use crate::screen::Color;
 use crate::{
-    emu::{DebugInfo, GameBoy, Instruction},
+    emu::{Cycles, DebugInfo, Instruction},
     input::InputEvent,
     screen::{FrameBuffer, draw_frame},
 };
@@ -54,7 +54,7 @@ pub trait Backend {
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
-    fn should_quit(&self, emu: &GameBoy) -> bool;
+    fn should_quit(&self, debug_info: &DebugInfo) -> bool;
 }
 
 /// A [Backend] implementation to draw to the terminal
@@ -186,13 +186,15 @@ impl Backend for TerminalBackend {
         }
 
         let cpu = &info.cpu;
+        let (prev_instruction, prev_cycles) = cpu
+            .previous_instruction
+            .unwrap_or((Instruction::Invalid, Cycles(0)));
+        let (next_instruction, next_cycles) = cpu.next_instruction;
         let result = self.write_debug(&[
-            format_args!("Clock: {}", info.clock_cycles.0),
+            format_args!("Clock: {}", info.clock_cycles),
             format_args!("=== CPU ==="),
-            format_args!(
-                "Prev: {}",
-                cpu.previous_instruction.unwrap_or(Instruction::Nop)
-            ),
+            format_args!("Prev: {prev_instruction} ({prev_cycles} cycles)"),
+            format_args!("Next: {next_instruction} ({next_cycles} cycles)"),
             // Registers
             format_args!("a: {}", V8(cpu.a)),
             format_args!("f: {} {}", V8(cpu.f.as_u8()), cpu.f.unpack()),
@@ -242,7 +244,7 @@ impl Backend for TerminalBackend {
         self.input_rx.recv().expect("TODO")
     }
 
-    fn should_quit(&self, _emu: &GameBoy) -> bool {
+    fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
         self.quit.load(Ordering::Relaxed)
     }
 }
@@ -254,11 +256,11 @@ pub struct HeadlessBackend {
     /// Callback to check if the app should quit
     ///
     /// Tests use this to define custom termination conditions.
-    should_quit: Box<dyn Fn(&GameBoy) -> bool>,
+    should_quit: Box<dyn Fn(&DebugInfo) -> bool>,
 }
 
 impl HeadlessBackend {
-    pub fn new(should_quit: impl 'static + Fn(&GameBoy) -> bool) -> Self {
+    pub fn new(should_quit: impl 'static + Fn(&DebugInfo) -> bool) -> Self {
         Self {
             last_frame: None,
             should_quit: Box::new(should_quit),
@@ -343,7 +345,7 @@ impl Backend for HeadlessBackend {
         todo!()
     }
 
-    fn should_quit(&self, emu: &GameBoy) -> bool {
-        (self.should_quit)(emu)
+    fn should_quit(&self, debug_info: &DebugInfo) -> bool {
+        (self.should_quit)(debug_info)
     }
 }

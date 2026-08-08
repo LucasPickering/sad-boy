@@ -30,10 +30,10 @@ pub struct Cpu {
     registers: Registers,
     /// IME flag
     interrupts_enabled: bool,
-    /// Mostly recently executed instruction
+    /// Mostly recently executed instruction and the number of cycles it took
     ///
     /// `None` only on startup.
-    previous_instruction: Option<Instruction>,
+    previous_instruction: Option<(Instruction, Cycles)>,
 }
 
 impl Cpu {
@@ -41,30 +41,32 @@ impl Cpu {
     ///
     /// This will take a variable number of CPU cycles based on the instruction
     /// executed.
-    pub async fn execute_next(
+    pub fn execute_next(
         &mut self,
         clock: &Clock,
         mut memory: MemoryBus<'_>,
-    ) {
-        // Parse the next instruction
+    ) -> (impl Future<Output = ()>, CpuDebugInfo) {
+        // Parse the next instruction and check how many cycles it will take
         let pc = self.registers.pc;
         let (instruction, num_bytes) = memory.get_instruction(pc);
+        let cycles = self.exe(&mut memory).cycles(instruction);
 
-        // Calculate how many cycles it will take, and wait that many *first*.
-        // This ensures the state modifications aren't visible until *after*
-        // the wait.
-        let mut exe = self.exe(&mut memory);
-        let cycles = exe.cycles(instruction);
-        clock.wait(cycles).await;
-        exe.execute(instruction);
+        let debug_info = self.debug_info((instruction, cycles));
+        let fut = async move {
+            // Wait *before* executing so state isn't updated until after the
+            // elapsed cycles
+            clock.wait(cycles).await;
+            self.exe(&mut memory).execute(instruction);
 
-        // If the instruction didn't modify the PC (e.g. jumps), then
-        // advance it automatically
-        if self.registers.pc == pc {
-            self.registers.pc.0 += num_bytes as u16;
-        }
+            // If the instruction didn't modify the PC (e.g. jumps), then
+            // advance it automatically
+            if self.registers.pc == pc {
+                self.registers.pc.0 += num_bytes as u16;
+            }
 
-        self.previous_instruction = Some(instruction);
+            self.previous_instruction = Some((instruction, cycles));
+        };
+        (fut, debug_info)
     }
 
     fn exe<'cpu, 'mem>(
@@ -81,7 +83,10 @@ impl Cpu {
     /// Get debug info about the CPU
     ///
     /// This is a read-only summary of current CPU state for the debugger.
-    pub fn debug_info(&self) -> CpuDebugInfo {
+    fn debug_info(
+        &self,
+        next_instruction: (Instruction, Cycles),
+    ) -> CpuDebugInfo {
         let reg = &self.registers;
         CpuDebugInfo {
             a: reg.a,
@@ -100,12 +105,12 @@ impl Cpu {
             sp: reg.sp,
             interrupts_enabled: self.interrupts_enabled,
             previous_instruction: self.previous_instruction,
+            next_instruction,
         }
     }
 }
 
 /// Exposed debug state for the CPU
-#[derive(Default)]
 pub struct CpuDebugInfo {
     // ===== Registers ====
     pub a: u8,
@@ -125,10 +130,36 @@ pub struct CpuDebugInfo {
 
     /// Interrupt enable flag
     pub interrupts_enabled: bool,
-    /// Mostly recently executed instruction
+    /// Mostly recently executed instruction and the number of cycles it took
     ///
     /// `None` only on startup.
-    pub previous_instruction: Option<Instruction>,
+    pub previous_instruction: Option<(Instruction, Cycles)>,
+    /// Next instruction to execute and the number of cycles it will take
+    pub next_instruction: (Instruction, Cycles),
+}
+
+impl Default for CpuDebugInfo {
+    fn default() -> Self {
+        Self {
+            a: 0,
+            f: 0.into(),
+            af: 0,
+            b: 0,
+            c: 0,
+            bc: 0,
+            d: 0,
+            e: 0,
+            de: 0,
+            h: 0,
+            l: 0,
+            hl: 0,
+            pc: Address(0),
+            sp: Address(0),
+            interrupts_enabled: false,
+            previous_instruction: None,
+            next_instruction: (Instruction::Nop, Cycles(0)),
+        }
+    }
 }
 
 /// Helper for executing CPU instructions
@@ -907,7 +938,10 @@ pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
     },
     // https://gbdev.io/pandocs/Interrupts.html#ime-interrupt-master-enable-flag-write-only
     interrupts_enabled: false,
-    previous_instruction: Some(Instruction::Ldh(LoadHigh::ConstA(0x50))),
+    previous_instruction: Some((
+        Instruction::Ldh(LoadHigh::ConstA(0x50)),
+        Cycles(3),
+    )),
 };
 
 #[cfg(test)]

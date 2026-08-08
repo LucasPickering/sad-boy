@@ -3,6 +3,7 @@
 use std::{
     cell::Cell,
     cmp::Ordering,
+    fmt::{self, Display},
     future,
     ops::{Add, AddAssign, Sub},
     task::Poll,
@@ -141,6 +142,12 @@ impl Clock {
 /// can report how many cycles were consumed from the budget.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Cycles(pub u64);
+
+impl Display for Cycles {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} cycles", self.0)
+    }
+}
 
 impl Add for Cycles {
     type Output = Self;
