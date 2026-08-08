@@ -69,9 +69,9 @@ impl Cpu {
         .execute(instruction)
     }
 
-    /// Get the address of the next instruction to execute
-    pub fn pc(&self) -> Address {
-        self.registers.pc
+    /// Get CPU registers, for debuggery
+    pub fn registers(&self) -> &Registers {
+        &self.registers
     }
 }
 
@@ -605,7 +605,7 @@ const _: () = assert!(
 /// Registers in a Game Boy CPU
 #[derive(Default, PartialEq)]
 #[repr(C)] // Field ordering/alignment is important
-struct Registers {
+pub struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
     // accessed as separate bytes or a pair together. The pairs are SWAPPED
     // here because `af` means `a` is the high byte and `f` is the low byte.
@@ -624,6 +624,8 @@ struct Registers {
     l: u8,
     h: u8,
 
+    /// Program counter
+    pc: Address,
     /// Stack pointer
     ///
     /// The stack is a series of 16-bit values at the high end of working RAM.
@@ -632,8 +634,48 @@ struct Registers {
     /// on the stack*, meaning the SP must be decremented *before* pushing
     /// and incremented *after* popping.
     sp: Address,
-    /// Program counter
-    pc: Address,
+}
+
+impl Registers {
+    pub fn a(&self) -> u8 {
+        self.a
+    }
+
+    pub fn f(&self) -> PackedBits<BcdFlags> {
+        self.f
+    }
+
+    pub fn b(&self) -> u8 {
+        self.b
+    }
+
+    pub fn c(&self) -> u8 {
+        self.c
+    }
+
+    pub fn d(&self) -> u8 {
+        self.d
+    }
+
+    pub fn e(&self) -> u8 {
+        self.e
+    }
+
+    pub fn h(&self) -> u8 {
+        self.h
+    }
+
+    pub fn l(&self) -> u8 {
+        self.l
+    }
+
+    pub fn pc(&self) -> Address {
+        self.pc
+    }
+
+    pub fn sp(&self) -> Address {
+        self.sp
+    }
 }
 
 impl Debug for Registers {
@@ -676,7 +718,7 @@ macro_rules! register_pair {
     // Internal branch
     ($pair:ident, $pair_mut:ident, $r_low:ident) => {
         /// Get the value of the `$pair` register pair
-        fn $pair(&self) -> u16 {
+        pub fn $pair(&self) -> u16 {
             // SAFETY: Safety is predicated on the macro being called with
             // registers that are paired together in the struct layout.
             // - Alignment is safe because u16 is 2-byte aligned and the
@@ -736,7 +778,7 @@ impl Registers {
 ///
 /// https://gbdev.io/pandocs/CPU_Registers_and_Flags.html#the-flags-register-lower-8-bits-of-af-register
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct BcdFlags {
+pub struct BcdFlags {
     /// Was the result of the operation zero?
     zero: bool,
     /// Was the operation a subtraction?

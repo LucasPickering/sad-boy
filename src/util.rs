@@ -226,6 +226,11 @@ impl<T: BitPack> PackedBits<T> {
         }
     }
 
+    /// Get the underlying byte value
+    pub fn as_u8(&self) -> u8 {
+        self.value
+    }
+
     /// Unpack a byte value into a `T` using its [BitPack] implementation
     pub fn unpack(self) -> T {
         T::from_bits(self.value)

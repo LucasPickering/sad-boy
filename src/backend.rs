@@ -9,6 +9,7 @@ use crate::{
 };
 use signal_hook::consts::signal;
 use std::{
+    fmt,
     io::{self, Stdout, Write},
     panic,
     sync::{
@@ -152,18 +153,45 @@ impl TerminalBackend {
         }));
         Ok(())
     }
+
+    /// Write debug info to the terminal
+    ///
+    /// TODO
+    fn write_debug(&mut self, lines: &[fmt::Arguments]) -> io::Result<()> {
+        // TODO make start height dynamic
+        for (line, y) in lines.iter().zip(1..) {
+            // Terminal is in raw mode so we have to move the cursor manually
+            write!(self.out, "{cmd}{line}", cmd = cursor::Goto(1, y))?;
+        }
+        Ok(())
+    }
 }
 
 impl Backend for TerminalBackend {
     fn debug(&mut self, emu: &GameBoy) {
-        // Move the cursor to the top-left
-        let _ = write!(self.out, "{}", cursor::Goto(1, 161));
-        let _ = write!(self.out, "{:?}", emu.clock().cycles());
+        let reg = emu.cpu().registers();
+        let result = self.write_debug(&[
+            format_args!("Clock: {}", emu.clock().cycles().0),
+            format_args!(
+                "a/f/af: {}/{}/{}",
+                reg.a(),
+                reg.f().as_u8(),
+                reg.af()
+            ),
+            format_args!("b/c/bc: {}/{}/{}", reg.b(), reg.c(), reg.bc()),
+            format_args!("d/e/de: {}/{}/{}", reg.d(), reg.e(), reg.de()),
+            format_args!("h/l/hl: {}/{}/{}", reg.h(), reg.l(), reg.hl()),
+            format_args!("pc: {}", reg.pc()),
+            format_args!("sp: {}", reg.sp()),
+        ]);
+        if let Err(error) = result {
+            error!("Error writing debug info to terminal: {error}");
+        }
     }
 
     fn draw(&mut self, frame: &FrameBuffer) {
         if let Err(error) = draw_frame(frame, false, &mut self.out) {
-            error!("Error drawing to screen: {error}");
+            error!("Error drawing to terminal: {error}");
         }
     }
 
