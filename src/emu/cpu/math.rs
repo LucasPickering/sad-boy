@@ -2,7 +2,6 @@
 
 use crate::{
     emu::{
-        clock::Cycles,
         cpu::{BcdFlags, CpuExe},
         instruction::{Add, DecInc, Operand, Value8},
     },
@@ -11,49 +10,46 @@ use crate::{
 
 impl CpuExe<'_, '_> {
     /// Execute an `ADD` instruction
-    pub(super) fn add(&mut self, add: Add) -> Cycles {
-        let (flags, cycles) = match add {
+    pub(super) fn add(&mut self, add: Add) {
+        let flags = match add {
             Add::A(operand) => {
-                let (rhs, cycles) = self.operand(operand);
+                let rhs = self.operand(operand);
                 let (sum, flags) = add8(self.registers.a, rhs);
                 self.registers.a = sum;
-                (flags, cycles)
+                flags
             }
             Add::Hl(register) => {
                 let rhs = self.register16(register);
                 let lhs = self.registers.hl();
                 let (new, carry) = lhs.overflowing_add(rhs);
                 *self.registers.hl_mut() = new;
-                let flags = BcdFlags {
+                BcdFlags {
                     zero: new == 0,
                     subtract: false,
                     half_carry: half_carry16(lhs, rhs, new),
                     carry,
-                };
-                (flags, 2.into())
+                }
             }
             Add::Sp(rhs) => {
                 let lhs = self.registers.sp.0;
                 let (new, carry) = lhs.overflowing_add_signed(rhs.into());
                 self.registers.sp.0 = new;
-                let flags = BcdFlags {
+                BcdFlags {
                     zero: new == 0,
                     subtract: false,
                     half_carry: half_carry16(lhs, rhs as u16, new),
                     carry,
-                };
-                (flags, 4.into())
+                }
             }
         };
         self.registers.set_flags(flags);
-        cycles
     }
 
     /// Execute an `ADC` instruction
     ///
     /// This adds the (operand + carry flag) to `a`. The carry flag is 0/1.
-    pub(super) fn add_carry(&mut self, rhs: Operand) -> Cycles {
-        let (rhs, cycles) = self.operand(rhs);
+    pub(super) fn add_carry(&mut self, rhs: Operand) {
+        let rhs = self.operand(rhs);
         let (sum, flags) = add8(
             self.registers.a,
             // Add the carry flag as a 0/1
@@ -61,7 +57,6 @@ impl CpuExe<'_, '_> {
         );
         self.registers.a = sum;
         self.registers.set_flags(flags);
-        cycles
     }
 
     /// Execute a binary bitwise instruction like `AND` or `XOR`, mutating `a`
@@ -71,15 +66,13 @@ impl CpuExe<'_, '_> {
     /// - `operation`: bitwise operation, taking `a, operand`
     /// - `rhs`: right-hand operand
     /// - `half_carry`: value for the `half_carry` flag
-    ///
-    /// ## Return
     pub(super) fn bit_binary(
         &mut self,
         operation: fn(u8, u8) -> u8,
         rhs: Operand,
         half_carry: bool,
-    ) -> Cycles {
-        let (rhs, cycles) = self.operand(rhs);
+    ) {
+        let rhs = self.operand(rhs);
         let lhs = self.registers.a;
         self.registers.a = operation(lhs, rhs);
         self.registers.set_flags(BcdFlags {
@@ -88,16 +81,15 @@ impl CpuExe<'_, '_> {
             half_carry,
             carry: false,
         });
-        cycles
     }
 
     /// Execute a `BIT`
     ///
     /// The value of the bit is stored in the `zero` flag.
-    pub(super) fn bit_get(&mut self, bit: Bit, value: Value8) -> Cycles {
-        let (value, cycles) = match value {
-            Value8::Register(register) => (self.register8(register), 2.into()),
-            Value8::Hl => (self.hl_mem(), 3.into()),
+    pub(super) fn bit_get(&mut self, bit: Bit, value: Value8) {
+        let value = match value {
+            Value8::Register(register) => self.register8(register),
+            Value8::Hl => self.hl_mem(),
         };
         let carry = self.registers.flags().carry;
         self.registers.set_flags(BcdFlags {
@@ -108,28 +100,20 @@ impl CpuExe<'_, '_> {
             // This flag retains its value
             carry,
         });
-        cycles
     }
 
     /// Execute a `SET` or `RES` instruction
     ///
     /// These instructions do not modify any flags.
-    pub(super) fn bit_set(
-        &mut self,
-        bit: Bit,
-        dest: Value8,
-        value: bool,
-    ) -> Cycles {
+    pub(super) fn bit_set(&mut self, bit: Bit, dest: Value8, value: bool) {
         match dest {
             Value8::Register(register) => {
                 let dest = self.register8_mut(register);
                 *dest = bit.set(*dest, value);
-                2.into()
             }
             Value8::Hl => {
                 let src = self.hl_mem();
                 self.set_hl_mem(bit.set(src, value));
-                4.into()
             }
         }
     }
@@ -144,25 +128,23 @@ impl CpuExe<'_, '_> {
     /// - `operation`: Function taking the current value and `carry` flag,
     ///   returning the new value and new `carry` flag
     /// - `dest`: Value to modify
-    ///
-    /// ## Return
     pub(super) fn bit_unary(
         &mut self,
         operation: fn(u8, bool) -> (u8, bool),
         dest: Value8,
-    ) -> Cycles {
+    ) {
         let carry = self.registers.flags().carry;
-        let (new, carry, cycles) = match dest {
+        let (new, carry) = match dest {
             Value8::Register(register) => {
                 let dest = self.register8_mut(register);
                 let (new, carry) = operation(*dest, carry);
                 *dest = new;
-                (new, carry, 2.into())
+                (new, carry)
             }
             Value8::Hl => {
                 let (new, carry) = operation(self.hl_mem(), carry);
                 self.set_hl_mem(new);
-                (new, carry, 4.into())
+                (new, carry)
             }
         };
         self.registers.set_flags(BcdFlags {
@@ -171,18 +153,16 @@ impl CpuExe<'_, '_> {
             half_carry: false,
             carry,
         });
-        cycles
     }
 
     /// Execute a `CP` instruction
     ///
     /// This subtracts the operand from `a` and sets the flags accordingly, but
     /// discards the value without modifying `a`.
-    pub(super) fn compare(&mut self, rhs: Operand) -> Cycles {
-        let (rhs, cycles) = self.operand(rhs);
+    pub(super) fn compare(&mut self, rhs: Operand) {
+        let rhs = self.operand(rhs);
         let (_, flags) = sub8(self.registers.a, rhs);
         self.registers.set_flags(flags);
-        cycles
     }
 
     /// Decimal Adjust Accumulator
@@ -191,34 +171,29 @@ impl CpuExe<'_, '_> {
     /// Decimal value.
     ///
     /// https://blog.ollien.com/posts/gb-daa/
-    pub(super) fn daa(&mut self) -> Cycles {
+    pub(super) fn daa(&mut self) {
         let (a, flags) = daa(self.registers.a, self.registers.flags());
         self.registers.a = a;
         self.registers.set_flags(flags);
-        1.into()
     }
 
     /// Execute a `DEC` or `INC` instruction
-    pub(super) fn dec_inc(
-        &mut self,
-        dec_inc: DecInc,
-        subtract: bool,
-    ) -> Cycles {
+    pub(super) fn dec_inc(&mut self, dec_inc: DecInc, subtract: bool) {
         let delta = if subtract { -1 } else { 1 };
         match dec_inc {
             DecInc::V8(dest) => {
-                let (cycles, lhs, out) = match dest {
+                let (lhs, out) = match dest {
                     Value8::Register(register) => {
                         let register = self.register8_mut(register);
                         let lhs = *register;
                         *register = lhs.wrapping_add_signed(delta);
-                        (1.into(), lhs, *register)
+                        (lhs, *register)
                     }
                     Value8::Hl => {
                         let lhs = self.hl_mem();
                         let out = lhs.wrapping_add_signed(delta);
                         self.set_hl_mem(out);
-                        (3.into(), lhs, out)
+                        (lhs, out)
                     }
                 };
                 self.registers.set_flags(BcdFlags {
@@ -229,32 +204,29 @@ impl CpuExe<'_, '_> {
                     half_carry: half_carry8(lhs, delta as u8, out),
                     ..self.registers.flags() // Carry flag is retained
                 });
-                cycles
             }
             DecInc::R16(register) => {
                 let register = self.register16_mut(register);
                 *register = register.wrapping_add_signed(delta.into());
                 // Does not affect BCD flags
-                2.into()
             }
         }
     }
 
     /// Execute a `SUB` instruction
-    pub(super) fn subtract(&mut self, rhs: Operand) -> Cycles {
-        let (rhs, cycles) = self.operand(rhs);
+    pub(super) fn subtract(&mut self, rhs: Operand) {
+        let rhs = self.operand(rhs);
         let (difference, flags) = sub8(self.registers.a, rhs);
         self.registers.a = difference;
         self.registers.set_flags(flags);
-        cycles
     }
 
     /// Execute an `SBC` instruction
     ///
     /// This subtracts the (operand + carry flag) from `a`. The carry flag is
     /// 0/1.
-    pub(super) fn subtract_carry(&mut self, rhs: Operand) -> Cycles {
-        let (rhs, cycles) = self.operand(rhs);
+    pub(super) fn subtract_carry(&mut self, rhs: Operand) {
+        let rhs = self.operand(rhs);
         let (difference, flags) = sub8(
             self.registers.a,
             // Subtract the carry flag as a 0/1
@@ -262,20 +234,14 @@ impl CpuExe<'_, '_> {
         );
         self.registers.a = difference;
         self.registers.set_flags(flags);
-        cycles
     }
 
     /// Evaluate an 8-bit math operand
-    ///
-    /// Return `(operand, cycles)`. All math operations take 1 CPU cycle for
-    /// 8-bit register operands, 2 cycles for `[HL]` or constants.
-    fn operand(&mut self, operand: Operand) -> (u8, Cycles) {
+    fn operand(&mut self, operand: Operand) -> u8 {
         match operand {
-            Operand::V8(Value8::Register(register)) => {
-                (self.register8(register), 1.into())
-            }
-            Operand::V8(Value8::Hl) => (self.hl_mem(), 2.into()),
-            Operand::Const(value) => (value, 2.into()),
+            Operand::V8(Value8::Register(register)) => self.register8(register),
+            Operand::V8(Value8::Hl) => self.hl_mem(),
+            Operand::Const(value) => value,
         }
     }
 }
@@ -430,7 +396,8 @@ mod tests {
         let gpu = Gpu::default();
         let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
         cpu.registers.a = lhs;
-        cpu.execute(&mut memory, Instruction::Add(Add::A(Operand::Const(rhs))));
+        let mut exe = cpu.exe(&mut memory);
+        exe.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");
         assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }
@@ -467,7 +434,8 @@ mod tests {
         let gpu = Gpu::default();
         let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
         cpu.registers.sp = Address(lhs);
-        cpu.execute(&mut memory, Instruction::Add(Add::Sp(rhs)));
+        let mut exe = cpu.exe(&mut memory);
+        exe.execute(Instruction::Add(Add::Sp(rhs)));
         assert_eq!(cpu.registers.sp.0, expected_value, "sum");
         assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }

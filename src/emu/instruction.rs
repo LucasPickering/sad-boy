@@ -1,6 +1,9 @@
 //! Game Boy CPU instructions
 
-use crate::{emu::memory::Address, util::Bit};
+use crate::{
+    emu::{clock::Cycles, memory::Address},
+    util::Bit,
+};
 use std::fmt::{self, Display};
 
 /// CPU instruction
