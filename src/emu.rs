@@ -74,7 +74,8 @@ impl GameBoy {
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
     ///
-    /// TODO document debug
+    /// Enabling the `debug` flag will start the emulator paused. It will also
+    /// write additional information about the emulator state to the screen.
     pub fn run(&mut self, backend: &mut dyn Backend, debug: bool) {
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
@@ -93,7 +94,10 @@ impl GameBoy {
 
         // If the debugger is enabled, is execution paused?
         let mut debug_paused = true;
-        // TODO
+        // Read-only information about the current emulator state. This is
+        // updated imperatively between instructions/frames so that it can be
+        // read on any clock tick, regardless of the ownership state of various
+        // futures
         let mut debug_info = DebugInfo::default();
         if debug {
             // Show initial debug state
@@ -109,30 +113,6 @@ impl GameBoy {
             // Check for exit
             if backend.should_quit(&debug_info) {
                 break;
-            }
-
-            // Check for input
-            if debug && debug_paused {
-                // If paused, we'll just block for input
-                match backend.next_event_blocking() {
-                    // Unpausing breaks out of this loop
-                    InputEvent::DebugPauseToggle => debug_paused = false,
-                    InputEvent::DebugStepNext => {} // Step one cycle
-                    InputEvent::Quit => return,
-                    // Any other input event while paused is ignored. Skip the
-                    // rest of the loop and go back to waiting for input.
-                    InputEvent::Button(_) => continue,
-                }
-            } else if self.clock.is_frame_start() {
-                // On the first cycle of each frame, check for input
-                while let Some(event) = backend.next_event() {
-                    match event {
-                        InputEvent::DebugPauseToggle => debug_paused ^= true,
-                        InputEvent::DebugStepNext => {} // Does nothing
-                        InputEvent::Quit => return,
-                        InputEvent::Button(_) => {}
-                    }
-                }
             }
 
             // Progress the CPU
@@ -163,8 +143,32 @@ impl GameBoy {
                 ));
             }
 
-            // Update the debugger on each tick
+            // Check for input
+            if debug && debug_paused {
+                // If paused, we'll just block for input
+                match backend.next_event_blocking() {
+                    // Unpausing breaks out of this loop
+                    InputEvent::DebugPauseToggle => debug_paused = false,
+                    InputEvent::DebugStepNext => {} // Step one cycle
+                    InputEvent::Quit => return,
+                    // Any other input event while paused is ignored. Skip the
+                    // rest of the loop and go back to waiting for input.
+                    InputEvent::Button(_) => continue,
+                }
+            } else if self.clock.is_frame_start() {
+                // On the first cycle of each frame, check for input
+                while let Some(event) = backend.next_event() {
+                    match event {
+                        InputEvent::DebugPauseToggle => debug_paused ^= true,
+                        InputEvent::DebugStepNext => {} // Does nothing
+                        InputEvent::Quit => return,
+                        InputEvent::Button(_) => {}
+                    }
+                }
+            }
+
             self.clock.tick();
+            // Update the debugger on each tick
             if debug {
                 debug_info.clock_cycles = self.clock.cycles();
                 backend.debug(&debug_info);

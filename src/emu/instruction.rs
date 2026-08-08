@@ -1,6 +1,9 @@
 //! Game Boy CPU instructions
 
-use crate::{emu::memory::Address, util::Bit};
+use crate::{
+    emu::memory::Address,
+    util::{Bit, IntDisplay},
+};
 use std::fmt::{self, Display};
 
 /// CPU instruction
@@ -361,9 +364,13 @@ impl Display for LoadHigh {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AC => write!(f, "a,[$FF00+c]"),
-            Self::AConst(value) => write!(f, "a,[$FF00+${value:0>2X}]"),
+            Self::AConst(value) => {
+                write!(f, "a,[$FF00+${}]", IntDisplay::hex(*value))
+            }
             Self::CA => write!(f, "[$FF00+c],a"),
-            Self::ConstA(value) => write!(f, "[$FF00+${value:0>2X}],a"),
+            Self::ConstA(value) => {
+                write!(f, "[$FF00+${}],a", IntDisplay::hex(*value))
+            }
         }
     }
 }

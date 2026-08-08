@@ -6,6 +6,7 @@ use crate::{
     emu::{Cycles, DebugInfo, Instruction},
     input::InputEvent,
     screen::{FrameBuffer, draw_frame},
+    util::IntDisplay,
 };
 use signal_hook::consts::signal;
 use std::{
@@ -20,7 +21,7 @@ use std::{
     thread,
 };
 use termion::{
-    cursor,
+    clear, cursor,
     event::Key,
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
@@ -155,13 +156,17 @@ impl TerminalBackend {
     }
 
     /// Write debug info to the terminal
-    ///
-    /// TODO
     fn write_debug(&mut self, lines: &[fmt::Arguments]) -> io::Result<()> {
         // TODO make start height dynamic
         for (line, y) in lines.iter().zip(1..) {
-            // Terminal is in raw mode so we have to move the cursor manually
-            write!(self.out, "{cmd}{line}", cmd = cursor::Goto(1, y))?;
+            // Terminal is in raw mode so we have to move the cursor and clear
+            // the line manually
+            write!(
+                self.out,
+                "{goto}{clear}{line}",
+                goto = cursor::Goto(1, y),
+                clear = clear::CurrentLine,
+            )?;
         }
         self.out.flush()
     }
@@ -169,19 +174,28 @@ impl TerminalBackend {
 
 impl Backend for TerminalBackend {
     fn debug(&mut self, info: &DebugInfo) {
-        struct V8(u8);
+        struct Reg<T>(T);
 
-        impl Display for V8 {
+        impl Display for Reg<u8> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{v} (0x{v:0>2X})", v = self.0)
+                write!(
+                    f,
+                    "{v} ({hex}, {bin})",
+                    v = self.0,
+                    hex = IntDisplay::hex(self.0),
+                    bin = IntDisplay::binary(self.0),
+                )
             }
         }
 
-        struct V16(u16);
-
-        impl Display for V16 {
+        impl Display for Reg<u16> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{v} (0x{v:0>4X})", v = self.0)
+                write!(
+                    f,
+                    "{v} ({hex})",
+                    v = self.0,
+                    hex = IntDisplay::hex(self.0),
+                )
             }
         }
 
@@ -193,21 +207,25 @@ impl Backend for TerminalBackend {
         let result = self.write_debug(&[
             format_args!("Clock: {}", info.clock_cycles),
             format_args!("=== CPU ==="),
-            format_args!("Prev: {prev_instruction} ({prev_cycles} cycles)"),
-            format_args!("Next: {next_instruction} ({next_cycles} cycles)"),
+            format_args!("Prev: {prev_instruction} ({prev_cycles})"),
+            format_args!("Next: {next_instruction} ({next_cycles})"),
             // Registers
-            format_args!("a: {}", V8(cpu.a)),
-            format_args!("f: {} {}", V8(cpu.f.as_u8()), cpu.f.unpack()),
-            format_args!("af: {}", V16(cpu.af)),
-            format_args!("b: {}", V8(cpu.b)),
-            format_args!("c: {}", V8(cpu.c)),
-            format_args!("bc: {}", V16(cpu.bc)),
-            format_args!("d: {}", V8(cpu.d)),
-            format_args!("e: {}", V8(cpu.e)),
-            format_args!("de: {}", V16(cpu.de)),
-            format_args!("h: {}", V8(cpu.h)),
-            format_args!("l: {}", V8(cpu.l)),
-            format_args!("hl: {}", V16(cpu.hl)),
+            format_args!("a: {}", Reg(cpu.a)),
+            format_args!(
+                "f: {} {}",
+                IntDisplay::hex(cpu.f.as_u8()),
+                cpu.f.unpack()
+            ),
+            format_args!("af: {}", Reg(cpu.af)),
+            format_args!("b: {}", Reg(cpu.b)),
+            format_args!("c: {}", Reg(cpu.c)),
+            format_args!("bc: {}", Reg(cpu.bc)),
+            format_args!("d: {}", Reg(cpu.d)),
+            format_args!("e: {}", Reg(cpu.e)),
+            format_args!("de: {}", Reg(cpu.de)),
+            format_args!("h: {}", Reg(cpu.h)),
+            format_args!("l: {}", Reg(cpu.l)),
+            format_args!("hl: {}", Reg(cpu.hl)),
             format_args!("pc: {}", cpu.pc),
             format_args!("sp: {}", cpu.sp),
             format_args!(

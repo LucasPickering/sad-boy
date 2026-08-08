@@ -85,7 +85,7 @@ impl Mask {
 
 impl Debug for Mask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Mask(0b{:0>8b})", self.0)
+        write!(f, "Mask({})", IntDisplay::binary(self.0))
     }
 }
 
@@ -291,13 +291,55 @@ impl<T: BitPack> From<PackedBits<T>> for u8 {
     }
 }
 
+/// Display an integer as hexadecimal or binary
+pub struct IntDisplay<T> {
+    value: T,
+    mode: DisplayMode,
+}
+
+impl<T> IntDisplay<T> {
+    /// Display an integer as binary
+    pub fn binary(value: T) -> Self {
+        Self {
+            value,
+            mode: DisplayMode::Binary,
+        }
+    }
+
+    /// Display an integer as hexadecimal
+    pub fn hex(value: T) -> Self {
+        Self {
+            value,
+            mode: DisplayMode::Hex,
+        }
+    }
+}
+
+impl Display for IntDisplay<u8> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.mode {
+            DisplayMode::Binary => write!(f, "0b{:0>8b}", self.value),
+            DisplayMode::Hex => write!(f, "0x{:0>2X}", self.value),
+        }
+    }
+}
+
+impl Display for IntDisplay<u16> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.mode {
+            DisplayMode::Binary => write!(f, "0b{:0>16b}", self.value),
+            DisplayMode::Hex => write!(f, "0x{:0>4X}", self.value),
+        }
+    }
+}
+
 /// Wrapper to pretty print a byte slice
 ///
 /// By default this will print a truncated slice, up to 8 bytes. To print the
 /// whole thing, enable the alter display flag (`#`);
 pub struct BytesDisplay<'a> {
     bytes: &'a [u8],
-    mode: BytesDisplayMode,
+    mode: DisplayMode,
 }
 
 impl<'a> BytesDisplay<'a> {
@@ -305,7 +347,7 @@ impl<'a> BytesDisplay<'a> {
     pub fn binary(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
-            mode: BytesDisplayMode::Binary,
+            mode: DisplayMode::Binary,
         }
     }
 
@@ -313,7 +355,7 @@ impl<'a> BytesDisplay<'a> {
     pub fn hex(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
-            mode: BytesDisplayMode::Hex,
+            mode: DisplayMode::Hex,
         }
     }
 }
@@ -340,8 +382,8 @@ impl Display for BytesDisplay<'_> {
                 write!(f, " ")?;
             }
             match self.mode {
-                BytesDisplayMode::Binary => write!(f, "{byte:0>8b}")?,
-                BytesDisplayMode::Hex => write!(f, "{byte:0>2x}")?,
+                DisplayMode::Binary => write!(f, "{byte:0>8b}")?,
+                DisplayMode::Hex => write!(f, "{byte:0>2x}")?,
             }
         }
 
@@ -354,8 +396,8 @@ impl Display for BytesDisplay<'_> {
     }
 }
 
-/// How to display bytes in [BytesDisplay]
-enum BytesDisplayMode {
+/// How to display values in [IntDisplay] or [BytesDisplay]
+enum DisplayMode {
     Binary,
     Hex,
 }

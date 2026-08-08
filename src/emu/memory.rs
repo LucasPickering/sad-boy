@@ -4,7 +4,7 @@ use crate::{
         instruction::Instruction,
         rom::{self, Rom},
     },
-    util::Shared,
+    util::{IntDisplay, Shared},
 };
 use std::{
     any,
@@ -375,8 +375,7 @@ impl Debug for Address {
 
 impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const ADDRESS_WIDTH: usize = 4;
-        write!(f, "0x{:0>ADDRESS_WIDTH$X}", self.0)
+        write!(f, "{}", IntDisplay::hex(self.0))
     }
 }
 

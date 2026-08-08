@@ -9,7 +9,7 @@ use crate::{
         },
         memory::{Address, CARTRIDGE_ROM},
     },
-    util::{Bit, BytesDisplay, Mask},
+    util::{Bit, BytesDisplay, IntDisplay, Mask},
 };
 use color_eyre::eyre::{self, Context};
 use std::{
@@ -548,7 +548,8 @@ fn get_bit_params<const N: usize>(
         opcode & all_masks,
         0,
         "Static opcode must have 0 for all dynamic bytes; \
-        opcode=0b{opcode:0>8b}, masks={masks:?}"
+        opcode={opcode}, masks={masks:?}",
+        opcode = IntDisplay::binary(opcode)
     );
     // If the static bits match the opcode
     if input & !all_masks == opcode {
