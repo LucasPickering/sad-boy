@@ -107,7 +107,7 @@ impl GameBoy {
                     InputEvent::Quit => return,
                     // Any other input event while paused is ignored. Skip the
                     // rest of the loop and go back to waiting for input.
-                    _ => continue,
+                    InputEvent::Button(_) => continue,
                 }
             } else if self.clock.is_frame_start() {
                 // On the first cycle of each frame, check for input
@@ -116,6 +116,7 @@ impl GameBoy {
                         InputEvent::DebugPauseToggle => debug_paused ^= true,
                         InputEvent::DebugStepNext => {} // Does nothing
                         InputEvent::Quit => return,
+                        InputEvent::Button(_) => {}
                     }
                 }
             }
