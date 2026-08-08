@@ -29,11 +29,45 @@ use std::{
     pin::Pin,
     task::{Context, Waker},
 };
+use tracing::{Instrument, info_span};
 
 /// Width of the screen in pixels
 const SCREEN_WIDTH: u8 = 160;
 /// Height of the screen in pixels
 const SCREEN_HEIGHT: u8 = 144;
+
+/// TODO doc
+///
+/// TODO rename?
+///
+/// This has to be implemented as a macro (rather than a struct) because the
+/// futures rely heavily on local scope to manage borrows. The emulator needs
+/// certain accesses between futures that are only possible in a local namespace
+/// where drops and reassignments are more flexible.
+macro_rules! poll {
+    ($fut:ident, $ctx:expr, $init:expr) => {
+        let is_ready = $fut
+            .as_mut()
+            .is_none_or(|fut| fut.as_mut().poll(&mut $ctx).is_ready());
+        if is_ready {
+            // Drop the previous future to release all its references. Then
+            // evaluate $init, which will do whatever between-futures logic it
+            // needs before returning a new future.
+            drop($fut);
+            let mut fut = Box::pin($init);
+            // Poll the new future once to let it initialize itself.
+            // Particularly, this ensures it hits its first clock.wait() and
+            // that the target clock cycle in the wait is correct. If we delay
+            // this first poll to the next loop iteration, it will lose a clock
+            // cycle.
+            //
+            // The poll output doesn't matter here, we're just going to poll
+            // again.
+            let _ = fut.as_mut().poll(&mut $ctx);
+            $fut = Some(fut);
+        }
+    };
+}
 
 /// Game Boy emulator
 #[derive(Debug)]
@@ -83,14 +117,6 @@ impl GameBoy {
 
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
-        // Macros are fun!
-        macro_rules! poll {
-            ($fut:expr) => {
-                $fut.as_mut().is_none_or(|fut| {
-                    fut.as_mut().poll(&mut context).is_ready()
-                })
-            };
-        }
 
         // If the debugger is enabled, is execution paused?
         let mut debug_paused = true;
@@ -100,12 +126,12 @@ impl GameBoy {
         // futures
         let mut debug_info = DebugInfo::default();
         if debug {
-            // Show initial debug state
-            backend.debug(&debug_info);
+            backend.debug(&debug_info); // Show initial debug state
         }
 
         // TODO explain all this shit
         // TODO remove boxing/dynamic shit
+        // TODO can we remove the Option? it's only None on first pass
         let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
 
@@ -116,31 +142,35 @@ impl GameBoy {
             }
 
             // Progress the CPU
-            if poll!(cpu_fut) {
-                drop(cpu_fut);
-
+            poll!(cpu_fut, context, {
                 // Prep the next instruction
+                // TODO split this return value so we're not computing debug
+                // info unless it's needed. Might require caching the next
+                // instruction within the CPU.
                 let (fut, debug) = self.cpu.execute_next(
                     &self.clock,
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
                 );
-                cpu_fut = Some(Box::pin(fut));
                 debug_info.cpu = debug;
-            }
+                fut.instrument(info_span!("CPU"))
+            });
 
             // Progress the GPU
-            if poll!(gpu_fut) {
-                drop(gpu_fut);
-
+            poll!(gpu_fut, context, {
                 // Draw the frame to the screen, then sleep until the end of the
                 // frame so we stay synced up with the emulated clock speed
                 backend.draw(&frame);
                 frame.reset(); // Revert to all black
-                self.clock.sleep();
 
-                gpu_fut = Some(Box::pin(
-                    self.gpu.render_frame(&self.clock, &mut frame),
-                ));
+                self.gpu
+                    .render_frame(&self.clock, &mut frame)
+                    .instrument(info_span!("GPU"))
+            });
+
+            // Update the debugger on each tick
+            if debug {
+                debug_info.clock_cycles = self.clock.cycles();
+                backend.debug(&debug_info);
             }
 
             // Check for input
@@ -167,12 +197,12 @@ impl GameBoy {
                 }
             }
 
-            self.clock.tick();
-            // Update the debugger on each tick
-            if debug {
-                debug_info.clock_cycles = self.clock.cycles();
-                backend.debug(&debug_info);
+            // Sleep at the end of the final tick of each frame to sync back
+            // up with real time
+            if self.clock.is_frame_end() {
+                self.clock.sleep();
             }
+            self.clock.tick();
         }
     }
 }

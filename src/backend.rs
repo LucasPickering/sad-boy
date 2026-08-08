@@ -207,8 +207,8 @@ impl Backend for TerminalBackend {
         let result = self.write_debug(&[
             format_args!("Clock: {}", info.clock_cycles),
             format_args!("=== CPU ==="),
-            format_args!("Prev: {prev_instruction} ({prev_cycles})"),
-            format_args!("Next: {next_instruction} ({next_cycles})"),
+            format_args!("Prev: {prev_instruction} ({prev_cycles} cycles)"),
+            format_args!("Next: {next_instruction} ({next_cycles} cycles)"),
             // Registers
             format_args!("a: {}", Reg(cpu.a)),
             format_args!(

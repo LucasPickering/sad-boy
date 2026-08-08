@@ -72,6 +72,11 @@ impl Clock {
         self.cycles.get().0.is_multiple_of(CYCLES_PER_FRAME.0)
     }
 
+    /// Is the current tick the last of its frame?
+    pub fn is_frame_end(&self) -> bool {
+        (self.cycles.get().0 + 1).is_multiple_of(CYCLES_PER_FRAME.0)
+    }
+
     /// Get the number of cycles completed in the current frame
     pub fn cycles(&self) -> Cycles {
         self.cycles.get()
@@ -103,7 +108,7 @@ impl Clock {
         self.frame_start.set(Instant::now());
     }
 
-    /// Advance the clock one tick
+    /// Advance the clock one cycle
     pub fn tick(&self) {
         self.cycles.update(|cycles| cycles + Cycles(1));
     }
@@ -117,15 +122,16 @@ impl Clock {
     pub async fn wait(&self, cycles: Cycles) {
         let current = self.cycles.get();
         let target = current + cycles;
-        future::poll_fn(|_| {
+        tracing::error!(?current, ?target, "init wait"); // TODO
+        future::poll_fn(move |_| {
             let current = self.cycles.get();
             match current.cmp(&target) {
                 Ordering::Less => Poll::Pending,
                 Ordering::Equal => Poll::Ready(()),
                 Ordering::Greater => {
                     // This *should* be impossible because every future gets
-                    // polled on every clock cycle. Missing
-                    // cycles could affect semantics
+                    // polled on every clock cycle. Missing cycles could affect
+                    // semantics
                     warn!(?current, ?target, "Missed target clock cycle");
                     Poll::Ready(())
                 }
@@ -145,7 +151,7 @@ pub struct Cycles(pub u64);
 
 impl Display for Cycles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} cycles", self.0)
+        write!(f, "{}", self.0)
     }
 }
 

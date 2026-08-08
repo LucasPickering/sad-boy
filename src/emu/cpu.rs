@@ -51,7 +51,9 @@ impl Cpu {
         let (instruction, num_bytes) = memory.get_instruction(pc);
         let cycles = self.exe(&mut memory).cycles(instruction);
 
+        // Snapshot the CPU state for the debugger
         let debug_info = self.debug_info((instruction, cycles));
+        // Defer the actual execution into a future
         let fut = async move {
             // Wait *before* executing so state isn't updated until after the
             // elapsed cycles
