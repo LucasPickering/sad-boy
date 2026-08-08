@@ -15,7 +15,7 @@ use crate::{
     util::{Bit, BitPack, PackedBits, impl_bit_pack},
 };
 use std::{
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     ops::{BitAnd, BitOr, BitXor},
 };
 use tracing::{error, info_span, trace};
@@ -797,6 +797,22 @@ pub struct BcdFlags {
     half_carry: bool,
     /// Did the result overflow the value and wrap?
     carry: bool,
+}
+
+impl Display for BcdFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn b(b: bool) -> &'static str {
+            if b { "1" } else { "0" }
+        }
+        write!(
+            f,
+            "z={},n={},h={},c={}",
+            b(self.zero),
+            b(self.subtract),
+            b(self.half_carry),
+            b(self.carry)
+        )
+    }
 }
 
 impl_bit_pack! {

@@ -195,7 +195,7 @@ impl Backend for TerminalBackend {
             ),
             // Registers
             format_args!("a: {}", V8(cpu.a)),
-            format_args!("f: {}", cpu.f.as_u8()),
+            format_args!("f: {} {}", V8(cpu.f.as_u8()), cpu.f.unpack()),
             format_args!("af: {}", V16(cpu.af)),
             format_args!("b: {}", V8(cpu.b)),
             format_args!("c: {}", V8(cpu.c)),
@@ -208,7 +208,14 @@ impl Backend for TerminalBackend {
             format_args!("hl: {}", V16(cpu.hl)),
             format_args!("pc: {}", cpu.pc),
             format_args!("sp: {}", cpu.sp),
-            format_args!("Int enable: {}", cpu.interrupts_enabled),
+            format_args!(
+                "Interrupts: {}",
+                if cpu.interrupts_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
         ]);
         if let Err(error) = result {
             error!("Error writing debug info to terminal: {error}");
