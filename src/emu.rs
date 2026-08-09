@@ -252,11 +252,15 @@ mod tests {
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);
         // TODO look for logo
-        backend.assert_pixels(&vec![
-            Color::new(255, 255, 255);
-            SCREEN_WIDTH as usize
-                * SCREEN_HEIGHT as usize
-        ]);
+        let expected = FrameBuffer::test(
+            SCREEN_WIDTH.into(),
+            SCREEN_HEIGHT.into(),
+            vec![
+                Color::new(255, 255, 255);
+                SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize
+            ],
+        );
+        backend.assert_pixels(&expected);
         assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
     }
 }

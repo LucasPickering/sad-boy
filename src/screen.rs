@@ -15,12 +15,11 @@ use std::{
     io::{self, Write},
     mem,
     num::NonZero,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 /// Width of the screen in terminal columns
 const WIDTH_TERM: u16 = 80;
-/// Name for the POSIX shared memory block that holds frame data
-const SHM_NAME: &str = "/sad_boy_shm";
 /// Terminal escape code to trigger graphics rendering
 ///
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
@@ -45,6 +44,21 @@ impl FrameBuffer {
         let len = (width * height) as usize;
         Self {
             pixels: vec![Color::BLACK; len].into_boxed_slice(),
+            width,
+            height,
+        }
+    }
+
+    /// Initialize a new frame buffer with static contents for test assertions
+    #[cfg(test)]
+    pub fn test(width: u16, height: u16, pixels: Vec<Color>) -> Self {
+        assert_eq!(
+            pixels.len(),
+            (width * height) as usize,
+            "Pixel length must equal width*height"
+        );
+        Self {
+            pixels: pixels.into_boxed_slice(),
             width,
             height,
         }
@@ -128,7 +142,7 @@ macro_rules! write_message {
         // TODO if this is the only methodology long-term, pre-encode it and
         // remove the base64 dep
         let mut b64_writer = EncoderWriter::new(&mut $out, &STANDARD);
-        b64_writer.write_all($payload.as_bytes())?;
+        b64_writer.write_all($payload)?;
         drop(b64_writer);
 
         write!($out, "{ESCAPE}\\")
@@ -141,8 +155,15 @@ pub fn draw_frame(
     move_cursor: bool,
     mut out: impl io::Write,
 ) -> io::Result<()> {
-    let pixels = &frame.pixels;
-    // Sanity check
+    static FRAME_ID: AtomicUsize = AtomicUsize::new(0);
+    // Each frame needs a unique ID to prevent them for overwriting each other.
+    // This is (hopefully) not an issue during normal emulation, but can be in
+    // tests.
+    let shm_name =
+        format!("/sad_boy_shm{}", FRAME_ID.fetch_add(1, Ordering::Relaxed));
+
+    let pixels = &*frame.pixels;
+    // Sanity checks
     debug_assert_eq!(
         pixels.len(),
         (frame.width as usize) * (frame.height as usize),
@@ -152,9 +173,14 @@ pub fn draw_frame(
     // Use POSIX shared memory to pass the pixel data to the terminal. This
     // is (supposedly) much faster than writing to stdout
     let len = mem::size_of_val(pixels);
-    let _ = nix::sys::mman::shm_unlink(SHM_NAME);
+    debug_assert_eq!(
+        len,
+        frame.pixels.len() * mem::size_of::<Color>(),
+        "Pixel slice is incorrect size. Did you forget to derefence the box?"
+    );
+    let _ = nix::sys::mman::shm_unlink(shm_name.as_str());
     let fd = nix::sys::mman::shm_open(
-        SHM_NAME,
+        shm_name.as_str(),
         OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_EXCL,
         Mode::S_IRUSR | Mode::S_IWUSR,
     )?;
@@ -174,7 +200,7 @@ pub fn draw_frame(
 
     write_message!(
         out,
-        SHM_NAME, // Payload = shared memory name
+        shm_name.as_bytes(), // Payload = shared memory name
         // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
         a = 'T',                    // action = Transmit + draw image
         f = 24,                     // format = RGB

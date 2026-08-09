@@ -292,39 +292,37 @@ impl HeadlessBackend {
     /// Assert that the screen pixels match the given pixel array
     #[cfg(test)]
     #[track_caller]
-    pub fn assert_pixels(&self, expected: &[Color]) {
+    pub fn assert_pixels(&self, expected: &FrameBuffer) {
         use std::fmt::Write;
 
-        let frame = self
+        let actual = self
             .last_frame
             .as_ref()
             .expect("Screen has not been drawn to");
-        let actual = frame.pixels();
         assert_eq!(
-            actual.len(),
-            expected.len(),
+            actual.pixels().len(),
+            expected.pixels().len(),
             "Expected pixel array must be length {} * {}",
-            frame.width(),
-            frame.height()
+            actual.width(),
+            actual.height()
         );
 
         let mut mismatched: Vec<(u16, u16, Color, Color)> = vec![];
         for (i, (color_actual, color_expected)) in
-            actual.iter().zip(expected).enumerate()
+            actual.pixels().iter().zip(expected.pixels()).enumerate()
         {
             if color_actual != color_expected {
                 let i = i as u16;
-                let x = i % frame.width();
-                let y = i / frame.width();
+                let x = i % actual.width();
+                let y = i / actual.width();
                 mismatched.push((x, y, *color_actual, *color_expected));
             }
         }
 
         if !mismatched.is_empty() {
             // Print the screens
-            // TODO the expected overwrites the actual right now
-            self.draw_pixels("Actual", frame);
-            // self.draw_pixels("Expected", expected);
+            self.draw_pixels("Actual", actual);
+            self.draw_pixels("Expected", expected);
 
             // Show mismatched cells, but cap it to prevent absurd amounts of
             // output
