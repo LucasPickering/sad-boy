@@ -5,7 +5,7 @@ mod util;
 
 use crate::{
     backend::{Backend, HeadlessBackend, TerminalBackend},
-    emu::GameBoy,
+    emu::{Address, GameBoy},
     util::{TracingOutput, initialize_tracing},
 };
 use clap::Parser;
@@ -23,13 +23,19 @@ fn main() -> eyre::Result<()> {
 
     let mut game_boy = GameBoy::boot(&args.rom)?;
 
+    // Set up debugger
+    game_boy.set_debug(args.debug);
+    for address in args.breakpoint {
+        game_boy.set_breakpoint(address);
+    }
+
     // Select hardware based on the input flags
     let mut backend: Box<dyn Backend> = if args.headless {
         Box::new(HeadlessBackend::new(|_| false))
     } else {
         Box::new(TerminalBackend::new()?)
     };
-    game_boy.run(&mut *backend, args.debug);
+    game_boy.run(&mut *backend);
 
     Ok(())
 }
@@ -39,9 +45,12 @@ fn main() -> eyre::Result<()> {
 struct Args {
     /// Path to the ROM file to load
     rom: PathBuf,
-    /// Expose emulator internals and controls
-    #[clap(long)]
+    /// TODO
+    #[clap(long, short)]
     debug: bool,
+    /// TODO
+    #[clap(long, short)]
+    breakpoint: Vec<Address>,
     /// Run the emulator without a screen
     ///
     /// This is useful for testing the CPU. Tracing will be printed to stderr.

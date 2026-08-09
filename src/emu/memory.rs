@@ -15,8 +15,10 @@ use std::{
     ops::Add,
     ptr,
     range::RangeInclusive,
+    str::FromStr,
 };
 use tracing::{error, info};
+use winnow::{Parser, error::ContextError};
 
 /// Code executed at boot, before entering the ROM
 ///
@@ -376,6 +378,17 @@ impl Debug for Address {
 impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", IntDisplay::hex(self.0))
+    }
+}
+
+impl FromStr for Address {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        winnow::ascii::hex_uint::<_, u16, ContextError>
+            .parse(s)
+            .map(Self)
+            .map_err(|e| e.to_string())
     }
 }
 

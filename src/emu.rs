@@ -11,6 +11,7 @@ mod rom;
 
 pub use clock::{Clock, Cycles};
 pub use instruction::Instruction;
+pub use memory::Address;
 
 use crate::{
     backend::{Backend, FrameBuffer},
@@ -81,6 +82,11 @@ pub struct GameBoy {
     /// Read-only memory from the cartridge
     rom: Rom,
     memory: Memory,
+    // Debug state
+    /// Debug mode enabled/disabled
+    debug: bool,
+    /// Places to pause the debugger
+    breakpoints: Vec<Address>,
 }
 
 impl GameBoy {
@@ -103,17 +109,36 @@ impl GameBoy {
             gpu: Gpu::default(),
             rom,
             memory: Memory::default(),
+
+            debug: false,
+            breakpoints: vec![],
         }
+    }
+
+    /// Enable/disable debug mode
+    ///
+    /// If debug mode is enabled, the emulator will start paused when
+    /// [Self::run] is called, and [Backend::debug] will be called on each
+    /// tick.
+    pub fn set_debug(&mut self, debug: bool) {
+        self.debug = debug;
+    }
+
+    /// Set a breakpoint at the given address.
+    ///
+    /// When the CPU reaches this address (i.e. when `pc == address`), the
+    /// debugger will pause.
+    ///
+    /// **If debug mode is disabled, this does nothing.**
+    pub fn set_breakpoint(&mut self, address: Address) {
+        self.breakpoints.push(address);
     }
 
     /// Run the Game Boy indefinitely
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    ///
-    /// Enabling the `debug` flag will start the emulator paused. It will also
-    /// write additional information about the emulator state to the screen.
-    pub fn run(&mut self, backend: &mut dyn Backend, debug: bool) {
+    pub fn run(&mut self, backend: &mut dyn Backend) {
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         backend.draw(&frame); // Initialize the screen
@@ -127,8 +152,13 @@ impl GameBoy {
         // updated imperatively between instructions/frames so that it can be
         // read on any clock tick, regardless of the ownership state of various
         // futures
-        let mut debug_info = DebugInfo::default();
-        if debug {
+        let mut debug_info = DebugInfo {
+            debug_paused,
+            breakpoints: self.breakpoints.clone(),
+            clock_cycles: Cycles(0),
+            cpu: CpuDebugInfo::default(),
+        };
+        if self.debug {
             backend.debug(&debug_info); // Show initial debug state
         }
 
@@ -150,6 +180,12 @@ impl GameBoy {
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
                 // Update debug info between instructions
                 debug_info.cpu = self.cpu.debug_info(&mut memory_bus);
+
+                // Check if we've hit any breakpoints
+                if self.debug && self.breakpoints.contains(&debug_info.cpu.pc) {
+                    debug_paused = true;
+                }
+
                 self.cpu
                     .execute_next(&self.clock, memory_bus)
                     .instrument(info_span!("CPU"))
@@ -168,13 +204,13 @@ impl GameBoy {
             });
 
             // Update the debugger on each tick
-            if debug {
+            if self.debug {
                 debug_info.clock_cycles = self.clock.cycles();
                 backend.debug(&debug_info);
             }
 
             // Check for input
-            if debug && debug_paused {
+            if self.debug && debug_paused {
                 // If paused, we'll just block for input
                 match backend.next_event_blocking() {
                     // Unpausing breaks out of this loop
@@ -208,8 +244,9 @@ impl GameBoy {
 }
 
 /// Exposed debug state for the emulator
-#[derive(Default)]
 pub struct DebugInfo {
+    pub debug_paused: bool,
+    pub breakpoints: Vec<Address>,
     pub clock_cycles: Cycles,
     pub cpu: CpuDebugInfo,
 }
@@ -253,7 +290,7 @@ mod tests {
             debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
 
-        emu.run(&mut backend, false);
+        emu.run(&mut backend);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);

@@ -21,7 +21,7 @@ signal-hook = {version = "0.4.4", default-features = false}
 termion = {version = "4.0.6", default-features = false}
 tracing = {version = "0.1.44", default-features = false}
 tracing-subscriber = {version = "0.3.23", default-features = false, features = ["ansi", "fmt", "registry"]}
-winnow = {version = "1.0.3", default-features = false, features = ["binary", "parser", "std"]}
+winnow = {version = "1.0.3", default-features = false, features = ["ascii", "binary", "parser", "std"]}
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
