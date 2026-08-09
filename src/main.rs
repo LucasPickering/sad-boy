@@ -1,7 +1,6 @@
 mod backend;
 mod emu;
 mod input;
-mod screen;
 mod util;
 
 use crate::{

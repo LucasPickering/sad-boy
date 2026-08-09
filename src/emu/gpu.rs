@@ -4,12 +4,12 @@
 //! physical drawing is done in [crate::screen].
 
 use crate::{
+    backend::{Color, FrameBuffer},
     emu::{
         SCREEN_WIDTH,
         clock::{Clock, Cycles},
         memory::{self, Address, MemoryBlock, MemoryRead, MemoryWrite},
     },
-    screen::{Color, FrameBuffer},
     util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};

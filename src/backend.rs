@@ -1,33 +1,14 @@
-//! Graphics bindings for the terminal
+//! Hardware abstractions (input and screens)
+//!
+//! This module is emulator-agnostic. The backend can be used to read input
+//! and draw output for any emulated system.
 
-#[cfg(test)]
-use crate::screen::Color;
-use crate::{
-    emu::{Cycles, DebugInfo, Instruction},
-    input::InputEvent,
-    screen::{FrameBuffer, draw_frame},
-    util::IntDisplay,
-};
-use signal_hook::consts::signal;
-use std::{
-    fmt::{self, Display},
-    io::{self, Stdout, Write},
-    panic,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
-};
-use termion::{
-    clear, cursor,
-    event::Key,
-    input::TermRead,
-    raw::{IntoRawMode, RawTerminal},
-    screen::{AlternateScreen, IntoAlternateScreen, ToMainScreen},
-};
-use tracing::error;
+mod terminal;
+
+pub use terminal::TerminalBackend;
+
+use crate::{emu::DebugInfo, input::InputEvent};
+use std::fmt::{self, Display};
 
 /// An interface for a screen and input
 ///
@@ -56,219 +37,6 @@ pub trait Backend {
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
     fn should_quit(&self, debug_info: &DebugInfo) -> bool;
-}
-
-/// A [Backend] implementation to draw to the terminal
-///
-/// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
-/// to draw to stdout. It reads input from stdin.
-pub struct TerminalBackend {
-    /// Queue of events to be handled
-    ///
-    /// A background thread listens for input events and pushes them into this
-    /// queue. The main loop pops off the queue via [Self::next_event].
-    input_rx: mpsc::Receiver<InputEvent>,
-    /// Channel to write output to (stdout)
-    out: AlternateScreen<RawTerminal<Stdout>>,
-    /// Flag set by the signal handler when a termination signal is received
-    quit: Arc<AtomicBool>,
-}
-
-impl TerminalBackend {
-    /// Initialize a new screen adapter with the given pixel dimensions
-    pub fn new() -> io::Result<Self> {
-        Self::init_panic_hook()?;
-
-        let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
-        // Move the cursor to the top-left
-        write!(out, "{}", cursor::Goto(1, 1))?;
-
-        // Start a signal listener for SIGINT and friends.
-        // We need to catch signals to allow the screen to clean up before exit.
-        let quit = Arc::new(AtomicBool::new(false));
-        let signals = [
-            signal::SIGINT,
-            signal::SIGHUP,
-            signal::SIGQUIT,
-            signal::SIGTERM,
-        ];
-        for signal in signals {
-            signal_hook::flag::register(signal, quit.clone()).unwrap();
-        }
-
-        // Listen for input in a background thread. Termion only exposes a fully
-        // blocking interator for input handling, so we can't access it in the
-        // main thread. The background thread will put any relevant events in
-        // the queue.
-        let (input_tx, input_rx) = mpsc::channel();
-        thread::spawn(move || Self::handle_input(input_tx));
-
-        Ok(Self {
-            input_rx,
-            out,
-            quit,
-        })
-    }
-
-    /// Monitor stdin for input
-    ///
-    /// When a relevant event is received, it's pushed into the given channel.
-    fn handle_input(input_tx: mpsc::Sender<InputEvent>) {
-        for result in io::stdin().keys() {
-            match result.map(Self::map_key) {
-                Ok(Some(event)) => {
-                    // If the channel is closed, we can just exit
-                    if input_tx.send(event).is_err() {
-                        break;
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => error!("Error reading input: {error}"),
-            }
-        }
-    }
-
-    /// Map a key event to an [InputEvent]
-    fn map_key(key: Key) -> Option<InputEvent> {
-        match key {
-            Key::Char(' ') => Some(InputEvent::DebugPauseToggle),
-            Key::Right => Some(InputEvent::DebugStepNext),
-            Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
-            _ => None,
-        }
-    }
-
-    /// Initialize a panic hook that will reset the terminal state on panic
-    ///
-    /// The termion output wrappers will reset termianl state on _drop_, but
-    /// drop handlers aren't called on panic.
-    fn init_panic_hook() -> io::Result<()> {
-        let raw_output = io::stdout().into_raw_mode()?;
-        let original_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |panic_info| {
-            // intentionally ignore errors here since we're already in a panic
-            let _ = raw_output.suspend_raw_mode();
-            let _ = write!(io::stdout(), "{ToMainScreen}");
-            let _ = io::stdout().flush();
-            original_hook(panic_info);
-        }));
-        Ok(())
-    }
-
-    /// Write debug info to the terminal
-    fn write_debug(&mut self, lines: &[fmt::Arguments]) -> io::Result<()> {
-        // TODO make start height dynamic
-        for (line, y) in lines.iter().zip(1..) {
-            // Terminal is in raw mode so we have to move the cursor and clear
-            // the line manually
-            write!(
-                self.out,
-                "{goto}{clear}{line}",
-                goto = cursor::Goto(1, y),
-                clear = clear::CurrentLine,
-            )?;
-        }
-        self.out.flush()
-    }
-}
-
-impl Backend for TerminalBackend {
-    fn debug(&mut self, info: &DebugInfo) {
-        struct Reg<T>(T);
-
-        impl Display for Reg<u8> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "{v} ({hex}, {bin})",
-                    v = self.0,
-                    hex = IntDisplay::hex(self.0),
-                    bin = IntDisplay::binary(self.0),
-                )
-            }
-        }
-
-        impl Display for Reg<u16> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "{v} ({hex})",
-                    v = self.0,
-                    hex = IntDisplay::hex(self.0),
-                )
-            }
-        }
-
-        let cpu = &info.cpu;
-        let (prev_instruction, prev_cycles, prev_bytes) = cpu
-            .previous_instruction
-            .unwrap_or((Instruction::Invalid, Cycles(0), 0));
-        let (next_instruction, next_cycles, next_bytes) = cpu.next_instruction;
-        let result = self.write_debug(&[
-            format_args!("Clock: {} cy", info.clock_cycles),
-            format_args!("=== CPU ==="),
-            format_args!(
-                "Prev: {prev_instruction} ({prev_cycles} cy, {prev_bytes} B)"
-            ),
-            format_args!(
-                "Next: {next_instruction} ({next_cycles} cy, {next_bytes} B)"
-            ),
-            // Registers
-            format_args!("a: {}", Reg(cpu.a)),
-            format_args!(
-                "f: {} {}",
-                IntDisplay::hex(cpu.f.as_u8()),
-                cpu.f.unpack()
-            ),
-            format_args!("af: {}", Reg(cpu.af)),
-            format_args!("b: {}", Reg(cpu.b)),
-            format_args!("c: {}", Reg(cpu.c)),
-            format_args!("bc: {}", Reg(cpu.bc)),
-            format_args!("d: {}", Reg(cpu.d)),
-            format_args!("e: {}", Reg(cpu.e)),
-            format_args!("de: {}", Reg(cpu.de)),
-            format_args!("h: {}", Reg(cpu.h)),
-            format_args!("l: {}", Reg(cpu.l)),
-            format_args!("hl: {}", Reg(cpu.hl)),
-            format_args!("pc: {}", cpu.pc),
-            format_args!("sp: {}", cpu.sp),
-            format_args!(
-                "Interrupts: {}",
-                if cpu.interrupts_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            ),
-        ]);
-        if let Err(error) = result {
-            error!("Error writing debug info to terminal: {error}");
-        }
-    }
-
-    fn draw(&mut self, frame: &FrameBuffer) {
-        if let Err(error) = draw_frame(frame, false, &mut self.out) {
-            error!("Error drawing to terminal: {error}");
-        }
-    }
-
-    fn next_event(&mut self) -> Option<InputEvent> {
-        // Grab the next event off the queue
-        match self.input_rx.try_recv() {
-            Ok(event) => Some(event),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => todo!(),
-        }
-    }
-
-    fn next_event_blocking(&mut self) -> InputEvent {
-        // Grab the next event off the queue
-        self.input_rx.recv().expect("TODO")
-    }
-
-    fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
-        self.quit.load(Ordering::Relaxed)
-    }
 }
 
 /// An in-memory [Backend] for testing and headless operation
@@ -343,9 +111,11 @@ impl HeadlessBackend {
     /// Print a screen to stderr for an assertion
     #[cfg(test)]
     fn draw_pixels(&self, title: &str, frame: &FrameBuffer) {
-        let mut stderr = io::stderr();
+        use std::io::Write;
+
+        let mut stderr = std::io::stderr();
         writeln!(stderr, "{title}:").unwrap();
-        draw_frame(frame, true, &mut stderr).unwrap();
+        terminal::draw_frame(frame, true, &mut stderr).unwrap();
         writeln!(stderr).unwrap();
     }
 }
@@ -367,5 +137,104 @@ impl Backend for HeadlessBackend {
 
     fn should_quit(&self, debug_info: &DebugInfo) -> bool {
         (self.should_quit)(debug_info)
+    }
+}
+
+/// In-memory buffer for a frame to be drawn
+#[derive(Clone, Debug)]
+pub struct FrameBuffer {
+    /// Pixel data in column-major format
+    ///
+    /// Invariant: `len() == self.width * self.height`
+    pixels: Box<[Color]>,
+    /// Pixel width of the frame
+    width: u16,
+    /// Pixel height of the frame
+    height: u16,
+}
+
+impl FrameBuffer {
+    /// Initialize a new frame buffer
+    pub fn new(width: u16, height: u16) -> Self {
+        let len = (width * height) as usize;
+        Self {
+            pixels: vec![Color::BLACK; len].into_boxed_slice(),
+            width,
+            height,
+        }
+    }
+
+    /// Initialize a new frame buffer with static contents for test assertions
+    #[cfg(test)]
+    pub fn test(width: u16, height: u16, pixels: Vec<Color>) -> Self {
+        assert_eq!(
+            pixels.len(),
+            (width * height) as usize,
+            "Pixel length must equal width*height"
+        );
+        Self {
+            pixels: pixels.into_boxed_slice(),
+            width,
+            height,
+        }
+    }
+
+    /// Get frame pixels as a slice
+    pub fn pixels(&self) -> &[Color] {
+        &self.pixels
+    }
+
+    /// Number of columns of pixels in the frame
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// Number of rows of pixels in the frame
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
+    /// Set the value of a single pixel
+    pub fn set(&mut self, x: u16, y: u16, color: Color) {
+        assert!(
+            x < self.width,
+            "x {x} must be less than width {width}",
+            width = self.width
+        );
+        assert!(
+            y < self.height,
+            "y {y} must be less than height {height}",
+            height = self.height
+        );
+        let index = (y * self.width + x) as usize;
+        self.pixels[index] = color;
+    }
+
+    /// Reset all pixels to black
+    pub fn reset(&mut self) {
+        self.pixels.fill(Color::BLACK);
+    }
+}
+
+/// 24-bit RGB color
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)] // We treat this as raw bytes when sending pixels over
+pub struct Color {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+impl Color {
+    pub const BLACK: Self = Self::new(0, 0, 0);
+
+    pub const fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+}
+
+impl Display for Color {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{},{},{}", self.red, self.green, self.blue)
     }
 }

@@ -13,7 +13,7 @@ pub use clock::{Clock, Cycles};
 pub use instruction::Instruction;
 
 use crate::{
-    backend::Backend,
+    backend::{Backend, FrameBuffer},
     emu::{
         cpu::{Cpu, CpuDebugInfo},
         gpu::Gpu,
@@ -21,7 +21,6 @@ use crate::{
         rom::Rom,
     },
     input::InputEvent,
-    screen::FrameBuffer,
 };
 use color_eyre::eyre;
 use std::{
@@ -214,7 +213,10 @@ pub struct DebugInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{backend::HeadlessBackend, emu::clock::Cycles, screen::Color};
+    use crate::{
+        backend::{Color, HeadlessBackend},
+        emu::clock::Cycles,
+    };
     use pretty_assertions::assert_eq;
 
     /// Encoded Nintendo logo and TM symbol
