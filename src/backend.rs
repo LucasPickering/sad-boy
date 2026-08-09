@@ -15,10 +15,13 @@ use std::fmt::{self, Display};
 /// This is an abstraction over hardware. The backend could be a terminal, web
 /// browser, etc.
 pub trait Backend {
-    /// TODO
+    /// Display emulator debug state to the user
+    ///
+    /// It's up to the implementation to decide how this information is
+    /// presented.
     fn debug(&mut self, info: &DebugInfo);
 
-    /// Draw the given frame buffer to the terminal
+    /// Draw the given frame buffer to the screen
     fn draw(&mut self, frame: &FrameBuffer);
 
     /// Get the next queued input event
