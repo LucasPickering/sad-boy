@@ -143,16 +143,13 @@ impl GameBoy {
 
             // Progress the CPU
             poll!(cpu_fut, context, {
-                // Prep the next instruction
-                // TODO split this return value so we're not computing debug
-                // info unless it's needed. Might require caching the next
-                // instruction within the CPU.
-                let (fut, debug) = self.cpu.execute_next(
-                    &self.clock,
-                    MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
-                );
-                debug_info.cpu = debug;
-                fut.instrument(info_span!("CPU"))
+                let mut memory_bus =
+                    MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
+                // Update debug info between instructions
+                debug_info.cpu = self.cpu.debug_info(&mut memory_bus);
+                self.cpu
+                    .execute_next(&self.clock, memory_bus)
+                    .instrument(info_span!("CPU"))
             });
 
             // Progress the GPU

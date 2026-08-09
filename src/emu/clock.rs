@@ -122,7 +122,6 @@ impl Clock {
     pub async fn wait(&self, cycles: Cycles) {
         let current = self.cycles.get();
         let target = current + cycles;
-        tracing::error!(?current, ?target, "init wait"); // TODO
         future::poll_fn(move |_| {
             let current = self.cycles.get();
             match current.cmp(&target) {
@@ -166,13 +165,6 @@ impl Add for Cycles {
 impl AddAssign for Cycles {
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
-    }
-}
-
-// TODO delete?
-impl From<u64> for Cycles {
-    fn from(value: u64) -> Self {
-        Self(value)
     }
 }
 

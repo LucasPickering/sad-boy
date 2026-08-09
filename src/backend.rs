@@ -200,15 +200,19 @@ impl Backend for TerminalBackend {
         }
 
         let cpu = &info.cpu;
-        let (prev_instruction, prev_cycles) = cpu
+        let (prev_instruction, prev_cycles, prev_bytes) = cpu
             .previous_instruction
-            .unwrap_or((Instruction::Invalid, Cycles(0)));
-        let (next_instruction, next_cycles) = cpu.next_instruction;
+            .unwrap_or((Instruction::Invalid, Cycles(0), 0));
+        let (next_instruction, next_cycles, next_bytes) = cpu.next_instruction;
         let result = self.write_debug(&[
-            format_args!("Clock: {}", info.clock_cycles),
+            format_args!("Clock: {} cy", info.clock_cycles),
             format_args!("=== CPU ==="),
-            format_args!("Prev: {prev_instruction} ({prev_cycles} cycles)"),
-            format_args!("Next: {next_instruction} ({next_cycles} cycles)"),
+            format_args!(
+                "Prev: {prev_instruction} ({prev_cycles} cy, {prev_bytes} B)"
+            ),
+            format_args!(
+                "Next: {next_instruction} ({next_cycles} cy, {next_bytes} B)"
+            ),
             // Registers
             format_args!("a: {}", Reg(cpu.a)),
             format_args!(

@@ -30,10 +30,13 @@ pub struct Cpu {
     registers: Registers,
     /// IME flag
     interrupts_enabled: bool,
-    /// Mostly recently executed instruction and the number of cycles it took
+    /// Most recently executed instruction
+    ///
+    /// Also includes the number of cycles it took and the size of the
+    /// instruction in bytes.
     ///
     /// `None` only on startup.
-    previous_instruction: Option<(Instruction, Cycles)>,
+    previous_instruction: Option<(Instruction, Cycles, usize)>,
 }
 
 impl Cpu {
@@ -41,54 +44,43 @@ impl Cpu {
     ///
     /// This will take a variable number of CPU cycles based on the instruction
     /// executed.
-    pub fn execute_next(
+    pub async fn execute_next(
         &mut self,
         clock: &Clock,
         mut memory: MemoryBus<'_>,
-    ) -> (impl Future<Output = ()>, CpuDebugInfo) {
+    ) {
         // Parse the next instruction and check how many cycles it will take
         let pc = self.registers.pc;
         let (instruction, num_bytes) = memory.get_instruction(pc);
         let cycles = self.exe(&mut memory).cycles(instruction);
 
-        // Snapshot the CPU state for the debugger
-        let debug_info = self.debug_info((instruction, cycles));
-        // Defer the actual execution into a future
-        let fut = async move {
-            // Wait *before* executing so state isn't updated until after the
-            // elapsed cycles
-            clock.wait(cycles).await;
-            self.exe(&mut memory).execute(instruction);
+        // Wait *before* executing so state isn't updated until after the
+        // elapsed cycles
+        clock.wait(cycles).await;
+        self.exe(&mut memory).execute(instruction);
 
-            // If the instruction didn't modify the PC (e.g. jumps), then
-            // advance it automatically
-            if self.registers.pc == pc {
-                self.registers.pc.0 += num_bytes as u16;
-            }
-
-            self.previous_instruction = Some((instruction, cycles));
-        };
-        (fut, debug_info)
-    }
-
-    fn exe<'cpu, 'mem>(
-        &'cpu mut self,
-        memory: &'cpu mut MemoryBus<'mem>,
-    ) -> CpuExe<'cpu, 'mem> {
-        CpuExe {
-            registers: &mut self.registers,
-            interrupts_enabled: &mut self.interrupts_enabled,
-            memory,
+        // If the instruction didn't modify the PC (e.g. jumps), then
+        // advance it automatically
+        if self.registers.pc == pc {
+            self.registers.pc.0 += num_bytes as u16;
         }
+
+        self.previous_instruction = Some((instruction, cycles, num_bytes));
     }
 
     /// Get debug info about the CPU
     ///
-    /// This is a read-only summary of current CPU state for the debugger.
-    fn debug_info(
-        &self,
-        next_instruction: (Instruction, Cycles),
-    ) -> CpuDebugInfo {
+    /// This is a read-only summary of current CPU state for the debugger. This
+    /// needs the memory bus to load the next instruction from memory. That
+    /// reference is `mut` so it can cache the instruction if needed.
+    pub fn debug_info(&mut self, memory: &mut MemoryBus) -> CpuDebugInfo {
+        // Parse the next instruction from memory. This seems duplicative, but
+        // it will be cached within the memory bus so it won't be parsed during
+        // the next execution.
+        let (instruction, num_bytes) =
+            memory.get_instruction(self.registers.pc);
+        let cycles = self.exe(memory).cycles(instruction);
+
         let reg = &self.registers;
         CpuDebugInfo {
             a: reg.a,
@@ -107,7 +99,18 @@ impl Cpu {
             sp: reg.sp,
             interrupts_enabled: self.interrupts_enabled,
             previous_instruction: self.previous_instruction,
-            next_instruction,
+            next_instruction: (instruction, cycles, num_bytes),
+        }
+    }
+
+    fn exe<'cpu, 'mem>(
+        &'cpu mut self,
+        memory: &'cpu mut MemoryBus<'mem>,
+    ) -> CpuExe<'cpu, 'mem> {
+        CpuExe {
+            registers: &mut self.registers,
+            interrupts_enabled: &mut self.interrupts_enabled,
+            memory,
         }
     }
 }
@@ -132,12 +135,18 @@ pub struct CpuDebugInfo {
 
     /// Interrupt enable flag
     pub interrupts_enabled: bool,
-    /// Mostly recently executed instruction and the number of cycles it took
+    /// Most recently executed instruction
+    ///
+    /// Also includes the number of cycles it took and the size of the
+    /// instruction in bytes.
     ///
     /// `None` only on startup.
-    pub previous_instruction: Option<(Instruction, Cycles)>,
-    /// Next instruction to execute and the number of cycles it will take
-    pub next_instruction: (Instruction, Cycles),
+    pub previous_instruction: Option<(Instruction, Cycles, usize)>,
+    /// Next instruction to execute
+    ///
+    /// Also includes the number of cycles it will take and the size of the
+    /// instruction in bytes.
+    pub next_instruction: (Instruction, Cycles, usize),
 }
 
 impl Default for CpuDebugInfo {
@@ -159,7 +168,7 @@ impl Default for CpuDebugInfo {
             sp: Address(0),
             interrupts_enabled: false,
             previous_instruction: None,
-            next_instruction: (Instruction::Nop, Cycles(0)),
+            next_instruction: (Instruction::Nop, Cycles(0), 0),
         }
     }
 }
@@ -943,6 +952,7 @@ pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
     previous_instruction: Some((
         Instruction::Ldh(LoadHigh::ConstA(0x50)),
         Cycles(3),
+        2,
     )),
 };
 
