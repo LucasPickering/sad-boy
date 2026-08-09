@@ -10,13 +10,14 @@ mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};
+pub use cpu::CpuDebugInfo;
 pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
     backend::{Backend, FrameBuffer},
     emu::{
-        cpu::{Cpu, CpuDebugInfo},
+        cpu::Cpu,
         gpu::Gpu,
         memory::{Memory, MemoryBus},
         rom::Rom,

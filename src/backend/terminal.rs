@@ -2,11 +2,12 @@
 
 use crate::{
     backend::{Backend, FrameBuffer},
-    emu::{Cycles, DebugInfo, Instruction},
+    emu::{CpuDebugInfo, Cycles, DebugInfo, Instruction},
     input::InputEvent,
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
+use itertools::Itertools;
 use nix::{
     fcntl::OFlag,
     libc,
@@ -14,6 +15,14 @@ use nix::{
         mman::{MapFlags, ProtFlags},
         stat::Mode,
     },
+};
+use ratatui::{
+    Terminal,
+    layout::{Layout, Rect},
+    prelude::{Buffer, TermionBackend},
+    symbols::merge::MergeStrategy,
+    text::Text,
+    widgets::{Block, BorderType, Borders, Widget},
 };
 use signal_hook::consts::signal;
 use std::{
@@ -31,7 +40,7 @@ use std::{
     thread,
 };
 use termion::{
-    clear, cursor,
+    cursor,
     event::Key,
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
@@ -59,7 +68,7 @@ pub struct TerminalBackend {
     /// queue. The main loop pops off the queue via [Self::next_event].
     input_rx: mpsc::Receiver<InputEvent>,
     /// Channel to write output to (stdout)
-    out: AlternateScreen<RawTerminal<Stdout>>,
+    terminal: Terminal<TermionBackend<AlternateScreen<RawTerminal<Stdout>>>>,
     /// Flag set by the signal handler when a termination signal is received
     quit: Arc<AtomicBool>,
 }
@@ -73,8 +82,8 @@ impl TerminalBackend {
         Self::init_panic_hook()?;
 
         let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
-        // Move the cursor to the top-left
-        write!(out, "{}", cursor::Goto(1, 1))?;
+        write!(out, "{}", cursor::Hide)?;
+        let terminal = Terminal::new(TermionBackend::new(out))?;
 
         // Start a signal listener for SIGINT and friends.
         // We need to catch signals to allow the screen to clean up before exit.
@@ -98,7 +107,7 @@ impl TerminalBackend {
 
         Ok(Self {
             input_rx,
-            out,
+            terminal,
             quit,
         })
     }
@@ -147,28 +156,85 @@ impl TerminalBackend {
         }));
         Ok(())
     }
-
-    /// Write debug info to the terminal
-    fn write_debug(&mut self, lines: &[fmt::Arguments]) -> io::Result<()> {
-        // Write each line, starting at the bottom of the emulator screen
-        for (line, y) in lines.iter().zip(TERM_HEIGHT + 1..) {
-            // Terminal is in raw mode so we have to move the cursor and clear
-            // the line manually
-            write!(
-                self.out,
-                "{goto}{clear}{line}",
-                goto = cursor::Goto(1, y),
-                clear = clear::CurrentLine,
-            )?;
-        }
-        // Reset cursor back to the start
-        write!(self.out, "{}", cursor::Goto(1, 1))?;
-        self.out.flush()
-    }
 }
 
 impl Backend for TerminalBackend {
     fn debug(&mut self, info: &DebugInfo) {
+        // Debug UI is drawn via ratatui
+        let result = self
+            .terminal
+            .draw(|frame| frame.render_widget(info, frame.area()));
+        if let Err(error) = result {
+            error!("Error drawing to terminal: {error}");
+        }
+    }
+
+    fn draw(&mut self, frame: &FrameBuffer) {
+        // This rendering does *not* use ratatui, because we need to write
+        // directly to the output
+        let mut f = || {
+            // Shitty try block
+            write!(self.terminal.backend_mut(), "{}", cursor::Goto(1, 1))?;
+            draw_frame(frame, false, self.terminal.backend_mut())
+        };
+        if let Err(error) = f() {
+            error!("Error drawing to terminal: {error}");
+        }
+    }
+
+    fn next_event(&mut self) -> Option<InputEvent> {
+        // Grab the next event off the queue
+        match self.input_rx.try_recv() {
+            Ok(event) => Some(event),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => todo!(),
+        }
+    }
+
+    fn next_event_blocking(&mut self) -> InputEvent {
+        // Grab the next event off the queue
+        self.input_rx.recv().expect("TODO")
+    }
+
+    fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
+        self.quit.load(Ordering::Relaxed)
+    }
+}
+
+impl Widget for &DebugInfo {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Move down below the screen area
+        let area = Rect::new(
+            0,
+            TERM_HEIGHT,
+            area.width,
+            area.height - TERM_HEIGHT + 1,
+        );
+        let [basic_area, cpu_area] =
+            Layout::horizontal([32, 32]).spacing(-1).areas(area);
+
+        let basic_area = panel("Basic", basic_area, buf);
+        Text::from_iter([
+            format!("CLOCK: {} cy", self.clock_cycles),
+            format!(
+                "DBG: {}",
+                if self.debug_paused {
+                    "PAUSED"
+                } else {
+                    "RUNNING"
+                }
+            ),
+            format!("BKP: {}", self.breakpoints.iter().join(", ")),
+        ])
+        .render(basic_area, buf);
+
+        self.cpu.render(cpu_area, buf);
+    }
+}
+
+impl Widget for &CpuDebugInfo {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        /// Register display helper
         struct Reg<T>(T);
 
         impl Display for Reg<u8> {
@@ -194,76 +260,60 @@ impl Backend for TerminalBackend {
             }
         }
 
-        let cpu = &info.cpu;
-        let (prev_instruction, prev_cycles, prev_bytes) = cpu
+        let area = panel("CPU", area, buf);
+
+        let (prev_instruction, prev_cycles, prev_bytes) = self
             .previous_instruction
             .unwrap_or((Instruction::Invalid, Cycles(0), 0));
-        let (next_instruction, next_cycles, next_bytes) = cpu.next_instruction;
-        let result = self.write_debug(&[
-            format_args!("Clock: {} cy", info.clock_cycles),
-            format_args!("=== CPU ==="),
-            format_args!(
-                "Prev: {prev_instruction} ({prev_cycles} cy, {prev_bytes} B)"
+        let (next_instruction, next_cycles, next_bytes) = self.next_instruction;
+        let lines = [
+            format!(
+                "PREV: {prev_instruction} ({prev_cycles} cy, {prev_bytes} B)"
             ),
-            format_args!(
-                "Next: {next_instruction} ({next_cycles} cy, {next_bytes} B)"
+            format!(
+                "NEXT: {next_instruction} ({next_cycles} cy, {next_bytes} B)"
             ),
             // Registers
-            format_args!("a: {}", Reg(cpu.a)),
-            format_args!(
+            format!("a: {}", Reg(self.a)),
+            format!(
                 "f: {} {}",
-                IntDisplay::hex(cpu.f.as_u8()),
-                cpu.f.unpack()
+                IntDisplay::hex(self.f.as_u8()),
+                self.f.unpack()
             ),
-            format_args!("af: {}", Reg(cpu.af)),
-            format_args!("b: {}", Reg(cpu.b)),
-            format_args!("c: {}", Reg(cpu.c)),
-            format_args!("bc: {}", Reg(cpu.bc)),
-            format_args!("d: {}", Reg(cpu.d)),
-            format_args!("e: {}", Reg(cpu.e)),
-            format_args!("de: {}", Reg(cpu.de)),
-            format_args!("h: {}", Reg(cpu.h)),
-            format_args!("l: {}", Reg(cpu.l)),
-            format_args!("hl: {}", Reg(cpu.hl)),
-            format_args!("pc: {}", cpu.pc),
-            format_args!("sp: {}", cpu.sp),
-            format_args!(
-                "Interrupts: {}",
-                if cpu.interrupts_enabled {
-                    "enabled"
+            format!("af: {}", Reg(self.af)),
+            format!("b: {}", Reg(self.b)),
+            format!("c: {}", Reg(self.c)),
+            format!("bc: {}", Reg(self.bc)),
+            format!("d: {}", Reg(self.d)),
+            format!("e: {}", Reg(self.e)),
+            format!("de: {}", Reg(self.de)),
+            format!("h: {}", Reg(self.h)),
+            format!("l: {}", Reg(self.l)),
+            format!("hl: {}", Reg(self.hl)),
+            format!("pc: {}", self.pc),
+            format!("sp: {}", self.sp),
+            format!(
+                "INT: {}",
+                if self.interrupts_enabled {
+                    "ENABLE"
                 } else {
-                    "disabled"
+                    "DISABLE"
                 }
             ),
-        ]);
-        if let Err(error) = result {
-            error!("Error writing debug info to terminal: {error}");
-        }
+        ];
+        Text::from_iter(lines).render(area, buf);
     }
+}
 
-    fn draw(&mut self, frame: &FrameBuffer) {
-        if let Err(error) = draw_frame(frame, false, &mut self.out) {
-            error!("Error drawing to terminal: {error}");
-        }
-    }
-
-    fn next_event(&mut self) -> Option<InputEvent> {
-        // Grab the next event off the queue
-        match self.input_rx.try_recv() {
-            Ok(event) => Some(event),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => todo!(),
-        }
-    }
-
-    fn next_event_blocking(&mut self) -> InputEvent {
-        // Grab the next event off the queue
-        self.input_rx.recv().expect("TODO")
-    }
-
-    fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
-        self.quit.load(Ordering::Relaxed)
-    }
+/// Draw an outline for a panel, returning the inner area
+fn panel(title: &'_ str, area: Rect, buf: &mut Buffer) -> Rect {
+    let block = Block::new()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .merge_borders(MergeStrategy::Fuzzy);
+    (&block).render(area, buf);
+    block.inner(area)
 }
 
 /// Write a graphics message to the given output (probably stdout)
