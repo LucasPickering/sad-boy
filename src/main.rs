@@ -37,6 +37,9 @@ fn main() -> eyre::Result<()> {
     };
     game_boy.run(&mut *backend);
 
+    // TODO still needed?
+    drop(backend);
+
     Ok(())
 }
 

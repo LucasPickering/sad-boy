@@ -31,20 +31,20 @@ use std::{
     io::{self, Stdout, Write},
     mem,
     num::NonZero,
-    panic,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
+    time::Duration,
 };
 use termion::{
     cursor,
     event::Key,
     input::TermRead,
     raw::{IntoRawMode, RawTerminal},
-    screen::{AlternateScreen, IntoAlternateScreen, ToMainScreen},
+    screen::{AlternateScreen, IntoAlternateScreen},
 };
 use tracing::error;
 
@@ -56,6 +56,13 @@ const TERM_HEIGHT: u16 = 20;
 ///
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
 const ESCAPE: &str = "\u{1b}";
+/// POSIX signals that tell the process to shut down
+const QUIT_SIGNALS: [i32; 4] = [
+    signal::SIGINT,
+    signal::SIGHUP,
+    signal::SIGQUIT,
+    signal::SIGTERM,
+];
 
 /// A [Backend] implementation to draw to the terminal
 ///
@@ -76,25 +83,18 @@ pub struct TerminalBackend {
 impl TerminalBackend {
     /// Initialize a new terminal adapter with the given pixel dimensions
     ///
-    /// This will also spawn a background thread to listen for quit signals
-    /// from the OS.
+    /// This will also register listeners to listen for quit signals from the
+    /// OS.
     pub fn new() -> io::Result<Self> {
-        Self::init_panic_hook()?;
-
         let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
         write!(out, "{}", cursor::Hide)?;
+        out.flush()?;
         let terminal = Terminal::new(TermionBackend::new(out))?;
 
         // Start a signal listener for SIGINT and friends.
         // We need to catch signals to allow the screen to clean up before exit.
         let quit = Arc::new(AtomicBool::new(false));
-        let signals = [
-            signal::SIGINT,
-            signal::SIGHUP,
-            signal::SIGQUIT,
-            signal::SIGTERM,
-        ];
-        for signal in signals {
+        for signal in QUIT_SIGNALS {
             signal_hook::flag::register(signal, quit.clone()).unwrap();
         }
 
@@ -139,23 +139,6 @@ impl TerminalBackend {
             _ => None,
         }
     }
-
-    /// Initialize a panic hook that will reset the terminal state on panic
-    ///
-    /// The termion output wrappers will reset termianl state on _drop_, but
-    /// drop handlers aren't called on panic.
-    fn init_panic_hook() -> io::Result<()> {
-        let raw_output = io::stdout().into_raw_mode()?;
-        let original_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |panic_info| {
-            // intentionally ignore errors here since we're already in a panic
-            let _ = raw_output.suspend_raw_mode();
-            let _ = write!(io::stdout(), "{ToMainScreen}");
-            let _ = io::stdout().flush();
-            original_hook(panic_info);
-        }));
-        Ok(())
-    }
 }
 
 impl Backend for TerminalBackend {
@@ -182,18 +165,13 @@ impl Backend for TerminalBackend {
         }
     }
 
-    fn next_event(&mut self) -> Option<InputEvent> {
+    fn next_event(&mut self, timeout: Duration) -> Option<InputEvent> {
         // Grab the next event off the queue
-        match self.input_rx.try_recv() {
+        match self.input_rx.recv_timeout(timeout) {
             Ok(event) => Some(event),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => todo!(),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => todo!(),
         }
-    }
-
-    fn next_event_blocking(&mut self) -> InputEvent {
-        // Grab the next event off the queue
-        self.input_rx.recv().expect("TODO")
     }
 
     fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
@@ -229,6 +207,12 @@ impl Widget for &DebugInfo {
         .render(basic_area, buf);
 
         self.cpu.render(cpu_area, buf);
+    }
+}
+
+impl Drop for TerminalBackend {
+    fn drop(&mut self) {
+        let _ = write!(self.terminal.backend_mut(), "{}", cursor::Show);
     }
 }
 

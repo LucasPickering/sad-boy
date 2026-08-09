@@ -8,7 +8,10 @@ mod terminal;
 pub use terminal::TerminalBackend;
 
 use crate::{emu::DebugInfo, input::InputEvent};
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    time::Duration,
+};
 
 /// An interface for a screen and input
 ///
@@ -26,16 +29,14 @@ pub trait Backend {
 
     /// Get the next queued input event
     ///
-    /// Return `None` if no inputs are pending.
-    fn next_event(&mut self) -> Option<InputEvent>;
-
-    /// Get the next queued input event, blocking until an event is available
-    fn next_event_blocking(&mut self) -> InputEvent;
+    /// Return `None` if no inputs occur within the timeout.
+    fn next_event(&mut self, timeout: Duration) -> Option<InputEvent>;
 
     /// Should the emulator exit?
     ///
     /// This is called by the emulator on each tick and should be used to
-    /// monitor exit conditions (such as process signals).
+    /// monitor exit conditions (such as process signals). The given [DebugInfo]
+    /// can be used by tests to exit when the emulator reaches a certain state.
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
@@ -154,12 +155,8 @@ impl Backend for HeadlessBackend {
         self.last_frame = Some(frame.clone());
     }
 
-    fn next_event(&mut self) -> Option<InputEvent> {
+    fn next_event(&mut self, _timeout: Duration) -> Option<InputEvent> {
         None
-    }
-
-    fn next_event_blocking(&mut self) -> InputEvent {
-        todo!()
     }
 
     fn should_quit(&self, debug_info: &DebugInfo) -> bool {

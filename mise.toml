@@ -12,3 +12,18 @@ run = """
 BIN=$(cargo test --no-run 2>&1 | rg 'target/[^)]*' -o)
 samply record $BIN -- $@
 """
+
+[tasks.dev]
+description = "Run the emulator and restart on changes"
+quiet = true
+run = """
+RUST_LOG="$usage_log_level" \
+    watchexec --on-busy-update=restart --shell=none --wrap-process=none \
+    --watch=Cargo.toml --watch=Cargo.lock --watch=src/ \
+    -- cargo run -- $usage_rom
+"""
+tools.watchexec = "2.3.3"
+usage = """
+arg "<rom>" help="ROM file"
+flag "--log-level -l <level>" default="info" help="Set log level"
+"""

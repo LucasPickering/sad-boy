@@ -29,6 +29,7 @@ use std::{
     path::Path,
     pin::Pin,
     task::{Context, Waker},
+    time::Duration,
 };
 use tracing::{Instrument, info_span};
 
@@ -144,9 +145,6 @@ impl GameBoy {
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         backend.draw(&frame); // Initialize the screen
 
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-
         // If the debugger is enabled, is execution paused?
         let mut debug_paused = true;
         // Read-only information about the current emulator state. This is
@@ -166,15 +164,12 @@ impl GameBoy {
         // TODO explain all this shit
         // TODO remove boxing/dynamic shit
         // TODO can we remove the Option? it's only None on first pass
+        let mut context = Context::from_waker(Waker::noop());
         let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
         let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
 
-        loop {
-            // Check for exit
-            if backend.should_quit(&debug_info) {
-                break;
-            }
-
+        // Each iteration of this loop is a single clock cycle
+        while !backend.should_quit(&debug_info) {
             // Progress the CPU
             poll!(cpu_fut, context, {
                 let mut memory_bus =
@@ -212,19 +207,25 @@ impl GameBoy {
 
             // Check for input
             if self.debug && debug_paused {
-                // If paused, we'll just block for input
-                match backend.next_event_blocking() {
-                    // Unpausing breaks out of this loop
-                    InputEvent::DebugPauseToggle => debug_paused = false,
-                    InputEvent::DebugStepNext => {} // Step one cycle
-                    InputEvent::Quit => return,
-                    // Any other input event while paused is ignored. Skip the
-                    // rest of the loop and go back to waiting for input.
-                    InputEvent::Button(_) => continue,
+                // TODO
+                while !backend.should_quit(&debug_info) {
+                    match backend.next_event(Duration::from_millis(100)) {
+                        Some(InputEvent::DebugPauseToggle) => {
+                            // Unpausing breaks out of this loop
+                            debug_paused = false;
+                            break;
+                        }
+                        Some(InputEvent::DebugStepNext) => break,
+                        Some(InputEvent::Quit) => return,
+                        // Regular button input is ignored while paused. Check
+                        // the quit condition, then go back to waiting on input
+                        Some(InputEvent::Button(_)) | None => {}
+                    }
                 }
             } else if self.clock.is_frame_start() {
-                // On the first cycle of each frame, check for input
-                while let Some(event) = backend.next_event() {
+                // On the first cycle of each frame, handle all queued input
+                // events
+                while let Some(event) = backend.next_event(Duration::ZERO) {
                     match event {
                         InputEvent::DebugPauseToggle => debug_paused ^= true,
                         InputEvent::DebugStepNext => {} // Does nothing

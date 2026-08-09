@@ -289,10 +289,7 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            OAM_START..=OAM_LAST => {
-                println!("writing to OAM: {address} = {value}"); // TODO
-                self.gpu.oam().set_byte(address, value);
-            }
+            OAM_START..=OAM_LAST => self.gpu.oam().set_byte(address, value),
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
