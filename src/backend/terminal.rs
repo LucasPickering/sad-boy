@@ -40,9 +40,9 @@ use termion::{
 use tracing::error;
 
 /// Width of the screen in terminal columns
-const TERM_WIDTH: u16 = 80;
+const TERM_WIDTH: u16 = 60;
 /// Height of the screen in terminal rows
-const TERM_HEIGHT: u16 = 30;
+const TERM_HEIGHT: u16 = 20;
 /// Terminal escape code to trigger graphics rendering
 ///
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-graphics-escape-code
@@ -151,7 +151,7 @@ impl TerminalBackend {
     /// Write debug info to the terminal
     fn write_debug(&mut self, lines: &[fmt::Arguments]) -> io::Result<()> {
         // Write each line, starting at the bottom of the emulator screen
-        for (line, y) in lines.iter().zip(TERM_HEIGHT..) {
+        for (line, y) in lines.iter().zip(TERM_HEIGHT + 1..) {
             // Terminal is in raw mode so we have to move the cursor and clear
             // the line manually
             write!(

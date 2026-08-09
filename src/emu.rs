@@ -35,9 +35,13 @@ const SCREEN_WIDTH: u8 = 160;
 /// Height of the screen in pixels
 const SCREEN_HEIGHT: u8 = 144;
 
-/// TODO doc
+/// Poll a future and if ready, drop it and initialize a new one
 ///
-/// TODO rename?
+/// This is built specifically for the main loop, which uses `Option` futures
+/// that get reinitialized periodically. The passed `init` expression can also
+/// do any computations it needs to between futures. This is needed for some
+/// expressions that need access to references that would normally be
+/// exclusively given to the future.
 ///
 /// This has to be implemented as a macro (rather than a struct) because the
 /// futures rely heavily on local scope to manage borrows. The emulator needs

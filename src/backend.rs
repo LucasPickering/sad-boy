@@ -63,6 +63,13 @@ impl HeadlessBackend {
     pub fn assert_pixels(&self, expected: &FrameBuffer) {
         use std::fmt::Write;
 
+        struct Mismatch {
+            x: u16,
+            y: u16,
+            actual: Color,
+            expected: Color,
+        }
+
         let actual = self
             .last_frame
             .as_ref()
@@ -75,17 +82,28 @@ impl HeadlessBackend {
             actual.height()
         );
 
-        let mut mismatched: Vec<(u16, u16, Color, Color)> = vec![];
-        for (i, (color_actual, color_expected)) in
-            actual.pixels().iter().zip(expected.pixels()).enumerate()
-        {
-            if color_actual != color_expected {
-                let i = i as u16;
-                let x = i % actual.width();
-                let y = i / actual.width();
-                mismatched.push((x, y, *color_actual, *color_expected));
-            }
-        }
+        // Find mismatched pixels
+        let mismatched: Vec<Mismatch> = actual
+            .pixels()
+            .iter()
+            .zip(expected.pixels())
+            .enumerate()
+            .filter_map(|(i, (color_actual, color_expected))| {
+                if color_actual == color_expected {
+                    None
+                } else {
+                    let i = i as u16;
+                    let x = i % actual.width();
+                    let y = i / actual.width();
+                    Some(Mismatch {
+                        x,
+                        y,
+                        actual: *color_actual,
+                        expected: *color_expected,
+                    })
+                }
+            })
+            .collect();
 
         if !mismatched.is_empty() {
             // Print the screens
@@ -96,7 +114,13 @@ impl HeadlessBackend {
             // output
             let mut messages = String::new();
             let truncated = mismatched.get(0..10).unwrap_or(&mismatched);
-            for (x, y, actual, expected) in truncated {
+            for Mismatch {
+                x,
+                y,
+                actual,
+                expected,
+            } in truncated
+            {
                 writeln!(messages, "At ({x},{y}): {actual} != {expected}")
                     .unwrap();
             }
