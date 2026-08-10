@@ -19,7 +19,7 @@ use std::{
     fmt::{self, Debug, Display},
     ops::{BitAnd, BitOr, BitXor},
 };
-use tracing::{error, info_span, trace};
+use tracing::{Instrument, error, info_span, trace};
 
 /// Central Processing Unit for a Game Boy
 ///
@@ -49,23 +49,27 @@ impl Cpu {
         clock: &Clock,
         mut memory: MemoryBus<'_>,
     ) {
-        // Parse the next instruction and check how many cycles it will take
-        let pc = self.registers.pc;
-        let (instruction, num_bytes) = memory.get_instruction(pc);
-        let cycles = self.exe(&mut memory).cycles(instruction);
+        async move {
+            // Parse the next instruction and check how many cycles it will take
+            let pc = self.registers.pc;
+            let (instruction, num_bytes) = memory.get_instruction(pc);
+            let cycles = self.exe(&mut memory).cycles(instruction);
 
-        // Wait *before* executing so state isn't updated until after the
-        // elapsed cycles
-        clock.wait(cycles).await;
-        self.exe(&mut memory).execute(instruction);
+            // Wait *before* executing so state isn't updated until after the
+            // elapsed cycles
+            clock.wait(cycles).await;
+            self.exe(&mut memory).execute(instruction);
 
-        // If the instruction didn't modify the PC (e.g. jumps), then
-        // advance it automatically
-        if self.registers.pc == pc {
-            self.registers.pc.0 += num_bytes as u16;
+            // If the instruction didn't modify the PC (e.g. jumps), then
+            // advance it automatically
+            if self.registers.pc == pc {
+                self.registers.pc.0 += num_bytes as u16;
+            }
+
+            self.previous_instruction = Some((instruction, cycles, num_bytes));
         }
-
-        self.previous_instruction = Some((instruction, cycles, num_bytes));
+        .instrument(info_span!("CPU"))
+        .await;
     }
 
     /// Get debug info about the CPU
@@ -828,14 +832,6 @@ macro_rules! register_pair {
     ($pair:ident, $pair_mut:ident, $r_low:ident) => {
         /// Get the value of the `$pair` register pair
         fn $pair(&self) -> u16 {
-            // SAFETY: Safety is predicated on the macro being called with
-            // registers that are paired together in the struct layout.
-            // - Alignment is safe because u16 is 2-byte aligned and the
-            //   registers are pairs of 2. The entire struct is aligned, so
-            //   every other register (i.e. the lower register of each pair)
-            //   will be 2-byte aligned
-            // - This will not read/write out of bounds because the first
-            //   register must have a second register after it.
             let ptr8 = std::ptr::from_ref(&self.$r_low);
             debug_assert_eq!(
                 ptr8.align_offset(2),
@@ -844,12 +840,19 @@ macro_rules! register_pair {
             );
             #[expect(clippy::cast_ptr_alignment)]
             let ptr16 = ptr8.cast::<u16>();
+            // SAFETY: Safety is predicated on the macro being called with
+            // registers that are paired together in the struct layout.
+            // - Alignment is safe because u16 is 2-byte aligned and the
+            //   registers are pairs of 2. The entire struct is aligned, so
+            //   every other register (i.e. the lower register of each pair)
+            //   will be 2-byte aligned
+            // - This will not read/write out of bounds because the first
+            //   register must have a second register after it.
             unsafe { *ptr16 }
         }
 
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
-            // SAFETY: see above fn
             let ptr8 = std::ptr::from_mut(&mut self.$r_low);
             debug_assert_eq!(
                 ptr8.align_offset(2),
@@ -858,6 +861,7 @@ macro_rules! register_pair {
             );
             #[expect(clippy::cast_ptr_alignment)]
             let ptr16 = ptr8.cast::<u16>();
+            // SAFETY: see above fn
             unsafe { &mut *ptr16 }
         }
     };

@@ -27,11 +27,9 @@ use crate::{
 use color_eyre::eyre;
 use std::{
     path::Path,
-    pin::Pin,
     task::{Context, Waker},
     time::Duration,
 };
-use tracing::{Instrument, info_span};
 
 /// Width of the screen in pixels
 const SCREEN_WIDTH: u8 = 160;
@@ -52,9 +50,7 @@ const SCREEN_HEIGHT: u8 = 144;
 /// where drops and reassignments are more flexible.
 macro_rules! poll {
     ($fut:ident, $ctx:expr, $init:expr) => {
-        let is_ready = $fut
-            .as_mut()
-            .is_none_or(|fut| fut.as_mut().poll(&mut $ctx).is_ready());
+        let is_ready = $fut.as_mut().poll(&mut $ctx).is_ready();
         if is_ready {
             // Drop the previous future to release all its references. Then
             // evaluate $init, which will do whatever between-futures logic it
@@ -70,7 +66,7 @@ macro_rules! poll {
             // The poll output doesn't matter here, we're just going to poll
             // again.
             let _ = fut.as_mut().poll(&mut $ctx);
-            $fut = Some(fut);
+            $fut = fut;
         }
     };
 }
@@ -162,11 +158,18 @@ impl GameBoy {
         }
 
         // TODO explain all this shit
-        // TODO remove boxing/dynamic shit
-        // TODO can we remove the Option? it's only None on first pass
         let mut context = Context::from_waker(Waker::noop());
-        let mut cpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
-        let mut gpu_fut: Option<Pin<Box<dyn Future<Output = ()>>>> = None;
+        // These futures have to be boxed so they can be pinned. Theoretically
+        // I think stack pinning should be possible, but it's hard because of
+        // the scopes. The binding gets dropped and reassigned from within the
+        // loop. It can't stack-pin it from inside the inner loop. If the boxing
+        // turns out to be a perf problem I'll reevaluate.
+        let mut cpu_fut = Box::pin(self.cpu.execute_next(
+            &self.clock,
+            MemoryBus::new(&mut self.memory, &self.rom, &self.gpu),
+        ));
+        let mut gpu_fut =
+            Box::pin(self.gpu.render_frame(&self.clock, &mut frame));
 
         // Each iteration of this loop is a single clock cycle
         while !backend.should_quit(&debug_info) {
@@ -182,21 +185,16 @@ impl GameBoy {
                     debug_paused = true;
                 }
 
-                self.cpu
-                    .execute_next(&self.clock, memory_bus)
-                    .instrument(info_span!("CPU"))
+                self.cpu.execute_next(&self.clock, memory_bus)
             });
 
             // Progress the GPU
             poll!(gpu_fut, context, {
-                // Draw the frame to the screen, then sleep until the end of the
-                // frame so we stay synced up with the emulated clock speed
+                // Draw the frame to the screen
                 backend.draw(&frame);
                 frame.reset(); // Revert to all black
 
-                self.gpu
-                    .render_frame(&self.clock, &mut frame)
-                    .instrument(info_span!("GPU"))
+                self.gpu.render_frame(&self.clock, &mut frame)
             });
 
             // Update the debugger on each tick

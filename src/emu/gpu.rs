@@ -72,7 +72,7 @@ impl Gpu {
                 });
             }
         }
-        .instrument(info_span!("GPU frame"))
+        .instrument(info_span!("GPU"))
         .await;
     }
 
