@@ -222,7 +222,7 @@ impl GameBoy {
                         Some(InputEvent::Button(_)) | None => {}
                     }
                 }
-            } else if self.clock.is_frame_start() {
+            } else if self.clock.is_frame_end() {
                 // On the first cycle of each frame, handle all queued input
                 // events
                 while let Some(event) = backend.next_event(Duration::ZERO) {

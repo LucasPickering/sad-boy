@@ -67,11 +67,6 @@ impl Clock {
         }
     }
 
-    /// Is the current tick the first of its frame?
-    pub fn is_frame_start(&self) -> bool {
-        self.cycles.get().0.is_multiple_of(CYCLES_PER_FRAME.0)
-    }
-
     /// Is the current tick the last of its frame?
     pub fn is_frame_end(&self) -> bool {
         (self.cycles.get().0 + 1).is_multiple_of(CYCLES_PER_FRAME.0)

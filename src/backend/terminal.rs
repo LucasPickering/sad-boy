@@ -189,7 +189,7 @@ impl Widget for &DebugInfo {
             area.height - TERM_HEIGHT + 1,
         );
         let [basic_area, cpu_area] =
-            Layout::horizontal([32, 32]).spacing(-1).areas(area);
+            Layout::horizontal([28, 36]).spacing(-1).areas(area);
 
         let basic_area = panel("Basic", basic_area, buf);
         Text::from_iter([
@@ -251,13 +251,11 @@ impl Widget for &CpuDebugInfo {
             .unwrap_or((Instruction::Invalid, Cycles(0), 0));
         let (next_instruction, next_cycles, next_bytes) = self.next_instruction;
         let lines = [
-            format!(
-                "PREV: {prev_instruction} ({prev_cycles} cy, {prev_bytes} B)"
-            ),
-            format!(
-                "NEXT: {next_instruction} ({next_cycles} cy, {next_bytes} B)"
-            ),
+            format!("PREV: {prev_instruction} ({prev_cycles}cy/{prev_bytes}B)"),
+            format!("NEXT: {next_instruction} ({next_cycles}cy/{next_bytes}B)"),
             // Registers
+            format!("pc: {}", self.pc),
+            format!("sp: {}", self.sp),
             format!("a: {}", Reg(self.a)),
             format!(
                 "f: {} {}",
@@ -274,8 +272,6 @@ impl Widget for &CpuDebugInfo {
             format!("h: {}", Reg(self.h)),
             format!("l: {}", Reg(self.l)),
             format!("hl: {}", Reg(self.hl)),
-            format!("pc: {}", self.pc),
-            format!("sp: {}", self.sp),
             format!(
                 "INT: {}",
                 if self.interrupts_enabled {
