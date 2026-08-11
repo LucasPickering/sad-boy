@@ -15,6 +15,7 @@ pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
+    Stepper,
     backend::{Backend, FrameBuffer},
     emu::{
         cpu::Cpu,
@@ -81,10 +82,6 @@ pub struct GameBoy {
     rom: Rom,
     memory: Memory,
     // Debug state
-    /// Debug mode enabled/disabled
-    debug: bool,
-    /// Places to pause the debugger
-    breakpoints: Vec<Address>,
 }
 
 impl GameBoy {
@@ -107,55 +104,17 @@ impl GameBoy {
             gpu: Gpu::default(),
             rom,
             memory: Memory::default(),
-
-            debug: false,
-            breakpoints: vec![],
         }
-    }
-
-    /// Enable/disable debug mode
-    ///
-    /// If debug mode is enabled, the emulator will start paused when
-    /// [Self::run] is called, and [Backend::debug] will be called on each
-    /// tick.
-    pub fn set_debug(&mut self, debug: bool) {
-        self.debug = debug;
-    }
-
-    /// Set a breakpoint at the given address.
-    ///
-    /// When the CPU reaches this address (i.e. when `pc == address`), the
-    /// debugger will pause.
-    ///
-    /// **If debug mode is disabled, this does nothing.**
-    pub fn set_breakpoint(&mut self, address: Address) {
-        self.breakpoints.push(address);
     }
 
     /// Run the Game Boy indefinitely
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(&mut self, backend: &mut dyn Backend) {
+    pub fn run(&mut self, backend: &mut dyn Backend, stepper: &mut Stepper) {
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         backend.draw(&frame); // Initialize the screen
-
-        // If the debugger is enabled, is execution paused?
-        let mut debug_paused = true;
-        // Read-only information about the current emulator state. This is
-        // updated imperatively between instructions/frames so that it can be
-        // read on any clock tick, regardless of the ownership state of various
-        // futures
-        let mut debug_info = DebugInfo {
-            debug_paused,
-            breakpoints: self.breakpoints.clone(),
-            clock_cycles: Cycles(0),
-            cpu: CpuDebugInfo::default(),
-        };
-        if self.debug {
-            backend.debug(&debug_info); // Show initial debug state
-        }
 
         // TODO explain all this shit
         let mut context = Context::from_waker(Waker::noop());
@@ -172,18 +131,19 @@ impl GameBoy {
             Box::pin(self.gpu.render_frame(&self.clock, &mut frame));
 
         // Each iteration of this loop is a single clock cycle
-        while !backend.should_quit(&debug_info) {
+        loop {
+            if stepper.next(backend).is_break() {
+                break;
+            }
+
             // Progress the CPU
             poll!(cpu_fut, context, {
                 let mut memory_bus =
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
                 // Update debug info between instructions
-                debug_info.cpu = self.cpu.debug_info(&mut memory_bus);
-
-                // Check if we've hit any breakpoints
-                if self.debug && self.breakpoints.contains(&debug_info.cpu.pc) {
-                    debug_paused = true;
-                }
+                stepper.update_debug_info(|info| {
+                    info.cpu = self.cpu.debug_info(&mut memory_bus);
+                });
 
                 self.cpu.execute_next(&self.clock, memory_bus)
             });
@@ -198,37 +158,19 @@ impl GameBoy {
             });
 
             // Update the debugger on each tick
-            if self.debug {
-                debug_info.clock_cycles = self.clock.cycles();
-                backend.debug(&debug_info);
-            }
+            stepper.update_debug_info(|info| {
+                info.clock_cycles = self.clock.cycles();
+            });
 
             // Check for input
-            if self.debug && debug_paused {
-                // TODO
-                while !backend.should_quit(&debug_info) {
-                    match backend.next_event(Duration::from_millis(100)) {
-                        Some(InputEvent::DebugPauseToggle) => {
-                            // Unpausing breaks out of this loop
-                            debug_paused = false;
-                            break;
-                        }
-                        Some(InputEvent::DebugStepNext) => break,
-                        Some(InputEvent::Quit) => return,
-                        // Regular button input is ignored while paused. Check
-                        // the quit condition, then go back to waiting on input
-                        Some(InputEvent::Button(_)) | None => {}
-                    }
-                }
-            } else if self.clock.is_frame_end() {
+            if self.clock.is_frame_end() {
                 // On the first cycle of each frame, handle all queued input
                 // events
                 while let Some(event) = backend.next_event(Duration::ZERO) {
                     match event {
-                        InputEvent::DebugPauseToggle => debug_paused ^= true,
-                        InputEvent::DebugStepNext => {} // Does nothing
                         InputEvent::Quit => return,
                         InputEvent::Button(_) => {}
+                        _ => todo!(),
                     }
                 }
             }
@@ -243,11 +185,12 @@ impl GameBoy {
     }
 }
 
-/// Exposed debug state for the emulator
+/// Exposed read-only state for the emulator
+#[derive(Default)]
 pub struct DebugInfo {
-    pub debug_paused: bool,
-    pub breakpoints: Vec<Address>,
+    /// Number of elapsed clock cycles since boot
     pub clock_cycles: Cycles,
+    /// CPU state
     pub cpu: CpuDebugInfo,
 }
 
@@ -290,7 +233,7 @@ mod tests {
             debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
 
-        emu.run(&mut backend);
+        emu.run(&mut backend, &mut Stepper::new());
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);

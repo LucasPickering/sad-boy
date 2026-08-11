@@ -1,6 +1,7 @@
 //! Hardware bindings for the terminal
 
 use crate::{
+    Debugger,
     backend::{Backend, FrameBuffer},
     emu::{CpuDebugInfo, Cycles, DebugInfo, Instruction},
     input::InputEvent,
@@ -142,7 +143,7 @@ impl TerminalBackend {
 }
 
 impl Backend for TerminalBackend {
-    fn debug(&mut self, info: &DebugInfo) {
+    fn debug(&mut self, info: &Debugger) {
         // Debug UI is drawn via ratatui
         let result = self
             .terminal
@@ -174,12 +175,12 @@ impl Backend for TerminalBackend {
         }
     }
 
-    fn should_quit(&self, _debug_info: &DebugInfo) -> bool {
+    fn should_quit(&self, _debug_info: Option<&DebugInfo>) -> bool {
         self.quit.load(Ordering::Relaxed)
     }
 }
 
-impl Widget for &DebugInfo {
+impl Widget for &Debugger {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Move down below the screen area
         let area = Rect::new(
@@ -193,20 +194,13 @@ impl Widget for &DebugInfo {
 
         let basic_area = panel("Basic", basic_area, buf);
         Text::from_iter([
-            format!("CLOCK: {} cy", self.clock_cycles),
-            format!(
-                "DBG: {}",
-                if self.debug_paused {
-                    "PAUSED"
-                } else {
-                    "RUNNING"
-                }
-            ),
+            format!("CLOCK: {} cy", self.info.clock_cycles),
+            format!("DBG: {}", if self.paused { "PAUSED" } else { "RUNNING" }),
             format!("BKP: {}", self.breakpoints.iter().join(", ")),
         ])
         .render(basic_area, buf);
 
-        self.cpu.render(cpu_area, buf);
+        self.info.cpu.render(cpu_area, buf);
     }
 }
 

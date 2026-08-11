@@ -7,7 +7,7 @@ mod terminal;
 
 pub use terminal::TerminalBackend;
 
-use crate::{emu::DebugInfo, input::InputEvent};
+use crate::{Debugger, emu::DebugInfo, input::InputEvent};
 use std::{
     fmt::{self, Display},
     time::Duration,
@@ -22,7 +22,7 @@ pub trait Backend {
     ///
     /// It's up to the implementation to decide how this information is
     /// presented.
-    fn debug(&mut self, info: &DebugInfo);
+    fn debug(&mut self, info: &Debugger);
 
     /// Draw the given frame buffer to the screen
     fn draw(&mut self, frame: &FrameBuffer);
@@ -37,10 +37,11 @@ pub trait Backend {
     /// This is called by the emulator on each tick and should be used to
     /// monitor exit conditions (such as process signals). The given [DebugInfo]
     /// can be used by tests to exit when the emulator reaches a certain state.
+    /// TODO explain DebugInfo optional
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
-    fn should_quit(&self, debug_info: &DebugInfo) -> bool;
+    fn should_quit(&self, debug_info: Option<&DebugInfo>) -> bool;
 }
 
 /// An in-memory [Backend] for testing and headless operation
@@ -149,7 +150,7 @@ impl HeadlessBackend {
 }
 
 impl Backend for HeadlessBackend {
-    fn debug(&mut self, _info: &DebugInfo) {}
+    fn debug(&mut self, _info: &Debugger) {}
 
     fn draw(&mut self, frame: &FrameBuffer) {
         self.last_frame = Some(frame.clone());
@@ -159,7 +160,9 @@ impl Backend for HeadlessBackend {
         None
     }
 
-    fn should_quit(&self, debug_info: &DebugInfo) -> bool {
+    fn should_quit(&self, debug_info: Option<&DebugInfo>) -> bool {
+        let debug_info =
+            debug_info.expect("Debug mode should be enabled for tests");
         (self.should_quit)(debug_info)
     }
 }
