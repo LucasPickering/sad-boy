@@ -16,20 +16,18 @@ pub use memory::Address;
 
 use crate::{
     Stepper,
-    backend::{Backend, FrameBuffer},
+    backend::FrameBuffer,
     emu::{
         cpu::Cpu,
         gpu::Gpu,
         memory::{Memory, MemoryBus},
         rom::Rom,
     },
-    input::InputEvent,
 };
 use color_eyre::eyre;
 use std::{
     path::Path,
     task::{Context, Waker},
-    time::Duration,
 };
 
 /// Width of the screen in pixels
@@ -111,10 +109,10 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(&mut self, backend: &mut dyn Backend, stepper: &mut Stepper) {
+    pub fn run(&mut self, stepper: &mut Stepper) {
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
-        backend.draw(&frame); // Initialize the screen
+        stepper.draw(&frame); // Initialize the screen
 
         // TODO explain all this shit
         let mut context = Context::from_waker(Waker::noop());
@@ -132,7 +130,7 @@ impl GameBoy {
 
         // Each iteration of this loop is a single clock cycle
         loop {
-            if stepper.next(backend).is_break() {
+            if stepper.next().is_break() {
                 break;
             }
 
@@ -151,7 +149,7 @@ impl GameBoy {
             // Progress the GPU
             poll!(gpu_fut, context, {
                 // Draw the frame to the screen
-                backend.draw(&frame);
+                stepper.draw(&frame);
                 frame.reset(); // Revert to all black
 
                 self.gpu.render_frame(&self.clock, &mut frame)
@@ -161,19 +159,6 @@ impl GameBoy {
             stepper.update_debug_info(|info| {
                 info.clock_cycles = self.clock.cycles();
             });
-
-            // Check for input
-            if self.clock.is_frame_end() {
-                // On the first cycle of each frame, handle all queued input
-                // events
-                while let Some(event) = backend.next_event(Duration::ZERO) {
-                    match event {
-                        InputEvent::Quit => return,
-                        InputEvent::Button(_) => {}
-                        _ => todo!(),
-                    }
-                }
-            }
 
             // Sleep at the end of the final tick of each frame to sync back
             // up with real time
@@ -232,8 +217,9 @@ mod tests {
         let mut backend = HeadlessBackend::new(move |debug_info| {
             debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
+        let mut stepper = Stepper::new(&mut backend);
 
-        emu.run(&mut backend, &mut Stepper::new());
+        emu.run(&mut stepper);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);

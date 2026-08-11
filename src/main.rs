@@ -4,7 +4,7 @@ mod input;
 mod util;
 
 use crate::{
-    backend::{Backend, HeadlessBackend, TerminalBackend},
+    backend::{Backend, FrameBuffer, HeadlessBackend, TerminalBackend},
     emu::{Address, DebugInfo, GameBoy},
     input::InputEvent,
     util::{TracingOutput, initialize_tracing},
@@ -24,27 +24,25 @@ fn main() -> eyre::Result<()> {
 
     let mut game_boy = GameBoy::boot(&args.rom)?;
 
-    // Set up debugger
-    let mut stepper = if args.debug {
-        let mut debugger = Debugger::default();
-        for address in args.breakpoint {
-            debugger.set_breakpoint(address);
-        }
-        Stepper::debug(debugger)
-    } else {
-        Stepper::new()
-    };
-
     // Select hardware based on the input flags
     let mut backend: Box<dyn Backend> = if args.headless {
         Box::new(HeadlessBackend::new(|_| false))
     } else {
         Box::new(TerminalBackend::new()?)
     };
-    game_boy.run(&mut *backend, &mut stepper);
 
-    // TODO still needed?
-    drop(backend);
+    // Set up debugger
+    let mut stepper = if args.debug {
+        let mut debugger = Debugger::default();
+        for address in args.breakpoint {
+            debugger.set_breakpoint(address);
+        }
+        Stepper::debug(&mut *backend, debugger)
+    } else {
+        Stepper::new(&mut *backend)
+    };
+
+    game_boy.run(&mut stepper);
 
     Ok(())
 }
@@ -52,20 +50,25 @@ fn main() -> eyre::Result<()> {
 /// TODO
 ///
 /// TODO rename: Executor?
-struct Stepper {
+struct Stepper<'bk> {
     /// TODO
     debugger: Option<Debugger>,
+    backend: &'bk mut dyn Backend,
 }
 
-impl Stepper {
+impl<'bk> Stepper<'bk> {
     /// Create a new [Stepper] in regular (non-debug) mode
-    fn new() -> Self {
-        Self { debugger: None }
+    fn new(backend: &'bk mut dyn Backend) -> Self {
+        Self {
+            backend,
+            debugger: None,
+        }
     }
 
     /// Create a new [Stepper] in debug mode
-    fn debug(debugger: Debugger) -> Self {
+    fn debug(backend: &'bk mut dyn Backend, debugger: Debugger) -> Self {
         Self {
+            backend,
             debugger: Some(debugger),
         }
     }
@@ -79,16 +82,23 @@ impl Stepper {
         }
     }
 
+    fn draw(&mut self, frame: &FrameBuffer) {
+        self.backend.draw(frame);
+    }
+
     /// TODO
-    fn next(&mut self, backend: &mut dyn Backend) -> ControlFlow<()> {
+    fn next(&mut self) -> ControlFlow<()> {
         // TODO explain
         if let Some(debugger) = &mut self.debugger {
-            debugger.wait_for_input(backend)?;
-            backend.debug(debugger);
+            debugger.wait_for_input(&mut *self.backend)?;
+            self.backend.debug(debugger);
         }
 
         // TODO
-        if backend.should_quit(self.debugger.as_ref().map(|d| &d.info)) {
+        if self
+            .backend
+            .should_quit(self.debugger.as_ref().map(|d| &d.info))
+        {
             ControlFlow::Break(())
         } else {
             ControlFlow::Continue(())
