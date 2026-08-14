@@ -738,6 +738,7 @@ checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 [[package]]
 name = "rstest"
 version = "0.26.1"
+source = "git+https://github.com/LucasPickering/rstest?branch=remove-regex#eb58e49bc6436ac1fe3bdb63fea69cceb74fe3d7"
 dependencies = [
  "rstest_macros",
 ]
@@ -745,6 +746,7 @@ dependencies = [
 [[package]]
 name = "rstest_macros"
 version = "0.26.1-dev"
+source = "git+https://github.com/LucasPickering/rstest?branch=remove-regex#eb58e49bc6436ac1fe3bdb63fea69cceb74fe3d7"
 dependencies = [
  "cfg-if",
  "glob",

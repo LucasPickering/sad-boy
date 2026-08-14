@@ -28,7 +28,7 @@ winnow = {version = "1.0.3", default-features = false, features = ["ascii", "bin
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 proptest = {version = "1.11.0", default-features = false, features = ["attr-macro", "std"]}
-rstest = {path = "../rstest/rstest", default-features = false}
+rstest = {git = "https://github.com/LucasPickering/rstest", branch = "remove-regex", default-features = false}
 
 [lints.rust]
 async_fn_in_trait = "allow"
