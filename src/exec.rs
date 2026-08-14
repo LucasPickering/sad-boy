@@ -1,3 +1,5 @@
+//! Emulator execution management
+
 use crate::{
     backend::{Backend, FrameBuffer},
     emu::{Address, Clock, Cycles, DebugInfo},
@@ -9,7 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// TODO
+/// Execution manager for an emulator
+///
+/// The emulator represents real hardware. This runs at a level above the
+/// that. It implements behavior that isn't possible in traditional hardware,
+/// such as debugging and speed control.
 pub struct Executor<'bk> {
     /// In debug mode, the debugger manages pausing and breakpoints
     debugger: Option<Debugger>,
@@ -18,7 +24,7 @@ pub struct Executor<'bk> {
 }
 
 impl<'bk> Executor<'bk> {
-    /// Create a new [Stepper] in regular (non-debug) mode
+    /// Create a new [Executor] in regular (non-debug) mode
     pub fn new(backend: &'bk mut dyn Backend) -> Self {
         Self {
             backend,
@@ -26,7 +32,7 @@ impl<'bk> Executor<'bk> {
         }
     }
 
-    /// Create a new [Stepper] in debug mode
+    /// Create a new [Executor] in debug mode
     pub fn debug(
         backend: &'bk mut dyn Backend,
         mut debugger: Debugger,
@@ -55,7 +61,10 @@ impl<'bk> Executor<'bk> {
 
     /// Begin a clock cycle
     ///
-    /// TODO more
+    /// This will:
+    /// - Check for input
+    /// - Check the exit condition
+    /// - Check and update the debugger in debug mode
     pub fn next(&mut self) -> ControlFlow<()> {
         const INPUT_TIMEOUT_PAUSED: Duration = Duration::from_millis(100);
 
@@ -141,7 +150,10 @@ impl<'bk> Executor<'bk> {
     }
 }
 
-/// TODO
+/// Debugger enables pausing, stepping, and inspection
+///
+/// The executor must be started in debug mode ([Executor::debug]) to enable the
+/// debugger.
 pub struct Debugger {
     /// Summary info about the current system state
     pub info: DebugInfo,

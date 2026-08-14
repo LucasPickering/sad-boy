@@ -97,19 +97,16 @@ impl Debug for Rom {
 /// address defines the offset within that slice to start parsing.
 ///
 /// Return the instruction as well as the number of bytes it consumed. This is
-/// the number of bytes that the PC should advance.
-///
-/// TODO rename
-pub fn get_instruction(
+/// (generally) the number of bytes that the PC should advance.
+pub fn parse_instruction(
     input: &[u8],
     address: Address,
 ) -> Result<(Instruction, usize), InstructionParseError> {
-    // TODO make sure it's in bounds
     let mut input = &input[(address.0 as usize)..];
-    let start = input.checkpoint(); // TODO this isn't right
+    let start = input.checkpoint();
     // Don't use Parser::parse() because its error type doesn't print well
     // for binary data
-    let (instruction, taken) = parse_instruction
+    let (instruction, taken) = instruction
         .with_taken()
         .parse_next(&mut input)
         .map_err(|error| {
@@ -118,14 +115,14 @@ pub fn get_instruction(
                 .expect("Complete parser should not return Incomplete");
             InstructionParseError::new(input, input.offset_from(&start), error)
         })?;
-    let offset = input.offset_from(&start);
+    let size = input.offset_from(&start);
     trace!(
         %instruction,
         bytes = %BytesDisplay::binary(taken),
         %address,
         "Parsed instruction",
     );
-    Ok((instruction, offset))
+    Ok((instruction, size))
 }
 
 /// An error that occurs while parsing a CPU instruction from ROM
@@ -169,7 +166,6 @@ impl Display for InstructionParseError {
         // Max ROM size is 8MB so we need 6 hex digits to fit all addresses
         const ADDRESS_WIDTH: usize = 6;
 
-        // TODO is this cast safe?
         writeln!(f, "Parse error at byte {}", Address(self.offset as u16))?;
         // Pretty byte rendering
         for (bytes, offset) in self
@@ -182,7 +178,7 @@ impl Display for InstructionParseError {
             write!(
                 f,
                 "{} | {}",
-                Address(offset as u16), // TODO is cast safe?
+                Address(offset as u16),
                 BytesDisplay::binary(bytes),
             )?;
             writeln!(f)?;
@@ -228,7 +224,7 @@ macro_rules! alt {
 }
 
 /// Parse the next CPU instruction
-fn parse_instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
+fn instruction(input: &mut &[u8]) -> ModalResult<Instruction> {
     // A giant switch statement for each possible opcode. Some instructions are
     // just a single byte, but some require multiple.
     // https://gbdev.io/pandocs/CPU_Instruction_Set.html
@@ -882,8 +878,8 @@ mod tests {
         &[0b1100_1011, 0b1111_0100],
         Instruction::Set(Bit(6), Register8::H.into()),
     )]
-    fn instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
-        assert_eq!(parse_instruction.parse(bytes).unwrap(), expected);
+    fn test_instruction(#[case] bytes: &[u8], #[case] expected: Instruction) {
+        assert_eq!(instruction.parse(bytes).unwrap(), expected);
     }
 
     /// Property test for parsing instructions:
@@ -906,7 +902,7 @@ mod tests {
             0b1111_1101, // $FD
         ];
         let input = &mut bytes.as_slice();
-        let instruction = parse_instruction(input).unwrap();
+        let instruction = instruction(input).unwrap();
         // Accept Invalid only if it was a known invalid code
         if instruction == Instruction::Invalid {
             assert!(INVALID_CODES.contains(&bytes[0]));

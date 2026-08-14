@@ -335,10 +335,10 @@ pub fn draw_frame(
     move_cursor: bool,
     mut out: impl io::Write,
 ) -> io::Result<()> {
-    static FRAME_ID: AtomicUsize = AtomicUsize::new(0);
-    // Each frame needs a unique ID to prevent them for overwriting each other.
+    // Each frame needs a unique ID to prevent them from overwriting each other.
     // This is (hopefully) not an issue during normal emulation, but can be in
     // tests.
+    static FRAME_ID: AtomicUsize = AtomicUsize::new(0);
     let shm_name =
         format!("/sad_boy_shm{}", FRAME_ID.fetch_add(1, Ordering::Relaxed));
 
@@ -352,6 +352,7 @@ pub fn draw_frame(
 
     // Use POSIX shared memory to pass the pixel data to the terminal. This
     // is (supposedly) much faster than writing to stdout
+    // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
     let len = mem::size_of_val(pixels);
     let _ = nix::sys::mman::shm_unlink(shm_name.as_str());
     let fd = nix::sys::mman::shm_open(
@@ -360,7 +361,11 @@ pub fn draw_frame(
         Mode::S_IRUSR | Mode::S_IWUSR,
     )?;
     nix::unistd::ftruncate(&fd, len as i64)?;
-    // SAFETY: TODO
+    // SAFETY: Alright so I'm guessing a bit here because the Rust docs for
+    // nix/libc don't list *specifically* what's unsafe about these.
+    // - Page length is the BYTE length of the pixel slice, established above
+    // - memcpy() source is the pointer to that pixel length
+    // Seems safe enough to me!
     unsafe {
         let addr = nix::sys::mman::mmap(
             None,

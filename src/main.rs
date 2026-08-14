@@ -11,7 +11,7 @@ use crate::{
     util::{TracingOutput, initialize_tracing},
 };
 use clap::Parser;
-use color_eyre::eyre;
+use color_eyre::eyre::{self, bail};
 use std::path::PathBuf;
 
 fn main() -> eyre::Result<()> {
@@ -32,18 +32,20 @@ fn main() -> eyre::Result<()> {
         Box::new(TerminalBackend::new()?)
     };
 
-    // Set up debugger
-    let mut stepper = if args.debug {
+    // Set up executor
+    let mut executor = if args.debug {
         let mut debugger = Debugger::default();
         for address in args.breakpoint {
             debugger.set_breakpoint(address);
         }
         Executor::debug(&mut *backend, debugger)
+    } else if !args.breakpoint.is_empty() {
+        bail!("--breakpoint requires --debug");
     } else {
         Executor::new(&mut *backend)
     };
 
-    game_boy.run(&mut stepper);
+    game_boy.run(&mut executor);
 
     Ok(())
 }
@@ -53,10 +55,14 @@ fn main() -> eyre::Result<()> {
 struct Args {
     /// Path to the ROM file to load
     rom: PathBuf,
-    /// TODO
+    /// Enable the debugger
+    ///
+    /// The debugger will display system state and allows pausing/stepping.
     #[clap(long, short)]
     debug: bool,
-    /// TODO
+    /// Add a debugger breakpoint at the given hexadecimal code address
+    ///
+    /// Requires --debug
     #[clap(long, short)]
     breakpoint: Vec<Address>,
     /// Run the emulator without a screen

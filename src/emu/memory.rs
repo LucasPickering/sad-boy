@@ -99,6 +99,7 @@ bounds!(
     BOOTLOADER,
     CARTRIDGE_ROM_0,
     CARTRIDGE_ROM_N,
+    CARTRIDGE_ROM,
     TILE_DATA,
     TILE_MAPS,
     CARTRIDGE_RAM,
@@ -176,7 +177,7 @@ impl<'a> MemoryBus<'a> {
             } else {
                 self.rom.bytes()
             };
-            rom::get_instruction(source, address).unwrap_or_else(|error| {
+            rom::parse_instruction(source, address).unwrap_or_else(|error| {
                 panic!("Failed to parse instruction: {error}");
             })
         })
@@ -271,7 +272,7 @@ impl<'a> MemoryBus<'a> {
         match address.0 {
             // ROM is immutable (bootloader too, so it doesn't matter if it's
             // mapped or not)
-            0x0000..=0x7FFF => {} // TODO const for this
+            CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
             TILE_DATA_START..=TILE_DATA_LAST => {
                 self.gpu.tile_data().set_byte(address, value);
             }

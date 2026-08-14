@@ -37,7 +37,8 @@ pub trait Backend {
     /// This is called by the emulator on each tick and should be used to
     /// monitor exit conditions (such as process signals). The given [DebugInfo]
     /// can be used by tests to exit when the emulator reaches a certain state.
-    /// TODO explain DebugInfo optional
+    /// This argument is optional because debug info isn't available when the
+    /// debugger isn't running.
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].

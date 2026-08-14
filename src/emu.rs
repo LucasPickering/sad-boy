@@ -107,11 +107,18 @@ impl GameBoy {
 
     /// Run the Game Boy indefinitely
     ///
-    /// This will run until the given `stop_on` function returns `true`. It is
-    /// called on every clock cycle.
-    pub fn run(&mut self, stepper: &mut Executor) {
+    /// The given [Executor] is used to control this main loop. On each
+    /// iteration, this will call [Executor::next] to control if/when that
+    /// iteration runs. This may seem backward, but it's required because of
+    /// the use of futures in the emulator. Futures are used to emulate
+    /// multiple system components concurrently. That intermediate future state
+    /// has to live within the scope of this singular function, i.e. it can't
+    /// be boxed up and stored in a struct. The futures contain self-references
+    /// and rely on disjoint `self` references, both things that are only
+    /// possible within a single stack frame.
+    pub fn run(&mut self, exec: &mut Executor) {
         // Set debug info to the initial system state
-        stepper.update_debug_info(|info| {
+        exec.update_debug_info(|info| {
             let mut memory_bus =
                 MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
             info.cpu = self.cpu.debug_info(&self.clock, &mut memory_bus);
@@ -119,9 +126,8 @@ impl GameBoy {
 
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
-        stepper.draw(&frame); // Initialize the screen
+        exec.draw(&frame); // Initialize the screen
 
-        // TODO explain all this shit
         let mut context = Context::from_waker(Waker::noop());
         // These futures have to be boxed so they can be pinned. Theoretically
         // I think stack pinning should be possible, but it's hard because of
@@ -137,10 +143,10 @@ impl GameBoy {
 
         // Each iteration of this loop is a single clock cycle
         loop {
-            // The stepper controls iteration; on each loop, check if/when we
+            // The executor controls iteration; on each loop, check if/when we
             // should continue. When the debugger is paused, this will block
             // until it's time to continue.
-            if stepper.next().is_break() {
+            if exec.next().is_break() {
                 break;
             }
 
@@ -149,7 +155,7 @@ impl GameBoy {
                 let mut memory_bus =
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
                 // Update debug info between instructions
-                stepper.update_debug_info(|info| {
+                exec.update_debug_info(|info| {
                     info.cpu =
                         self.cpu.debug_info(&self.clock, &mut memory_bus);
                 });
@@ -160,14 +166,14 @@ impl GameBoy {
             // Progress the GPU
             poll!(gpu_fut, context, {
                 // Draw the frame to the screen
-                stepper.draw(&frame);
+                exec.draw(&frame);
                 frame.reset(); // Revert to all black
 
                 self.gpu.render_frame(&self.clock, &mut frame)
             });
 
             // Update the debugger on each tick
-            stepper.update_debug_info(|info| {
+            exec.update_debug_info(|info| {
                 info.clock_cycles = self.clock.cycles();
             });
 
@@ -228,9 +234,9 @@ mod tests {
         let mut backend = HeadlessBackend::new(move |debug_info| {
             debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
-        let mut stepper = Executor::new(&mut backend);
+        let mut executor = Executor::new(&mut backend);
 
-        emu.run(&mut stepper);
+        emu.run(&mut executor);
 
         assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emu.memory.bank(), 1);
