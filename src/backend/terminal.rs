@@ -3,7 +3,7 @@
 use crate::{
     Debugger,
     backend::{Backend, FrameBuffer},
-    emu::{CpuDebugInfo, Cycles, DebugInfo, Instruction},
+    emu::{CpuDebugInfo, Cycles, DebugInfo, Instruction, InstructionDebugInfo},
     input::InputEvent,
     util::IntDisplay,
 };
@@ -134,7 +134,9 @@ impl TerminalBackend {
     fn map_key(key: Key) -> Option<InputEvent> {
         match key {
             Key::Char(' ') => Some(InputEvent::DebugPauseToggle),
-            Key::Right => Some(InputEvent::DebugStepNext),
+            Key::Right => Some(InputEvent::DebugStepInstruction),
+            Key::CtrlRight => Some(InputEvent::DebugStepCycle),
+            Key::ShiftRight => Some(InputEvent::DebugStepFrame),
             Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
             _ => None,
         }
@@ -238,13 +240,27 @@ impl Widget for &CpuDebugInfo {
 
         let area = panel("CPU", area, buf);
 
-        let (prev_instruction, prev_cycles, prev_bytes) = self
-            .previous_instruction
-            .unwrap_or((Instruction::Invalid, Cycles(0), 0));
-        let (next_instruction, next_cycles, next_bytes) = self.next_instruction;
+        let previous =
+            self.previous_instruction.unwrap_or(InstructionDebugInfo {
+                instruction: Instruction::Invalid,
+                duration: Cycles(0),
+                end: Cycles(0),
+                size: 0,
+            });
+        let next = self.next_instruction;
         let lines = [
-            format!("PREV: {prev_instruction} ({prev_cycles}cy/{prev_bytes}B)"),
-            format!("NEXT: {next_instruction} ({next_cycles}cy/{next_bytes}B)"),
+            format!(
+                "PREV: {instr} ({dur}cy/{size}B)",
+                instr = previous.instruction,
+                dur = previous.duration,
+                size = previous.size,
+            ),
+            format!(
+                "NEXT: {instr} ({dur}cy/{size}B)",
+                instr = next.instruction,
+                dur = next.duration,
+                size = next.size,
+            ),
             // Registers
             format!("pc: {}", self.pc),
             format!("sp: {}", self.sp),

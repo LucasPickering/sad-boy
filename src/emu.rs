@@ -10,7 +10,7 @@ mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};
-pub use cpu::CpuDebugInfo;
+pub use cpu::{CpuDebugInfo, InstructionDebugInfo};
 pub use instruction::Instruction;
 pub use memory::Address;
 
@@ -114,7 +114,7 @@ impl GameBoy {
         stepper.update_debug_info(|info| {
             let mut memory_bus =
                 MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
-            info.cpu = self.cpu.debug_info(&mut memory_bus);
+            info.cpu = self.cpu.debug_info(&self.clock, &mut memory_bus);
         });
 
         let mut frame =
@@ -150,7 +150,8 @@ impl GameBoy {
                     MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
                 // Update debug info between instructions
                 stepper.update_debug_info(|info| {
-                    info.cpu = self.cpu.debug_info(&mut memory_bus);
+                    info.cpu =
+                        self.cpu.debug_info(&self.clock, &mut memory_bus);
                 });
 
                 self.cpu.execute_next(&self.clock, memory_bus)

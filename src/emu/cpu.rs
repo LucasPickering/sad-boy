@@ -32,11 +32,8 @@ pub struct Cpu {
     interrupts_enabled: bool,
     /// Most recently executed instruction
     ///
-    /// Also includes the number of cycles it took and the size of the
-    /// instruction in bytes.
-    ///
     /// `None` only on startup.
-    previous_instruction: Option<(Instruction, Cycles, usize)>,
+    previous_instruction: Option<InstructionDebugInfo>,
 }
 
 impl Cpu {
@@ -52,21 +49,26 @@ impl Cpu {
         async move {
             // Parse the next instruction and check how many cycles it will take
             let pc = self.registers.pc;
-            let (instruction, num_bytes) = memory.get_instruction(pc);
-            let cycles = self.exe(&mut memory).cycles(instruction);
+            let (instruction, size) = memory.get_instruction(pc);
+            let duration = self.exe(&mut memory).duration(instruction);
 
             // Wait *before* executing so state isn't updated until after the
             // elapsed cycles
-            clock.wait(cycles).await;
+            clock.wait(duration).await;
             self.exe(&mut memory).execute(instruction);
 
             // If the instruction didn't modify the PC (e.g. jumps), then
             // advance it automatically
             if self.registers.pc == pc {
-                self.registers.pc.0 += num_bytes as u16;
+                self.registers.pc.0 += size as u16;
             }
 
-            self.previous_instruction = Some((instruction, cycles, num_bytes));
+            self.previous_instruction = Some(InstructionDebugInfo {
+                instruction,
+                duration,
+                end: clock.cycles() + duration,
+                size,
+            });
         }
         .instrument(info_span!("CPU"))
         .await;
@@ -77,13 +79,16 @@ impl Cpu {
     /// This is a read-only summary of current CPU state for the debugger. This
     /// needs the memory bus to load the next instruction from memory. That
     /// reference is `mut` so it can cache the instruction if needed.
-    pub fn debug_info(&mut self, memory: &mut MemoryBus) -> CpuDebugInfo {
+    pub fn debug_info(
+        &mut self,
+        clock: &Clock,
+        memory: &mut MemoryBus,
+    ) -> CpuDebugInfo {
         // Parse the next instruction from memory. This seems duplicative, but
         // it will be cached within the memory bus so it won't be parsed during
         // the next execution.
-        let (instruction, num_bytes) =
-            memory.get_instruction(self.registers.pc);
-        let cycles = self.exe(memory).cycles(instruction);
+        let (instruction, size) = memory.get_instruction(self.registers.pc);
+        let duration = self.exe(memory).duration(instruction);
 
         let reg = &self.registers;
         CpuDebugInfo {
@@ -103,7 +108,12 @@ impl Cpu {
             sp: reg.sp,
             interrupts_enabled: self.interrupts_enabled,
             previous_instruction: self.previous_instruction,
-            next_instruction: (instruction, cycles, num_bytes),
+            next_instruction: InstructionDebugInfo {
+                instruction,
+                duration,
+                end: clock.cycles() + duration,
+                size,
+            },
         }
     }
 
@@ -141,16 +151,10 @@ pub struct CpuDebugInfo {
     pub interrupts_enabled: bool,
     /// Most recently executed instruction
     ///
-    /// Also includes the number of cycles it took and the size of the
-    /// instruction in bytes.
-    ///
     /// `None` only on startup.
-    pub previous_instruction: Option<(Instruction, Cycles, usize)>,
+    pub previous_instruction: Option<InstructionDebugInfo>,
     /// Next instruction to execute
-    ///
-    /// Also includes the number of cycles it will take and the size of the
-    /// instruction in bytes.
-    pub next_instruction: (Instruction, Cycles, usize),
+    pub next_instruction: InstructionDebugInfo,
 }
 
 impl Default for CpuDebugInfo {
@@ -172,9 +176,31 @@ impl Default for CpuDebugInfo {
             sp: Address(0),
             interrupts_enabled: false,
             previous_instruction: None,
-            next_instruction: (Instruction::Nop, Cycles(0), 0),
+            next_instruction: InstructionDebugInfo {
+                instruction: Instruction::Nop,
+                duration: Cycles(0),
+                end: Cycles(0),
+                size: 0,
+            },
         }
     }
+}
+
+/// Summary info for a CPU instruction
+///
+/// This could be an instruction that was previously executed, is currently
+/// being executed, or will be executed in the future.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstructionDebugInfo {
+    /// Instruction being executed
+    pub instruction: Instruction,
+    /// Number of cycles it will take to execute this instruction from when
+    /// it was started
+    pub duration: Cycles,
+    /// Clock cycle on which this instruction will/did complete
+    pub end: Cycles,
+    /// Number of bytes this instruction takes up in the ROM
+    pub size: usize,
 }
 
 /// Helper for executing CPU instructions
@@ -360,8 +386,13 @@ impl CpuExe<'_, '_> {
 
     /// How many CPU cycles will this instruction take to execute?
     ///
-    /// TODO note about dynamic instructions
-    fn cycles(&self, instruction: Instruction) -> Cycles {
+    /// Most instructions take a fixed amount of time, but instructions with
+    /// condition codes can be variable. This will compute the condition to
+    /// provide a current execution duration. This means the condition will end
+    /// up being computed at least twice (once during duration calculation, once
+    /// during execution). TODO this could lead to bugs, if shared memory (VRAM)
+    /// is modified between the two computations.
+    fn duration(&self, instruction: Instruction) -> Cycles {
         let cycles = match instruction {
             Instruction::Adc(operand)
             | Instruction::Add(Add::A(operand))
@@ -953,11 +984,12 @@ pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
     },
     // https://gbdev.io/pandocs/Interrupts.html#ime-interrupt-master-enable-flag-write-only
     interrupts_enabled: false,
-    previous_instruction: Some((
-        Instruction::Ldh(LoadHigh::ConstA(0x50)),
-        Cycles(3),
-        2,
-    )),
+    previous_instruction: Some(InstructionDebugInfo {
+        instruction: Instruction::Ldh(LoadHigh::ConstA(0x50)),
+        duration: Cycles(3),
+        end: Cycles(0), // TODO
+        size: 2,
+    }),
 };
 
 #[cfg(test)]

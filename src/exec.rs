@@ -1,6 +1,6 @@
 use crate::{
     backend::{Backend, FrameBuffer},
-    emu::{Address, Cycles, DebugInfo},
+    emu::{Address, Clock, Cycles, DebugInfo},
     input::InputEvent,
 };
 use std::{collections::HashSet, ops::ControlFlow, time::Duration};
@@ -104,17 +104,29 @@ impl<'bk> Executor<'bk> {
     fn handle_input(&mut self, event: InputEvent) -> ControlFlow<()> {
         match event {
             InputEvent::DebugPauseToggle => {
-                if let Some(dbg) = &mut self.debugger {
-                    dbg.paused ^= true;
+                if let Some(debugger) = &mut self.debugger {
+                    debugger.paused ^= true;
                 }
             }
-            InputEvent::DebugStepNext => {
-                if let Some(dbg) = &mut self.debugger {
-                    // Unpause and set a breakpoint for the next cycle
-                    dbg.paused = false;
-                    dbg.breakpoints.insert(Breakpoint::next_cycle(&dbg.info));
+            InputEvent::DebugStepCycle => {
+                if let Some(debugger) = &mut self.debugger {
+                    debugger.unpause_until(debugger.info.clock_cycles + 1);
                 }
             }
+            InputEvent::DebugStepFrame => {
+                if let Some(debugger) = &mut self.debugger {
+                    debugger.unpause_until(Clock::next_frame_end(
+                        debugger.info.clock_cycles,
+                    ));
+                }
+            }
+            InputEvent::DebugStepInstruction => {
+                if let Some(debugger) = &mut self.debugger {
+                    debugger
+                        .unpause_until(debugger.info.cpu.next_instruction.end);
+                }
+            }
+
             InputEvent::Quit => return ControlFlow::Break(()), // Exit
             InputEvent::Button(_) => todo!("TODO track input state"),
         }
@@ -142,6 +154,12 @@ impl Debugger {
     /// debugger will pause.
     pub fn set_breakpoint(&mut self, address: Address) {
         self.breakpoints.insert(Breakpoint::Address(address));
+    }
+
+    /// Unpause and set a breakpoint for the given cycle count
+    fn unpause_until(&mut self, cycle: Cycles) {
+        self.paused = false;
+        self.breakpoints.insert(Breakpoint::Cycle(cycle));
     }
 
     /// Check all registered breakpoints, and pause the debugger if any have
@@ -197,10 +215,5 @@ impl Breakpoint {
             Self::Cycle(_) => true,
             Self::Address(_) => false,
         }
-    }
-
-    /// Create a breakpoint for the subsequent clock cycle
-    fn next_cycle(info: &DebugInfo) -> Self {
-        Self::Cycle(info.clock_cycles + Cycles(1))
     }
 }

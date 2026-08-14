@@ -7,8 +7,12 @@ pub enum InputEvent {
     Button(Button),
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,
-    /// Advance the debugger one step
-    DebugStepNext,
+    /// Advance the debugger one clock cycle
+    DebugStepCycle,
+    /// Advance the debugger to the end of the current frame
+    DebugStepFrame,
+    /// Advance the debugger to the end of the current CPU instruction
+    DebugStepInstruction,
     /// Exit the app
     Quit,
 }

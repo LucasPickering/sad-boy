@@ -72,6 +72,16 @@ impl Clock {
         (self.cycles.get().0 + 1).is_multiple_of(CYCLES_PER_FRAME.0)
     }
 
+    /// Get the clock cycle count for the next end-of-frame cycle, starting at
+    /// the given cycle
+    ///
+    /// If the given cycle is already the end of a frame, then the end of the
+    /// *following* frame will be returned.
+    pub fn next_frame_end(cycles: Cycles) -> Cycles {
+        // +1 ensures the last cycle of a frame jumps to the next frame
+        Cycles((cycles + 1).0.next_multiple_of(CYCLES_PER_FRAME.0))
+    }
+
     /// Get the number of cycles completed in the current frame
     pub fn cycles(&self) -> Cycles {
         self.cycles.get()
@@ -154,6 +164,14 @@ impl Add for Cycles {
 
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0 + rhs.0)
+    }
+}
+
+impl Add<u64> for Cycles {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        Self(self.0 + rhs)
     }
 }
 
