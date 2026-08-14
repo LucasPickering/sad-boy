@@ -8,7 +8,6 @@ use crate::{
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
-use itertools::Itertools;
 use nix::{
     fcntl::OFlag,
     libc,
@@ -196,7 +195,6 @@ impl Widget for &Debugger {
         Text::from_iter([
             format!("CLOCK: {} cy", self.info.clock_cycles),
             format!("DBG: {}", if self.paused { "PAUSED" } else { "RUNNING" }),
-            format!("BKP: {}", self.breakpoints.iter().join(", ")),
         ])
         .render(basic_area, buf);
 

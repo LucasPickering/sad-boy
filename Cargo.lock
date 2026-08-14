@@ -792,7 +792,6 @@ dependencies = [
  "base64",
  "clap",
  "color-eyre",
- "itertools",
  "nix",
  "paste",
  "pretty_assertions",

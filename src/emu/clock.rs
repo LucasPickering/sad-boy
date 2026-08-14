@@ -140,7 +140,7 @@ impl Clock {
 /// This makes it clearer what a value is, instead of passing around a bare
 /// integer everywhere. Every executed instruction returns this value so the CPU
 /// can report how many cycles were consumed from the budget.
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Cycles(pub u64);
 
 impl Display for Cycles {

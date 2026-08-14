@@ -5,13 +5,15 @@ mod util;
 
 use crate::{
     backend::{Backend, FrameBuffer, HeadlessBackend, TerminalBackend},
-    emu::{Address, DebugInfo, GameBoy},
+    emu::{Address, Cycles, DebugInfo, GameBoy},
     input::InputEvent,
     util::{TracingOutput, initialize_tracing},
 };
 use clap::Parser;
 use color_eyre::eyre;
-use std::{ops::ControlFlow, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet, ops::ControlFlow, path::PathBuf, time::Duration,
+};
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
@@ -67,6 +69,8 @@ impl<'bk> Stepper<'bk> {
 
     /// Create a new [Stepper] in debug mode
     fn debug(backend: &'bk mut dyn Backend, debugger: Debugger) -> Self {
+        backend.debug(&debugger); // Draw initial debug info
+
         Self {
             backend,
             debugger: Some(debugger),
@@ -88,32 +92,89 @@ impl<'bk> Stepper<'bk> {
 
     /// TODO
     fn next(&mut self) -> ControlFlow<()> {
-        // TODO explain
+        const INPUT_TIMEOUT_PAUSED: Duration = Duration::from_millis(100);
+
+        // Check if we've hit any breakpoints and need to pause
         if let Some(debugger) = &mut self.debugger {
-            debugger.wait_for_input(&mut *self.backend)?;
+            debugger.check_breakpoints();
+        }
+
+        // Draw debug info to the screen
+        if let Some(debugger) = &self.debugger {
             self.backend.debug(debugger);
         }
 
-        // TODO
-        if self
-            .backend
-            .should_quit(self.debugger.as_ref().map(|d| &d.info))
-        {
-            ControlFlow::Break(())
+        // When paused, we'll wait until there's input. We can't just block on
+        // the input channel though, because there may also be a quit signal. So
+        // we'll hop back and forth between checking the quit flag and checking
+        // the input, every 100ms. This frequency is slow enough that the idle
+        // CPU usage will be minimal, but fast enough to provide low latency for
+        // exit signals.
+        while self.is_paused() {
+            if self.backend.should_quit(self.debug_info()) {
+                return ControlFlow::Break(());
+            }
+
+            // Don't drain the queue here, because we want to check after each
+            // event if it was unpaused.
+            if let Some(event) = self.backend.next_event(INPUT_TIMEOUT_PAUSED) {
+                self.handle_input(event)?;
+            }
+        }
+
+        // Debugger isn't paused: drain the input queue
+        while let Some(event) = self.backend.next_event(Duration::ZERO) {
+            self.handle_input(event)?;
+        }
+
+        // Continue on with the emulator tick
+        if self.backend.should_quit(self.debug_info()) {
+            ControlFlow::Break(()) // Exit the app
         } else {
             ControlFlow::Continue(())
         }
+    }
+
+    fn is_paused(&self) -> bool {
+        self.debugger.as_ref().is_some_and(|d| d.paused)
+    }
+
+    fn debug_info(&self) -> Option<&DebugInfo> {
+        self.debugger.as_ref().map(|d| &d.info)
+    }
+
+    fn handle_input(&mut self, event: InputEvent) -> ControlFlow<()> {
+        match event {
+            InputEvent::DebugPauseToggle => {
+                if let Some(dbg) = &mut self.debugger {
+                    dbg.paused ^= true;
+                }
+            }
+            InputEvent::DebugStepNext => {
+                if let Some(dbg) = &mut self.debugger {
+                    // Unpause and set a breakpoint for the next cycle
+                    dbg.paused = false;
+                    dbg.breakpoints.insert(Breakpoint::next_cycle(&dbg.info));
+                }
+            }
+            InputEvent::Quit => return ControlFlow::Break(()), // Exit
+            InputEvent::Button(_) => todo!("TODO track input state"),
+        }
+        ControlFlow::Continue(())
     }
 }
 
 /// TODO
 struct Debugger {
-    /// TODO
+    /// Summary info about the current system state
     info: DebugInfo,
-    /// TODO
+    /// When paused, the emulator doesn't advance at all
     paused: bool,
-    /// TODO
-    breakpoints: Vec<Address>,
+    /// Triggers for when the debugger should be paused automatically
+    ///
+    /// This uses a `HashSet` to prevent duplicate breakpoints and make each
+    /// lookup `O(1)`.
+    breakpoints: HashSet<Breakpoint>,
 }
 
 impl Debugger {
@@ -122,34 +183,29 @@ impl Debugger {
     /// When the CPU reaches this address (i.e. when `pc == address`), the
     /// debugger will pause.
     fn set_breakpoint(&mut self, address: Address) {
-        self.breakpoints.push(address);
+        self.breakpoints.insert(Breakpoint::Address(address));
     }
 
-    /// If the debugger is paused, wait for the next input that will advance
-    /// the debugger
+    /// Check all registered breakpoints, and pause the debugger if any have
+    /// been triggered
     ///
-    /// This will return [ControlFlow::Break] if the app should exit. It
-    /// returns [ControlFlow::Continue] when the emulator should progress.
-    fn wait_for_input(&mut self, backend: &mut dyn Backend) -> ControlFlow<()> {
-        while self.paused {
-            // Check the quit flag every 100ms so we don't miss any signals
-            if backend.should_quit(Some(&self.info)) {
-                return ControlFlow::Break(());
-            }
+    /// This uses the current debug info to check breakpoint statuses.
+    fn check_breakpoints(&mut self) {
+        let mut check = |bp: Breakpoint| {
+            // Remove temporary breakpoints, leave permanent ones
+            let hit = if bp.temporary() {
+                self.breakpoints.remove(&bp)
+            } else {
+                self.breakpoints.contains(&bp)
+            };
+            self.paused |= hit;
+        };
 
-            match backend.next_event(Duration::from_millis(100)) {
-                Some(InputEvent::DebugPauseToggle) => self.paused ^= true,
-                Some(InputEvent::DebugStepNext) => {
-                    return ControlFlow::Continue(());
-                }
-                Some(InputEvent::Quit) => return ControlFlow::Break(()),
-                // Regular button input is ignored while paused
-                Some(InputEvent::Button(_)) | None => {}
-            }
-        }
-
-        // We exited the pause, so progress
-        ControlFlow::Continue(())
+        // Check each potential breakpoint type. Iterating over them would be
+        // a bit more foolproof, but this is O(1) and also makes it easy to
+        // remove temporary BPs
+        check(Breakpoint::Cycle(self.info.clock_cycles));
+        check(Breakpoint::Address(self.info.cpu.pc));
     }
 }
 
@@ -158,8 +214,36 @@ impl Default for Debugger {
         Self {
             info: DebugInfo::default(),
             paused: true, // Start paused
-            breakpoints: vec![],
+            breakpoints: HashSet::new(),
         }
+    }
+}
+
+/// An indicator of when the debugger should pause
+///
+/// The debugger can have multiple breakpoints registered at a time, and any one
+/// of them can trigger a pause. This is used for user-provided breakpoints as
+/// well as internal ones (e.g. when stepping by cycle/instruction).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Breakpoint {
+    /// Pause when the clock hits a certain cycle count
+    Cycle(Cycles),
+    /// Pause when the program counter hits a certain address
+    Address(Address),
+}
+
+impl Breakpoint {
+    /// Should this breakpoint be removed the first time it's hit?
+    fn temporary(self) -> bool {
+        match self {
+            Self::Cycle(_) => true,
+            Self::Address(_) => false,
+        }
+    }
+
+    /// Create a breakpoint for the subsequent clock cycle
+    fn next_cycle(info: &DebugInfo) -> Self {
+        Self::Cycle(info.clock_cycles + Cycles(1))
     }
 }
 

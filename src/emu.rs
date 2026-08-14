@@ -110,6 +110,13 @@ impl GameBoy {
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
     pub fn run(&mut self, stepper: &mut Stepper) {
+        // Set debug info to the initial system state
+        stepper.update_debug_info(|info| {
+            let mut memory_bus =
+                MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
+            info.cpu = self.cpu.debug_info(&mut memory_bus);
+        });
+
         let mut frame =
             FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
         stepper.draw(&frame); // Initialize the screen
@@ -130,6 +137,9 @@ impl GameBoy {
 
         // Each iteration of this loop is a single clock cycle
         loop {
+            // The stepper controls iteration; on each loop, check if/when we
+            // should continue. When the debugger is paused, this will block
+            // until it's time to continue.
             if stepper.next().is_break() {
                 break;
             }
