@@ -15,7 +15,7 @@ pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
-    Stepper,
+    Executor,
     backend::FrameBuffer,
     emu::{
         cpu::Cpu,
@@ -109,7 +109,7 @@ impl GameBoy {
     ///
     /// This will run until the given `stop_on` function returns `true`. It is
     /// called on every clock cycle.
-    pub fn run(&mut self, stepper: &mut Stepper) {
+    pub fn run(&mut self, stepper: &mut Executor) {
         // Set debug info to the initial system state
         stepper.update_debug_info(|info| {
             let mut memory_bus =
@@ -227,7 +227,7 @@ mod tests {
         let mut backend = HeadlessBackend::new(move |debug_info| {
             debug_info.cpu.pc == memory::BOOTLOADER.last()
         });
-        let mut stepper = Stepper::new(&mut backend);
+        let mut stepper = Executor::new(&mut backend);
 
         emu.run(&mut stepper);
 
