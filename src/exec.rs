@@ -3,7 +3,11 @@ use crate::{
     emu::{Address, Clock, Cycles, DebugInfo},
     input::InputEvent,
 };
-use std::{collections::HashSet, ops::ControlFlow, time::Duration};
+use std::{
+    collections::HashSet,
+    ops::ControlFlow,
+    time::{Duration, Instant},
+};
 
 /// TODO
 pub struct Executor<'bk> {
@@ -23,8 +27,11 @@ impl<'bk> Executor<'bk> {
     }
 
     /// Create a new [Stepper] in debug mode
-    pub fn debug(backend: &'bk mut dyn Backend, debugger: Debugger) -> Self {
-        backend.debug(&debugger); // Draw initial debug info
+    pub fn debug(
+        backend: &'bk mut dyn Backend,
+        mut debugger: Debugger,
+    ) -> Self {
+        debugger.draw(backend); // Draw initial debug info
 
         Self {
             backend,
@@ -58,8 +65,8 @@ impl<'bk> Executor<'bk> {
         }
 
         // Draw debug info to the screen
-        if let Some(debugger) = &self.debugger {
-            self.backend.debug(debugger);
+        if let Some(debugger) = &mut self.debugger {
+            debugger.draw(self.backend);
         }
 
         // When paused, we'll wait until there's input. We can't just block on
@@ -145,6 +152,11 @@ pub struct Debugger {
     /// This uses a `HashSet` to prevent duplicate breakpoints and make each
     /// lookup `O(1)`.
     breakpoints: HashSet<Breakpoint>,
+    /// When debug info was last drawn to the screen
+    ///
+    /// `None` only if no draw has happened yet. This is used to throttle the
+    /// draw rate while running.
+    last_draw: Option<Instant>,
 }
 
 impl Debugger {
@@ -183,6 +195,24 @@ impl Debugger {
         check(Breakpoint::Cycle(self.info.clock_cycles));
         check(Breakpoint::Address(self.info.cpu.pc));
     }
+
+    /// Draw debug info to the backend's screen
+    ///
+    /// This call is automatically throttled to a maximum framerate. This limits
+    /// the slowdown caused by running the debugger and updating it live.
+    fn draw(&mut self, backend: &mut dyn Backend) {
+        const MIN_DRAW_GAP: Duration = Duration::from_millis(100);
+
+        let now = Instant::now();
+        if self.paused
+            || self
+                .last_draw
+                .is_none_or(|instant| now - instant >= MIN_DRAW_GAP)
+        {
+            backend.debug(self);
+            self.last_draw = Some(now);
+        }
+    }
 }
 
 impl Default for Debugger {
@@ -191,6 +221,7 @@ impl Default for Debugger {
             info: DebugInfo::default(),
             paused: true, // Start paused
             breakpoints: HashSet::new(),
+            last_draw: None,
         }
     }
 }
