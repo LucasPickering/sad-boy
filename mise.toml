@@ -2,8 +2,9 @@
 description = "Run the emulator with a profiler"
 run = [
   "cargo build --release",
-  "samply record ./target/release/sad-boy -- ./roms/cpu_instrs.gb",
+  "samply record ./target/release/sad-boy ./roms/tetris.gb --debug",
 ]
+tools."cargo:samply" = "0.13"
 
 [tasks.test-profile]
 description = "Run unit tests with profiling enabled"
