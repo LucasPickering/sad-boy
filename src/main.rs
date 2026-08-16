@@ -5,7 +5,7 @@ mod input;
 mod util;
 
 use crate::{
-    backend::{Backend, HeadlessBackend, TerminalBackend},
+    backend::{HeadlessBackend, TerminalBackend},
     emu::{Address, GameBoy},
     exec::{Debugger, Executor},
     util::{TracingOutput, initialize_tracing},
@@ -25,29 +25,31 @@ fn main() -> eyre::Result<()> {
 
     let mut game_boy = GameBoy::boot(&args.rom)?;
 
-    // Select hardware based on the input flags
-    let mut backend: Box<dyn Backend> = if args.headless {
-        Box::new(HeadlessBackend::new(|_| false))
-    } else {
-        Box::new(TerminalBackend::new()?)
-    };
-
-    // Set up executor
-    let mut executor = if args.debug {
-        let mut debugger = Debugger::default();
-        for address in args.breakpoint {
-            debugger.set_breakpoint(address);
+    // --headless just runs until it crashes with logging
+    if args.headless {
+        let mut backend = HeadlessBackend::new();
+        loop {
+            game_boy.tick(&mut backend);
         }
-        Executor::debug(&mut *backend, debugger)
-    } else if !args.breakpoint.is_empty() {
-        bail!("--breakpoint requires --debug");
     } else {
-        Executor::new(&mut *backend)
-    };
+        let mut backend = TerminalBackend::new()?;
 
-    game_boy.run(&mut executor);
+        // Set up executor
+        let mut executor = if args.debug {
+            let mut debugger = Debugger::default();
+            for address in args.breakpoint {
+                debugger.set_breakpoint(address);
+            }
+            Executor::debug(game_boy, &mut backend, debugger)
+        } else if !args.breakpoint.is_empty() {
+            bail!("--breakpoint requires --debug");
+        } else {
+            Executor::new(game_boy, &mut backend)
+        };
 
-    Ok(())
+        executor.run();
+        Ok(())
+    }
 }
 
 /// Game Boy emulator

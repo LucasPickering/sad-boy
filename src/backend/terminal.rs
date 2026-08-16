@@ -3,7 +3,7 @@
 use crate::{
     Debugger,
     backend::{Backend, FrameBuffer},
-    emu::{CpuDebugInfo, Cycles, DebugInfo, Instruction, InstructionDebugInfo},
+    emu::{CpuDebugInfo, Cycles, Instruction, InstructionDebugInfo},
     input::InputEvent,
     util::IntDisplay,
 };
@@ -176,7 +176,7 @@ impl Backend for TerminalBackend {
         }
     }
 
-    fn should_quit(&self, _debug_info: Option<&DebugInfo>) -> bool {
+    fn should_quit(&self) -> bool {
         self.quit.load(Ordering::Relaxed)
     }
 }

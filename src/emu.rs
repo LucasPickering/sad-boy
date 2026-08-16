@@ -15,8 +15,7 @@ pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
-    Executor,
-    backend::FrameBuffer,
+    backend::{Backend, FrameBuffer},
     emu::{
         cpu::Cpu,
         gpu::Gpu,
@@ -41,7 +40,8 @@ pub struct GameBoy {
     /// Read-only memory from the cartridge
     rom: Rom,
     memory: Memory,
-    // Debug state
+    /// TODO
+    frame: FrameBuffer,
 }
 
 impl GameBoy {
@@ -64,71 +64,46 @@ impl GameBoy {
             gpu: Gpu::default(),
             rom,
             memory: Memory::default(),
+            frame: FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into()),
         }
     }
 
-    /// Run the Game Boy indefinitely
+    /// TODO
     ///
-    /// The given [Executor] is used to control this main loop. On each
-    /// iteration, this will call [Executor::next] to control if/when that
-    /// iteration runs. This may seem backward, but it's required because of
-    /// the use of futures in the emulator. Futures are used to emulate
-    /// multiple system components concurrently. That intermediate future state
-    /// has to live within the scope of this singular function, i.e. it can't
-    /// be boxed up and stored in a struct. The futures contain self-references
-    /// and rely on disjoint `self` references, both things that are only
-    /// possible within a single stack frame.
-    pub fn run(&mut self, exec: &mut Executor) {
-        // Set debug info to the initial system state
-        exec.update_debug_info(|info| {
-            let mut memory_bus =
-                MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
-            info.cpu = self.cpu.debug_info(&self.clock, &mut memory_bus);
-        });
-
-        let mut frame =
-            FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into());
-        exec.draw(&frame); // Initialize the screen
-
-        // Each iteration of this loop is a single clock cycle
-        loop {
-            // The executor controls iteration; on each loop, check if/when we
-            // should continue. When the debugger is paused, this will block
-            // until it's time to continue.
-            if exec.next().is_break() {
-                break;
-            }
-
-            // Progress the CPU
-            let mut memory_bus =
-                MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
-            if self.cpu.tick(&self.clock, &mut memory_bus) {
-                // Update debug info between instructions
-                exec.update_debug_info(|info| {
-                    info.cpu =
-                        self.cpu.debug_info(&self.clock, &mut memory_bus);
-                });
-            }
-
-            // Progress the GPU
-            if self.gpu.tick(&self.clock, &mut frame) {
-                // Draw the frame to the screen
-                exec.draw(&frame);
-                frame.reset(); // Revert to all black
-            }
-
-            // Update the debugger on each tick
-            exec.update_debug_info(|info| {
-                info.clock_cycles = self.clock.cycles();
-            });
-
-            // Sleep at the end of the final tick of each frame to sync back
-            // up with real time
-            if self.clock.is_frame_end() {
-                self.clock.sleep();
-            }
-            self.clock.tick();
+    /// TODO make this take `&self`
+    pub fn debug_info(&mut self) -> DebugInfo {
+        DebugInfo {
+            clock_cycles: self.clock.cycles(),
+            cpu: self.cpu.debug_info(
+                &self.clock,
+                &mut MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu),
+            ),
         }
+    }
+
+    /// Advance the emulator one clock cycle
+    ///
+    /// If this is the final clock cycle of the frame, this will sleep at the
+    /// end of the tick to idle for the rest of the frame time.
+    pub fn tick(&mut self, backend: &mut dyn Backend) {
+        // Progress the CPU
+        let mut memory_bus =
+            MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
+        self.cpu.tick(&self.clock, &mut memory_bus);
+
+        // Progress the GPU
+        if self.gpu.tick(&self.clock, &mut self.frame) {
+            // Draw the frame to the screen
+            backend.draw(&self.frame);
+            self.frame.reset(); // Revert to all black
+        }
+
+        // Sleep at the end of the final tick of each frame to sync back
+        // up with real time
+        if self.clock.is_frame_end() {
+            self.clock.sleep();
+        }
+        self.clock.tick();
     }
 }
 
@@ -171,21 +146,21 @@ mod tests {
         rom_data[0x104..(0x104 + NINTENDO_LOGO.len())]
             .copy_from_slice(NINTENDO_LOGO);
 
-        let mut emu = GameBoy::test(rom_data);
         // Run until the program counter hits the end of the bootloader. We
         // can't get safe access to the CPU registers because the CPU needs
         // mutable access to itself constantly. This raw pointer access is
         // pretty harmless.
-        let mut backend = HeadlessBackend::new(move |debug_info| {
-            debug_info.cpu.pc == memory::BOOTLOADER.last()
-        });
-        let mut executor = Executor::new(&mut backend);
-
-        emu.run(&mut executor);
+        let mut backend = HeadlessBackend::new();
+        let mut emulator = GameBoy::test(rom_data);
+        while memory::BOOTLOADER.contains(emulator.debug_info().cpu.pc) {
+            emulator.tick(&mut backend);
+        }
 
         // TODO
         // assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
-        assert_eq!(emu.memory.bank(), 1);
+        assert_eq!(emulator.memory.bank(), 1);
+        assert_eq!(emulator.clock.cycles(), Cycles(23_580_484));
+
         // TODO look for logo
         let expected = FrameBuffer::test(
             SCREEN_WIDTH.into(),
@@ -196,6 +171,5 @@ mod tests {
             ],
         );
         backend.assert_pixels(&expected);
-        assert_eq!(emu.clock.cycles(), Cycles(23_580_484));
     }
 }

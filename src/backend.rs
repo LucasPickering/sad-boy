@@ -7,7 +7,7 @@ mod terminal;
 
 pub use terminal::TerminalBackend;
 
-use crate::{Debugger, emu::DebugInfo, input::InputEvent};
+use crate::{Debugger, input::InputEvent};
 use std::{
     fmt::{self, Display},
     time::Duration,
@@ -35,32 +35,22 @@ pub trait Backend {
     /// Should the emulator exit?
     ///
     /// This is called by the emulator on each tick and should be used to
-    /// monitor exit conditions (such as process signals). The given [DebugInfo]
-    /// can be used by tests to exit when the emulator reaches a certain state.
-    /// This argument is optional because debug info isn't available when the
-    /// debugger isn't running.
+    /// monitor exit conditions (such as process signals).
     ///
     /// This should *not* check for a [InputEvent::Quit] input. That will be
     /// monitored separately via [Self::next].
-    fn should_quit(&self, debug_info: Option<&DebugInfo>) -> bool;
+    fn should_quit(&self) -> bool;
 }
 
 /// An in-memory [Backend] for testing and headless operation
 pub struct HeadlessBackend {
     /// Most recent drawn frame
     last_frame: Option<FrameBuffer>,
-    /// Callback to check if the app should quit
-    ///
-    /// Tests use this to define custom termination conditions.
-    should_quit: Box<dyn Fn(&DebugInfo) -> bool>,
 }
 
 impl HeadlessBackend {
-    pub fn new(should_quit: impl 'static + Fn(&DebugInfo) -> bool) -> Self {
-        Self {
-            last_frame: None,
-            should_quit: Box::new(should_quit),
-        }
+    pub fn new() -> Self {
+        Self { last_frame: None }
     }
 
     /// Assert that the screen pixels match the given pixel array
@@ -161,10 +151,8 @@ impl Backend for HeadlessBackend {
         None
     }
 
-    fn should_quit(&self, debug_info: Option<&DebugInfo>) -> bool {
-        let debug_info =
-            debug_info.expect("Debug mode should be enabled for tests");
-        (self.should_quit)(debug_info)
+    fn should_quit(&self) -> bool {
+        false
     }
 }
 

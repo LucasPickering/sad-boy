@@ -1,13 +1,12 @@
 //! Emulator execution management
 
 use crate::{
-    backend::{Backend, FrameBuffer},
-    emu::{Address, Clock, Cycles, DebugInfo},
+    backend::Backend,
+    emu::{Address, Clock, Cycles, DebugInfo, GameBoy},
     input::InputEvent,
 };
 use std::{
     collections::HashSet,
-    ops::ControlFlow,
     time::{Duration, Instant},
 };
 
@@ -17,6 +16,7 @@ use std::{
 /// that. It implements behavior that isn't possible in traditional hardware,
 /// such as debugging and speed control.
 pub struct Executor<'bk> {
+    emulator: GameBoy,
     /// In debug mode, the debugger manages pausing and breakpoints
     debugger: Option<Debugger>,
     /// Input and output bindings
@@ -25,8 +25,9 @@ pub struct Executor<'bk> {
 
 impl<'bk> Executor<'bk> {
     /// Create a new [Executor] in regular (non-debug) mode
-    pub fn new(backend: &'bk mut dyn Backend) -> Self {
+    pub fn new(emulator: GameBoy, backend: &'bk mut dyn Backend) -> Self {
         Self {
+            emulator,
             backend,
             debugger: None,
         }
@@ -34,78 +35,77 @@ impl<'bk> Executor<'bk> {
 
     /// Create a new [Executor] in debug mode
     pub fn debug(
+        emulator: GameBoy,
         backend: &'bk mut dyn Backend,
         mut debugger: Debugger,
     ) -> Self {
         debugger.draw(backend); // Draw initial debug info
 
         Self {
+            emulator,
             backend,
             debugger: Some(debugger),
         }
     }
 
-    /// Update debug info **if debug mode is enabled**
-    ///
-    /// If debug mode is disabled, the given function will never be called.
-    pub fn update_debug_info(&mut self, f: impl FnOnce(&mut DebugInfo)) {
-        if let Some(debugger) = &mut self.debugger {
-            f(&mut debugger.info);
-        }
-    }
-
-    /// Draw the emulator frame to the screen
-    pub fn draw(&mut self, frame: &FrameBuffer) {
-        self.backend.draw(frame);
-    }
-
-    /// Begin a clock cycle
-    ///
-    /// This will:
-    /// - Check for input
-    /// - Check the exit condition
-    /// - Check and update the debugger in debug mode
-    pub fn next(&mut self) -> ControlFlow<()> {
-        const INPUT_TIMEOUT_PAUSED: Duration = Duration::from_millis(100);
-
-        // Check if we've hit any breakpoints and need to pause
-        if let Some(debugger) = &mut self.debugger {
-            debugger.check_breakpoints();
-        }
-
-        // Draw debug info to the screen
-        if let Some(debugger) = &mut self.debugger {
-            debugger.draw(self.backend);
-        }
-
-        // When paused, we'll wait until there's input. We can't just block on
-        // the input channel though, because there may also be a quit signal. So
-        // we'll hop back and forth between checking the quit flag and checking
-        // the input, every 100ms. This frequency is slow enough that the idle
-        // CPU usage will be minimal, but fast enough to provide low latency for
-        // exit signals.
-        while self.is_paused() {
-            if self.backend.should_quit(self.debug_info()) {
-                return ControlFlow::Break(());
+    /// TODO
+    pub fn run(&mut self) {
+        // TODO include
+        while !self.backend.should_quit() {
+            // Check if we've hit any breakpoints and need to pause
+            if let Some(debugger) = &mut self.debugger {
+                debugger.check_breakpoints();
             }
 
-            // Don't drain the queue here, because we want to check after each
-            // event if it was unpaused.
-            if let Some(event) = self.backend.next_event(INPUT_TIMEOUT_PAUSED) {
-                self.handle_input(event)?;
+            // Draw debug info to the screen
+            if let Some(debugger) = &mut self.debugger {
+                debugger.draw(self.backend);
             }
-        }
 
-        // Debugger isn't paused: drain the input queue
-        while let Some(event) = self.backend.next_event(Duration::ZERO) {
-            self.handle_input(event)?;
-        }
+            // Drain the input queue
+            while let Some(event) =
+                self.backend.next_event(self.input_timeout())
+            {
+                match event {
+                    InputEvent::DebugPauseToggle => {
+                        if let Some(debugger) = &mut self.debugger {
+                            debugger.paused ^= true;
+                        }
+                    }
+                    InputEvent::DebugStepCycle => {
+                        if let Some(debugger) = &mut self.debugger {
+                            debugger
+                                .unpause_until(debugger.info.clock_cycles + 1);
+                        }
+                    }
+                    InputEvent::DebugStepFrame => {
+                        if let Some(debugger) = &mut self.debugger {
+                            debugger.unpause_until(Clock::next_frame_end(
+                                debugger.info.clock_cycles,
+                            ));
+                        }
+                    }
+                    InputEvent::DebugStepInstruction => {
+                        if let Some(debugger) = &mut self.debugger {
+                            debugger.unpause_until(
+                                debugger.info.cpu.next_instruction.end,
+                            );
+                        }
+                    }
 
-        // Continue on with the emulator tick
-        if self.backend.should_quit(self.debug_info()) {
-            ControlFlow::Break(()) // Exit the app
-        } else {
-            ControlFlow::Continue(())
+                    InputEvent::Quit => return, // Exit
+                    InputEvent::Button(_) => todo!("TODO track input state"),
+                }
+            }
+
+            // Progress the emulator as long as the debugger isn't paused
+            if !self.is_paused() {
+                self.emulator.tick(self.backend);
+                // Update debugger info
+                if let Some(debugger) = &mut self.debugger {
+                    debugger.info = self.emulator.debug_info();
+                }
+            }
         }
     }
 
@@ -113,40 +113,13 @@ impl<'bk> Executor<'bk> {
         self.debugger.as_ref().is_some_and(|d| d.paused)
     }
 
-    fn debug_info(&self) -> Option<&DebugInfo> {
-        self.debugger.as_ref().map(|d| &d.info)
-    }
-
-    fn handle_input(&mut self, event: InputEvent) -> ControlFlow<()> {
-        match event {
-            InputEvent::DebugPauseToggle => {
-                if let Some(debugger) = &mut self.debugger {
-                    debugger.paused ^= true;
-                }
-            }
-            InputEvent::DebugStepCycle => {
-                if let Some(debugger) = &mut self.debugger {
-                    debugger.unpause_until(debugger.info.clock_cycles + 1);
-                }
-            }
-            InputEvent::DebugStepFrame => {
-                if let Some(debugger) = &mut self.debugger {
-                    debugger.unpause_until(Clock::next_frame_end(
-                        debugger.info.clock_cycles,
-                    ));
-                }
-            }
-            InputEvent::DebugStepInstruction => {
-                if let Some(debugger) = &mut self.debugger {
-                    debugger
-                        .unpause_until(debugger.info.cpu.next_instruction.end);
-                }
-            }
-
-            InputEvent::Quit => return ControlFlow::Break(()), // Exit
-            InputEvent::Button(_) => todo!("TODO track input state"),
+    /// TODO
+    fn input_timeout(&self) -> Duration {
+        if self.is_paused() {
+            Duration::from_millis(100)
+        } else {
+            Duration::ZERO
         }
-        ControlFlow::Continue(())
     }
 }
 

@@ -550,8 +550,8 @@ impl<T> MemoryWrite for Option<&mut MemoryBlock<T>> {
 
 /// A container that provides read access to some chunk of addressable memory
 ///
-/// This is separate from [MemoryWrite] to allow that trait to selectively
-/// provide internal mutation.
+/// This is separate from [MemoryWrite] because it's not always implemented on
+/// just `&T`/`&mut T`.
 pub trait MemoryRead {
     /// Get the byte at the given memory address
     fn byte(self, address: Address) -> u8;
@@ -559,8 +559,8 @@ pub trait MemoryRead {
 
 /// A container that provides write access to some chunk of addressable memory
 ///
-/// This takes `self` and is separate from [MemoryRead] so the implementor can
-/// selectively provide internal mutability.
+/// This is separate from [MemoryRead] because it's not always implemented on
+/// just `&T`/`&mut T`.
 pub trait MemoryWrite {
     /// Set the value of the byte at the given memory address
     fn set_byte(self, address: Address, value: u8);
