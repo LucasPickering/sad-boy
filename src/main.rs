@@ -1,13 +1,12 @@
 mod backend;
+mod debug;
 mod emu;
-mod exec;
-mod input;
 mod util;
 
 use crate::{
     backend::{HeadlessBackend, TerminalBackend},
+    debug::Debugger,
     emu::{Address, GameBoy},
-    exec::{Debugger, Executor},
     util::{TracingOutput, initialize_tracing},
 };
 use clap::Parser;
@@ -32,22 +31,22 @@ fn main() -> eyre::Result<()> {
             game_boy.tick(&mut backend);
         }
     } else {
-        let mut backend = TerminalBackend::new()?;
+        let mut terminal = TerminalBackend::new()?;
 
-        // Set up executor
-        let mut executor = if args.debug {
+        // Set up debugger
+        let debugger = if args.debug {
             let mut debugger = Debugger::default();
             for address in args.breakpoint {
                 debugger.set_breakpoint(address);
             }
-            Executor::debug(game_boy, &mut backend, debugger)
+            Some(debugger)
         } else if !args.breakpoint.is_empty() {
             bail!("--breakpoint requires --debug");
         } else {
-            Executor::new(game_boy, &mut backend)
+            None
         };
 
-        executor.run();
+        terminal.run(&mut game_boy, debugger);
         Ok(())
     }
 }

@@ -3,8 +3,9 @@
 use crate::{
     Debugger,
     backend::{Backend, FrameBuffer},
-    emu::{CpuDebugInfo, Cycles, Instruction, InstructionDebugInfo},
-    input::InputEvent,
+    emu::{
+        Clock, CpuDebugInfo, Cycles, GameBoy, Instruction, InstructionDebugInfo,
+    },
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
@@ -31,13 +32,14 @@ use std::{
     io::{self, Stdout, Write},
     mem,
     num::NonZero,
+    ops::ControlFlow,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use termion::{
     cursor,
@@ -46,7 +48,7 @@ use termion::{
     raw::{IntoRawMode, RawTerminal},
     screen::{AlternateScreen, IntoAlternateScreen},
 };
-use tracing::error;
+use tracing::{debug, error};
 
 /// Width of the screen in terminal columns
 const TERM_WIDTH: u16 = 60;
@@ -78,6 +80,11 @@ pub struct TerminalBackend {
     terminal: Terminal<TermionBackend<AlternateScreen<RawTerminal<Stdout>>>>,
     /// Flag set by the signal handler when a termination signal is received
     quit: Arc<AtomicBool>,
+    /// Last time debug info was drawn to the screen
+    ///
+    /// `None` iff debug info has never been drawn. Used to throttle debug draw
+    /// rate while running the emulator.
+    last_debug_draw: Option<Instant>,
 }
 
 impl TerminalBackend {
@@ -109,12 +116,134 @@ impl TerminalBackend {
             input_rx,
             terminal,
             quit,
+            last_debug_draw: None,
         })
+    }
+
+    /// TODO
+    pub fn run(
+        &mut self,
+        emulator: &mut GameBoy,
+        mut debugger: Option<Debugger>,
+    ) {
+        // Draw initial debug state
+        debugger.as_ref().inspect(|dbg| self.draw_debug(dbg));
+
+        while !self.quit.load(Ordering::Relaxed) {
+            // Check if we've hit any breakpoints and need to pause
+            if let Some(debugger) = &mut debugger {
+                debugger.check_breakpoints();
+            }
+
+            if self.drain_input(&mut debugger).is_break() {
+                break;
+            }
+
+            // Progress the emulator as long as the debugger isn't paused
+            if !debugger.as_ref().is_some_and(|dbg| dbg.paused) {
+                emulator.tick(self);
+                // Update debugger info and draw it to the screen
+                if let Some(debugger) = &mut debugger {
+                    debugger.info = emulator.debug_info();
+                    self.draw_debug(debugger);
+                }
+            }
+        }
+    }
+
+    /// Drain all events from the input queue
+    ///
+    /// Return [ControlFlow::Break] if the loop should exit.
+    fn drain_input(
+        &mut self,
+        debugger: &mut Option<Debugger>,
+    ) -> ControlFlow<()> {
+        // While the debugger is paused, we have nothing to do but wait for
+        // input. In that case, we'll use a timeout on the input queue so we
+        // don't burn a lot of CPU. It still needs to be short though so we can
+        // still periodically check the `quit` flag.
+        let input_timeout = if debugger.as_ref().is_some_and(|dbg| dbg.paused) {
+            Duration::from_millis(100)
+        } else {
+            Duration::ZERO
+        };
+
+        // Drain the input queue
+        while let Some(event) = self.next_event(input_timeout) {
+            debug!(?event, "Input event");
+            match event {
+                InputEvent::DebugPauseToggle => {
+                    if let Some(debugger) = debugger {
+                        debugger.paused ^= true;
+                    }
+                }
+                InputEvent::DebugStepCycle => {
+                    if let Some(debugger) = debugger {
+                        debugger.unpause_until(debugger.info.clock_cycles + 1);
+                    }
+                }
+                InputEvent::DebugStepFrame => {
+                    if let Some(debugger) = debugger {
+                        debugger.unpause_until(Clock::next_frame_end(
+                            debugger.info.clock_cycles,
+                        ));
+                    }
+                }
+                InputEvent::DebugStepInstruction => {
+                    if let Some(debugger) = debugger {
+                        debugger.unpause_until(
+                            debugger.info.cpu.next_instruction.end,
+                        );
+                    }
+                }
+
+                InputEvent::Quit => return ControlFlow::Break(()), // Exit
+                InputEvent::Button(_) => todo!("TODO track input state"),
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// Load the next input event from the event queue
+    fn next_event(&mut self, timeout: Duration) -> Option<InputEvent> {
+        // Grab the next event off the queue
+        match self.input_rx.recv_timeout(timeout) {
+            Ok(event) => Some(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => todo!(),
+        }
+    }
+
+    /// Draw debug info to the screen
+    ///
+    /// This call is automatically throttled to a maximum framerate. While the
+    /// emulator is running, there isn't value in drawing on every single tick
+    /// and it causes a huge slowdown.
+    fn draw_debug(&mut self, debugger: &Debugger) {
+        const MIN_DRAW_GAP: Duration = Duration::from_millis(100);
+
+        let now = Instant::now();
+        let should_draw = debugger.paused
+            || self
+                .last_debug_draw
+                .is_none_or(|instant| now - instant >= MIN_DRAW_GAP);
+        if should_draw {
+            // Debug UI is drawn via ratatui
+            let result = self
+                .terminal
+                .draw(|frame| frame.render_widget(debugger, frame.area()));
+            if let Err(error) = result {
+                error!("Error drawing to terminal: {error}");
+            }
+            self.last_debug_draw = Some(now);
+        }
     }
 
     /// Monitor stdin for input
     ///
     /// When a relevant event is received, it's pushed into the given channel.
+    /// This will only terminate on an error or end of stream, so it should run
+    /// in a background thread.
     fn handle_input(input_tx: mpsc::Sender<InputEvent>) {
         for result in io::stdin().keys() {
             match result.map(Self::map_key) {
@@ -144,16 +273,6 @@ impl TerminalBackend {
 }
 
 impl Backend for TerminalBackend {
-    fn debug(&mut self, info: &Debugger) {
-        // Debug UI is drawn via ratatui
-        let result = self
-            .terminal
-            .draw(|frame| frame.render_widget(info, frame.area()));
-        if let Err(error) = result {
-            error!("Error drawing to terminal: {error}");
-        }
-    }
-
     fn draw(&mut self, frame: &FrameBuffer) {
         // This rendering does *not* use ratatui, because we need to write
         // directly to the output
@@ -165,19 +284,6 @@ impl Backend for TerminalBackend {
         if let Err(error) = f() {
             error!("Error drawing to terminal: {error}");
         }
-    }
-
-    fn next_event(&mut self, timeout: Duration) -> Option<InputEvent> {
-        // Grab the next event off the queue
-        match self.input_rx.recv_timeout(timeout) {
-            Ok(event) => Some(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => todo!(),
-        }
-    }
-
-    fn should_quit(&self) -> bool {
-        self.quit.load(Ordering::Relaxed)
     }
 }
 
@@ -393,4 +499,38 @@ pub fn draw_frame(
         S = len,                    // shared memory length
     )?;
     out.flush()
+}
+
+/// A processed input event
+///
+/// This is a mapped input event to its app-relevant meaning.
+#[derive(Debug)]
+enum InputEvent {
+    /// Input mapped to an emulated button on the Game Boy
+    #[expect(unused)]
+    Button(Button),
+    /// Pause or unpause execution in the debugger
+    DebugPauseToggle,
+    /// Advance the debugger one clock cycle
+    DebugStepCycle,
+    /// Advance the debugger to the end of the current frame
+    DebugStepFrame,
+    /// Advance the debugger to the end of the current CPU instruction
+    DebugStepInstruction,
+    /// Exit the app
+    Quit,
+}
+
+/// Pressable Buttons on a Game Boy
+#[derive(Debug)]
+#[expect(unused)]
+enum Button {
+    A,
+    B,
+    Up,
+    Down,
+    Left,
+    Right,
+    Start,
+    Select,
 }

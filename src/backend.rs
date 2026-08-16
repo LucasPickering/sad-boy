@@ -7,39 +7,16 @@ mod terminal;
 
 pub use terminal::TerminalBackend;
 
-use crate::{Debugger, input::InputEvent};
-use std::{
-    fmt::{self, Display},
-    time::Duration,
-};
+use std::fmt::{self, Display};
 
 /// An interface for a screen and input
 ///
-/// This is an abstraction over hardware. The backend could be a terminal, web
-/// browser, etc.
+/// This is an abstraction over hardware. It provides everything a Game Boy
+/// needs to provide interaction with the user. The backend could be a terminal,
+/// web browser, etc.
 pub trait Backend {
-    /// Display emulator debug state to the user
-    ///
-    /// It's up to the implementation to decide how this information is
-    /// presented.
-    fn debug(&mut self, info: &Debugger);
-
     /// Draw the given frame buffer to the screen
     fn draw(&mut self, frame: &FrameBuffer);
-
-    /// Get the next queued input event
-    ///
-    /// Return `None` if no inputs occur within the timeout.
-    fn next_event(&mut self, timeout: Duration) -> Option<InputEvent>;
-
-    /// Should the emulator exit?
-    ///
-    /// This is called by the emulator on each tick and should be used to
-    /// monitor exit conditions (such as process signals).
-    ///
-    /// This should *not* check for a [InputEvent::Quit] input. That will be
-    /// monitored separately via [Self::next].
-    fn should_quit(&self) -> bool;
 }
 
 /// An in-memory [Backend] for testing and headless operation
@@ -141,18 +118,8 @@ impl HeadlessBackend {
 }
 
 impl Backend for HeadlessBackend {
-    fn debug(&mut self, _info: &Debugger) {}
-
     fn draw(&mut self, frame: &FrameBuffer) {
         self.last_frame = Some(frame.clone());
-    }
-
-    fn next_event(&mut self, _timeout: Duration) -> Option<InputEvent> {
-        None
-    }
-
-    fn should_quit(&self) -> bool {
-        false
     }
 }
 
