@@ -2,43 +2,13 @@
 
 use std::{
     cell::Cell,
-    cmp::Ordering,
     fmt::{self, Display},
-    future,
-    ops::{Add, AddAssign, Sub},
-    task::Poll,
+    ops::{Add, AddAssign, Mul, Sub},
     thread,
     time::{Duration, Instant},
 };
 use tracing::warn;
 
-/// Number of dots (clock cycles) in a single frame
-///
-/// - https://gbdev.io/pandocs/Rendering.html
-/// - https://josaphat.co/posts/gameboy-emulator/
-const CYCLES_PER_FRAME: Cycles = Cycles(70224);
-/// Number of clock cycles per second (Hz)
-///
-/// The clock frequency is 2^22 Hz (~4.194 MHz).
-const CLOCK_FREQUENCY: u32 = 1 << 22;
-/// Elapsed time per frame
-/// Intuitively it would make more sense to calculate this as `(1/f) * C`, but
-/// by doing the multiplication first, we avoid hitting nanosecond precision
-/// limits.
-///
-/// Just to be sure this is right, here's some dimensional analysis:
-///
-/// ```
-/// 1 * [C cy/fr] / [f cy/s]
-/// 1 * [C cy/fr] * [1/f s/cy]
-/// 1 * [C/f s/fr]
-/// C/f (s/fr)
-/// ```
-const FRAME_DURATION: Duration = Duration::from_secs(1)
-    .checked_mul(CYCLES_PER_FRAME.0 as u32)
-    .unwrap()
-    .checked_div(CLOCK_FREQUENCY)
-    .unwrap();
 /// Emulated hardware clock
 ///
 /// The clock drives the CPU, GPU, and whatever other components run off the
@@ -59,6 +29,36 @@ pub struct Clock {
 }
 
 impl Clock {
+    /// Number of dots (clock cycles) in a single frame
+    ///
+    /// - https://gbdev.io/pandocs/Rendering.html
+    /// - https://josaphat.co/posts/gameboy-emulator/
+    pub const CYCLES_PER_FRAME: Cycles = Cycles(70224);
+
+    /// Number of clock cycles per second (Hz)
+    ///
+    /// The clock frequency is 2^22 Hz (~4.194 MHz).
+    const CLOCK_FREQUENCY: u32 = 1 << 22;
+
+    /// Elapsed time per frame
+    /// Intuitively it would make more sense to calculate this as `(1/f) * C`,
+    /// but by doing the multiplication first, we avoid hitting nanosecond
+    /// precision limits.
+    ///
+    /// Just to be sure this is right, here's some dimensional analysis:
+    ///
+    /// ```
+    /// 1 * [C cy/fr] / [f cy/s]
+    /// 1 * [C cy/fr] * [1/f s/cy]
+    /// 1 * [C/f s/fr]
+    /// C/f (s/fr)
+    /// ```
+    const FRAME_DURATION: Duration = Duration::from_secs(1)
+        .checked_mul(Clock::CYCLES_PER_FRAME.0 as u32)
+        .unwrap()
+        .checked_div(Self::CLOCK_FREQUENCY)
+        .unwrap();
+
     /// Initialize a new clock
     pub fn new() -> Self {
         Self {
@@ -68,8 +68,11 @@ impl Clock {
     }
 
     /// Is the current tick the last of its frame?
+    ///
+    /// The first tick (`0`) is the *first* of its frame. The last tick of the
+    /// frame `n` will be `n * CYCLES_PER_FRAME - 1`.
     pub fn is_frame_end(&self) -> bool {
-        (self.cycles.get().0 + 1).is_multiple_of(CYCLES_PER_FRAME.0)
+        (self.cycles.get().0 + 1).is_multiple_of(Self::CYCLES_PER_FRAME.0)
     }
 
     /// Get the clock cycle count for the next end-of-frame cycle, starting at
@@ -79,7 +82,7 @@ impl Clock {
     /// *following* frame will be returned.
     pub fn next_frame_end(cycles: Cycles) -> Cycles {
         // +1 ensures the last cycle of a frame jumps to the next frame
-        Cycles((cycles + 1).0.next_multiple_of(CYCLES_PER_FRAME.0))
+        Cycles((cycles + 1).0.next_multiple_of(Self::CYCLES_PER_FRAME.0))
     }
 
     /// Get the number of cycles completed in the current frame
@@ -96,8 +99,8 @@ impl Clock {
 
         let now = self.frame_start.get();
         let elapsed = now.elapsed();
-        if elapsed < FRAME_DURATION {
-            let target = now + FRAME_DURATION;
+        if elapsed < Self::FRAME_DURATION {
+            let target = now + Self::FRAME_DURATION;
             // Sleep in 1ms increments to minimize the error. If we sleep for
             // the entire duration at once, the OS may sleep fortoo long.
             while Instant::now() + SLEEP_INCREMENT < target {
@@ -108,7 +111,10 @@ impl Clock {
             // Frame took too long, which means the future polling took
             // longer than allowed. Unfortunately we can't make time go
             // backward (yet), so just log it and pray we speed up.
-            warn!("Slow frame: {elapsed:?} > {FRAME_DURATION:?}");
+            warn!(
+                "Slow frame: {elapsed:?} > {duration:?}",
+                duration = Self::FRAME_DURATION
+            );
         }
         self.frame_start.set(Instant::now());
     }
@@ -116,32 +122,6 @@ impl Clock {
     /// Advance the clock one cycle
     pub fn tick(&self) {
         self.cycles.update(|cycles| cycles + Cycles(1));
-    }
-
-    /// Wait for the given number of cycles to elapse
-    ///
-    /// This is how the CPU and GPU stay in sync. Each component waits some
-    /// number of cycles, then at the end performs whatever work was meant to
-    /// be done during those cycles. This simulates the time elapsed during a
-    /// CPU instruction, GPU operation, etc.
-    pub async fn wait(&self, cycles: Cycles) {
-        let current = self.cycles.get();
-        let target = current + cycles;
-        future::poll_fn(move |_| {
-            let current = self.cycles.get();
-            match current.cmp(&target) {
-                Ordering::Less => Poll::Pending,
-                Ordering::Equal => Poll::Ready(()),
-                Ordering::Greater => {
-                    // This *should* be impossible because every future gets
-                    // polled on every clock cycle. Missing cycles could affect
-                    // semantics
-                    warn!(?current, ?target, "Missed target clock cycle");
-                    Poll::Ready(())
-                }
-            }
-        })
-        .await;
     }
 }
 
@@ -152,6 +132,13 @@ impl Clock {
 /// can report how many cycles were consumed from the budget.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Cycles(pub u64);
+
+impl Cycles {
+    /// Increment this value by 1
+    pub fn incr(self) -> Cycles {
+        self + Cycles(1)
+    }
+}
 
 impl Display for Cycles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -186,5 +173,13 @@ impl Sub for Cycles {
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
+    }
+}
+
+impl Mul<u8> for Cycles {
+    type Output = Self;
+
+    fn mul(self, rhs: u8) -> Self::Output {
+        Self(self.0 * u64::from(rhs))
     }
 }

@@ -13,67 +13,80 @@ use crate::{
     util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
 };
 use std::{cell::RefCell, fmt::Debug, mem};
-use tracing::{Instrument, info_span};
+use tracing::info_span;
 
-const SCANLINES_PER_FRAME: u8 = 154;
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
 const COLOR_DARK_GRAY: Color = Color::new(85, 85, 85);
 const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
 const COLOR_WHITE: Color = Color::new(255, 255, 255);
+/// Dots in a single scanline
+const SCANLINE_DOTS: Cycles = Cycles(456);
+/// TODO
+const SCANLINES_PER_FRAME: u8 = 154;
+/// TODO
+const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
 
 /// Shorthand to read a register from [Registers]
 macro_rules! reg {
-    ($gpu:expr, $register:ident) => {
-        $gpu.registers.with(|r| r.$register)
+    ($vram:expr, $register:ident) => {
+        $vram.registers.with(|r| r.$register)
     };
 }
 
 /// Graphics registers and processing
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Gpu {
-    /// 1-byte control registers related to graphics processing
-    registers: RefCell<Registers>,
-    /// Object Attribute Memory
-    ///
-    /// https://gbdev.io/pandocs/OAM.html
-    oam: RefCell<MemoryBlock<ObjectAttributes>>,
-    /// Pixel data for tiles
-    ///
-    /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
-    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
-    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
-    ///
-    /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: RefCell<MemoryBlock<Tile>>,
-    /// Two 32x32 tile maps
-    ///
-    /// The first half of the block is the lower tile map; second half is the
-    /// upper tile map.
-    ///
-    /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: RefCell<MemoryBlock<TileIndex>>,
+    /// TODO
+    vram: Vram,
+    /// TODO
+    current_scanline: ScanlineState,
 }
 
 impl Gpu {
-    /// Render a single frame to the frame buffer
+    /// TODO
     ///
-    /// This will take exactly 70,224 cycles.
-    pub async fn render_frame(&self, clock: &Clock, frame: &mut FrameBuffer) {
-        async move {
-            for scanline in 0..SCANLINES_PER_FRAME {
-                self.registers.with_mut(|r| r.ly = Scanline(scanline));
-                self.draw_scanline(clock, frame).await;
-                // Set bit 2 of STAT to match LY==LYC
-                self.registers.with_mut(|r| {
-                    r.stat.update(|stat| LcdStatus {
-                        lyc_equal_ly: r.ly == r.lyc,
-                        ..stat
-                    });
-                });
+    /// Return `true` if this was the last tick of the current frame, and the
+    /// frame is now ready to be drawn.
+    pub fn tick(&mut self, clock: &Clock, frame: &mut FrameBuffer) -> bool {
+        let _span = info_span!("GPU");
+
+        // Each scanline is a fixed number of dots, so we can calculate the
+        // scanline from the current clock cycle
+        let (scanline, scanline_dots) = Scanline::from_clock(clock);
+        let ppu_mode = match scanline.0 {
+            0..SCANLINES_PER_FRAME_DRAWN => {
+                // Each state is calculated from the previous and may need to
+                // carry over owned values. We'll temporarily take it out of its
+                // slot, then replace it right after.
+                let scanline_state = mem::take(&mut self.current_scanline);
+                self.current_scanline = scanline_state.tick(
+                    scanline,
+                    scanline_dots,
+                    &self.vram,
+                    frame,
+                );
+                // TODO should we grab mode before or after transition?
+                self.current_scanline.mode()
             }
-        }
-        .instrument(info_span!("GPU"))
-        .await;
+            SCANLINES_PER_FRAME_DRAWN..SCANLINES_PER_FRAME => {
+                PpuMode::VerticalBlank
+            }
+            _ => unreachable!("Invalid scanline: {scanline:?}"),
+        };
+
+        // Update registers
+        // TODO does this need to be done before the calculation? probably!!
+        self.vram.registers.with_mut(|r| r.ly = scanline); // Update LY register
+        self.vram.registers.with_mut(|r| {
+            r.stat.update(|stat| LcdStatus {
+                ppu_mode,
+                lyc_equal_ly: r.ly == r.lyc,
+                ..stat
+            });
+            // TODO update LYC register
+        });
+
+        clock.is_frame_end()
     }
 
     /// Access the GPU I/O registers
@@ -81,7 +94,7 @@ impl Gpu {
     /// This is abstracted through [Shared] to constrain the access to the
     /// inner `RefCell`.
     pub fn registers(&self) -> impl Shared<Registers> {
-        &self.registers
+        &self.vram.registers
     }
 
     /// Access the Object Attribute Memory
@@ -92,7 +105,7 @@ impl Gpu {
         // OAM is only accessible to the CPU in blank modes
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                ModalMemory::Rw(&self.oam)
+                ModalMemory::Rw(&self.vram.oam)
             }
             PpuMode::OamScan | PpuMode::Drawing => ModalMemory::Null,
         }
@@ -107,7 +120,7 @@ impl Gpu {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.tile_data),
+            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.vram.tile_data),
             PpuMode::Drawing => ModalMemory::Null,
         }
     }
@@ -121,191 +134,14 @@ impl Gpu {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.tile_maps),
+            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.vram.tile_maps),
             PpuMode::Drawing => ModalMemory::Null,
         }
     }
 
-    /// Draw the current scanline to the screen
-    ///
-    /// The `LY` register should be set to the current scanline **before**
-    /// calling this.
-    ///
-    /// https://gbdev.io/pandocs/Rendering.html
-    async fn draw_scanline(&self, clock: &Clock, frame: &mut FrameBuffer) {
-        /// Dots in a single scanline
-        const SCANLINE_CYCLES: Cycles = Cycles(456);
-        /// Number of dots in [PpuMode::OamScan] for a single scanline
-        const OAM_SCAN_CYCLES: Cycles = Cycles(80);
-        /// Minimum number of dots in mode 3 (drawing)
-        const DRAW_MIN_CYCLES: Cycles = Cycles(172);
-        /// Maximum number of dots in mode 3 (drawing)
-        const DRAW_MAX_CYCLES: Cycles = Cycles(289);
-        /// First scanline of mode 1 (vertical blank)
-        const VBLANK_SCANLINE: Scanline = Scanline(144);
-
-        let scanline = reg!(self, ly);
-
-        // Vblank - do nothing for this entire period
-        if scanline >= VBLANK_SCANLINE {
-            self.set_mode(PpuMode::VerticalBlank);
-            clock.wait(SCANLINE_CYCLES).await;
-            return;
-        }
-
-        // Mode 2 - OAM scan
-        // I didn't find anything in the docs about the actual rate that the GB
-        // collects objects per dot, so I'm doing it all up front. This may
-        // have a semantic impact, I'm not sure.
-        self.set_mode(PpuMode::OamScan);
-        let objects = self.get_objects();
-        // Render order relies on the objects being sorted
-        // NOTE: This is only for non-CGB mode. In CGB mode this will have to
-        // change
-        debug_assert!(
-            objects.is_sorted_by_key(|object| object.attributes.x),
-            "Objects must be sorted ascending by x coordinate"
-        );
-        clock.wait(OAM_SCAN_CYCLES).await;
-
-        // Mode 3 - draw pixels
-        // https://gbdev.io/pandocs/Rendering.html#mode-3-length
-        self.set_mode(PpuMode::Drawing);
-        let mode_3_start = clock.cycles();
-        clock.wait(Cycles(12)).await; // Initial delay
-        let y = scanline.0;
-        for x in 0..SCREEN_WIDTH {
-            // TODO simulate pixel FIFO
-            // https://gbdev.io/pandocs/pixel_fifo.html
-            let color_index = self.get_pixel(&objects, x, y);
-            frame.set(x.into(), y.into(), self.get_color(color_index));
-            // TODO include penalty waits
-            clock.wait(Cycles(1)).await;
-        }
-        // Mode 3 has a dynamic length. Whatever budget it doesn't use gets
-        // rolled over to mode 0.
-        let mode_3_length = clock.cycles() - mode_3_start;
-
-        // Mode 0 - horizontal blank
-        self.set_mode(PpuMode::HorizontalBlank);
-        debug_assert!(
-            (DRAW_MIN_CYCLES..=DRAW_MAX_CYCLES).contains(&mode_3_length),
-            "Mode 3 should be take [{DRAW_MIN_CYCLES:?}, {DRAW_MAX_CYCLES:?}] \
-            dots, but took {mode_3_length:?}"
-        );
-        clock.wait(Cycles(376) - mode_3_length).await;
-    }
-
-    /// Calculate the color index for a specific pixel
-    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
-        // https://gbdev.io/pandocs/OAM.html#drawing-priority
-        // First, check for objects. These are pre-sorted by x
-        if let Some((tile_index, x, y)) =
-            objects.iter().find_map(|object| object.get_pixel(x, y))
-        {
-            let tile = self.get_tile(tile_index);
-            return tile.color_index(x, y);
-        }
-
-        // TODO check window
-        // TODO check background
-        ColorIndex::Zero
-    }
-
-    /// Look up a color from the active color palette
-    ///
-    /// https://gbdev.io/pandocs/Palettes.html
-    fn get_color(&self, index: ColorIndex) -> Color {
-        // TODO look this up in the BGP register
-        match index {
-            ColorIndex::Zero => COLOR_BLACK,
-            ColorIndex::One => COLOR_DARK_GRAY,
-            ColorIndex::Two => COLOR_LIGHT_GRAY,
-            ColorIndex::Three => COLOR_WHITE,
-        }
-    }
-
-    /// Get a list of **up to 10** visible objects for the current scanline
-    ///
-    /// When there are more than 10 objects intersecting with the current
-    /// scanline, the objects earlier in memory (with lower addresses) get
-    /// priority.
-    ///
-    /// Returned objects will always be sorted by x coordinate (ascending).
-    ///
-    /// https://gbdev.io/pandocs/OAM.html#selection-priority
-    fn get_objects(&self) -> Vec<Object> {
-        let line = reg!(self, ly);
-        // TODO the height should be changeable between objects? maybe we need
-        // to delay between each object fetch
-        let height = reg!(self, lcdc).unpack().object_size.height();
-        // Take the first 10 objects intersecting the current line
-        let mut objects = self.oam.with(|oam| {
-            oam.as_values()
-                .iter()
-                .copied()
-                .map(|attributes| Object { attributes, height })
-                .filter(|object| object.intersects_line(line))
-                .take(10)
-                .collect::<Vec<_>>()
-        });
-        // Sort by x because that's what we need for render order
-        objects.sort_by_key(|object| object.attributes.x);
-        objects
-    }
-
-    /// Look up a tile by index
-    fn get_tile(&self, index: TileIndex) -> Tile {
-        // Select active tiles based on the LCDC flag
-        let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
-        // SAFETY: tiles is an array of 256, so the index must be valid
-        tiles[index.0 as usize]
-    }
-
-    /// Get the block of accessible tiles for the given addressing mode
-    ///
-    /// Each addressing mode can access exactly 256 tiles, so that's encoded in
-    /// the return type.
-    fn get_tiles(&self, area: TileDataArea) -> [Tile; 256] {
-        self.tile_data.with(|tile_data| {
-            let tiles = tile_data.as_values();
-            debug_assert_eq!(
-                tiles.len(),
-                128 * 3,
-                "Tile data should be 3 blocks of 128 tiles"
-            );
-            let slice = match area {
-                TileDataArea::Low => &tiles[..256],
-                TileDataArea::High => &tiles[128..],
-            };
-            slice.try_into().expect("256 tiles accessible at a time")
-        })
-    }
-
     /// Read the `ppu_mode` flag of the `STAT` register
     fn mode(&self) -> PpuMode {
-        self.registers.with(|r| r.stat.unpack().ppu_mode)
-    }
-
-    /// Set the `ppu_mode` flag of the `STAT` register
-    fn set_mode(&self, mode: PpuMode) {
-        self.registers.with_mut(|r| {
-            r.stat.update(|stat| LcdStatus {
-                ppu_mode: mode,
-                ..stat
-            });
-        });
-    }
-}
-
-impl Default for Gpu {
-    fn default() -> Self {
-        Self {
-            registers: RefCell::default(),
-            oam: MemoryBlock::new(memory::OAM).into(),
-            tile_data: MemoryBlock::new(memory::TILE_DATA).into(),
-            tile_maps: MemoryBlock::new(memory::TILE_MAPS).into(),
-        }
+        self.vram.registers.with(|r| r.stat.unpack().ppu_mode)
     }
 }
 
@@ -482,6 +318,227 @@ impl_bit_pack! {
     Mask::M10 => ppu_mode,
 }
 
+/// TODO
+#[derive(Debug)]
+struct Vram {
+    /// 1-byte control registers related to graphics processing
+    registers: RefCell<Registers>,
+    /// Object Attribute Memory
+    ///
+    /// https://gbdev.io/pandocs/OAM.html
+    oam: RefCell<MemoryBlock<ObjectAttributes>>,
+    /// Pixel data for tiles
+    ///
+    /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
+    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
+    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
+    ///
+    /// https://gbdev.io/pandocs/Tile_Data.html
+    tile_data: RefCell<MemoryBlock<Tile>>,
+    /// Two 32x32 tile maps
+    ///
+    /// The first half of the block is the lower tile map; second half is the
+    /// upper tile map.
+    ///
+    /// https://gbdev.io/pandocs/Tile_Maps.html
+    tile_maps: RefCell<MemoryBlock<TileIndex>>,
+}
+
+impl Vram {
+    /// Get a list of **up to 10** visible objects for the current scanline
+    ///
+    /// When there are more than 10 objects intersecting with the current
+    /// scanline, the objects earlier in memory (with lower addresses) get
+    /// priority.
+    ///
+    /// Returned objects will always be sorted by x coordinate (ascending).
+    ///
+    /// https://gbdev.io/pandocs/OAM.html#selection-priority
+    fn get_objects(&self) -> Vec<Object> {
+        let line = reg!(self, ly);
+        // TODO the height should be changeable between objects? maybe we need
+        // to delay between each object fetch
+        let height = reg!(self, lcdc).unpack().object_size.height();
+        // Take the first 10 objects intersecting the current line
+        let mut objects = self.oam.with(|oam| {
+            oam.as_values()
+                .iter()
+                .copied()
+                .map(|attributes| Object { attributes, height })
+                .filter(|object| object.intersects_line(line))
+                .take(10)
+                .collect::<Vec<_>>()
+        });
+        // Sort by x because that's what we need for render order
+        objects.sort_by_key(|object| object.attributes.x);
+        objects
+    }
+
+    /// Look up a tile by index
+    fn get_tile(&self, index: TileIndex) -> Tile {
+        // Select active tiles based on the LCDC flag
+        let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
+        // SAFETY: tiles is an array of 256, so the index must be valid
+        tiles[index.0 as usize]
+    }
+
+    /// Get the block of accessible tiles for the given addressing mode
+    ///
+    /// Each addressing mode can access exactly 256 tiles, so that's encoded in
+    /// the return type.
+    fn get_tiles(&self, area: TileDataArea) -> [Tile; 256] {
+        self.tile_data.with(|tile_data| {
+            let tiles = tile_data.as_values();
+            debug_assert_eq!(
+                tiles.len(),
+                128 * 3,
+                "Tile data should be 3 blocks of 128 tiles"
+            );
+            let slice = match area {
+                TileDataArea::Low => &tiles[..256],
+                TileDataArea::High => &tiles[128..],
+            };
+            slice.try_into().expect("256 tiles accessible at a time")
+        })
+    }
+
+    /// Calculate the color index for a specific pixel
+    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
+        // https://gbdev.io/pandocs/OAM.html#drawing-priority
+        // First, check for objects. These are pre-sorted by x
+        if let Some((tile_index, x, y)) =
+            objects.iter().find_map(|object| object.get_pixel(x, y))
+        {
+            let tile = self.get_tile(tile_index);
+            return tile.color_index(x, y);
+        }
+
+        // TODO check window
+        // TODO check background
+        ColorIndex::Zero
+    }
+
+    /// Look up a color from the active color palette
+    ///
+    /// https://gbdev.io/pandocs/Palettes.html
+    fn get_color(&self, index: ColorIndex) -> Color {
+        // TODO look this up in the BGP register
+        match index {
+            ColorIndex::Zero => COLOR_BLACK,
+            ColorIndex::One => COLOR_DARK_GRAY,
+            ColorIndex::Two => COLOR_LIGHT_GRAY,
+            ColorIndex::Three => COLOR_WHITE,
+        }
+    }
+}
+
+impl Default for Vram {
+    fn default() -> Self {
+        Self {
+            registers: RefCell::default(),
+            oam: MemoryBlock::new(memory::OAM).into(),
+            tile_data: MemoryBlock::new(memory::TILE_DATA).into(),
+            tile_maps: MemoryBlock::new(memory::TILE_MAPS).into(),
+        }
+    }
+}
+
+/// TODO
+#[derive(Debug, Default)]
+enum ScanlineState {
+    /// TODO
+    #[default]
+    Start,
+    /// TODO
+    OamScan { objects: Vec<Object> },
+    /// TODO
+    Drawing { objects: Vec<Object>, x: u8 },
+    /// TODO
+    HorizontalBlank,
+}
+
+impl ScanlineState {
+    fn mode(&self) -> PpuMode {
+        match self {
+            Self::Start | Self::OamScan { .. } => PpuMode::OamScan,
+            Self::Drawing { .. } => PpuMode::Drawing,
+            Self::HorizontalBlank => PpuMode::HorizontalBlank,
+        }
+    }
+
+    /// TODO
+    ///
+    /// TODO `dots` is number of dots into *this scanline*
+    fn tick(
+        self,
+        scanline: Scanline,
+        dots: Cycles,
+        vram: &Vram,
+        frame: &mut FrameBuffer,
+    ) -> Self {
+        // TODO note about mode numbers not being sequential
+        // TODO consts for state durations
+        match self {
+            // Mode 2 - OAM scan
+            Self::Start => {
+                // I didn't find anything in the docs about the actual rate
+                // that the GB collects objects per dot, so I'm doing it all
+                // up front. This may have a semantic impact, I'm not sure.
+                let objects = vram.get_objects();
+                // Render order relies on the objects being sorted
+                // NOTE: This is only for non-CGB mode. In CGB mode this
+                // will have to change
+                debug_assert!(
+                    objects.is_sorted_by_key(|object| object.attributes.x),
+                    "Objects must be sorted ascending by x coordinate"
+                );
+                Self::OamScan { objects }
+            }
+            // Stay in mode 2
+            state @ Self::OamScan { .. } if dots < Cycles(80) => state,
+            // End of OAM scan - transition to mode 3
+            Self::OamScan { objects } => Self::Drawing { objects, x: 0 },
+            // Mode 3 - draw pixels
+            // https://gbdev.io/pandocs/Rendering.html#mode-3-length
+            // TODO this length is supposed to be dynamic - include penalties
+            Self::Drawing {
+                objects,
+                x: x @ 0..SCREEN_WIDTH,
+            } => {
+                let elapsed = dots - Cycles(80);
+
+                // There's an initial 12-cycle delay per line
+                if elapsed < Cycles(12) {
+                    Self::Drawing { objects, x }
+                } else {
+                    // Calculate the color for a single pixel
+                    let y = scanline.0;
+                    // TODO simulate pixel FIFO
+                    // https://gbdev.io/pandocs/pixel_fifo.html
+                    let color_index = vram.get_pixel(&objects, x, y);
+                    frame.set(x.into(), y.into(), vram.get_color(color_index));
+                    Self::Drawing { objects, x: x + 1 }
+                }
+            }
+            // Hit the end of the line - transition to mode 0
+            Self::Drawing {
+                x: SCREEN_WIDTH.., ..
+            } => Self::HorizontalBlank,
+            // Mode 0 - horizontal blank
+            // Stay in this mode until the end of the scanline
+            Self::HorizontalBlank => ScanlineState::HorizontalBlank,
+        }
+        /*
+          TODO include this assert
+        debug_assert!(
+            (DRAW_MIN_CYCLES..=DRAW_MAX_CYCLES).contains(&mode_3_length),
+            "Mode 3 should be take [{DRAW_MIN_CYCLES:?}, {DRAW_MAX_CYCLES:?}] \
+            dots, but took {mode_3_length:?}"
+        );
+        */
+    }
+}
+
 /// Draw mode within the current frame
 ///
 /// This defines what the PPU is doing within a single frame draw.
@@ -517,6 +574,21 @@ impl_bit_pack! {
 /// invalid.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Scanline(u8);
+
+impl Scanline {
+    /// Based on the current clock tick, get the current scanline and dot within
+    /// that scanline
+    fn from_clock(clock: &Clock) -> (Self, Cycles) {
+        let frame_dots = clock.cycles().0 % Clock::CYCLES_PER_FRAME.0;
+        let scanline = frame_dots / SCANLINE_DOTS.0;
+        debug_assert!(scanline <= SCANLINES_PER_FRAME.into(), "TODO");
+        let dots = Cycles(frame_dots % SCANLINE_DOTS.0);
+        debug_assert!(dots < SCANLINE_DOTS, "TODO");
+
+        // Cast is safe because of the assertions
+        (Self(scanline as u8), dots)
+    }
+}
 
 impl From<u8> for Scanline {
     fn from(value: u8) -> Self {
@@ -612,6 +684,7 @@ impl TileIndex {
 }
 
 /// An object that's been loaded in mode 2 and is ready to be drawn
+#[derive(Debug)]
 struct Object {
     /// Attributes loaded from OAM
     attributes: ObjectAttributes,
