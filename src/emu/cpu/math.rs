@@ -393,8 +393,8 @@ mod tests {
         let mut cpu = Cpu::default();
         let mut memory = Memory::default();
         let rom = Rom::empty();
-        let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
+        let mut gpu = Gpu::default();
+        let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
         cpu.registers.a = lhs;
         let mut exe = cpu.exe(&mut memory);
         exe.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
@@ -431,8 +431,8 @@ mod tests {
         let mut cpu = Cpu::default();
         let mut memory = Memory::default();
         let rom = Rom::empty();
-        let gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &gpu);
+        let mut gpu = Gpu::default();
+        let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
         cpu.registers.sp = Address(lhs);
         let mut exe = cpu.exe(&mut memory);
         exe.execute(Instruction::Add(Add::Sp(rhs)));

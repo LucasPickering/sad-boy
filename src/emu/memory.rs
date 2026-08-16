@@ -4,7 +4,7 @@ use crate::{
         instruction::Instruction,
         rom::{self, Rom},
     },
-    util::{IntDisplay, Shared},
+    util::IntDisplay,
 };
 use std::{
     any,
@@ -125,19 +125,15 @@ pub struct MemoryBus<'a> {
     memory: &'a mut Memory,
     /// Read-only memory from the cartridge
     rom: &'a Rom,
-    /// Graphics processing
-    ///
-    /// This holds VRAM and graphics-related IO registers. This reference is
-    /// shared with a separate GPU task, so it's an immutable reference with
-    /// internal mutability.
-    gpu: &'a Gpu,
+    /// VRAM and graphics-related IO registers
+    gpu: &'a mut Gpu,
     /// An extremely naive cache for instructions parsed from the ROM
     instruction_cache: HashMap<Address, (Instruction, usize)>,
 }
 
 impl<'a> MemoryBus<'a> {
     /// Construct a memory bus from references to each addressable component
-    pub fn new(memory: &'a mut Memory, rom: &'a Rom, gpu: &'a Gpu) -> Self {
+    pub fn new(memory: &'a mut Memory, rom: &'a Rom, gpu: &'a mut Gpu) -> Self {
         Self {
             memory,
             rom,
@@ -187,13 +183,6 @@ impl<'a> MemoryBus<'a> {
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        /// Helper to get a GPU register
-        macro_rules! gpu_reg {
-            ($register:ident) => {
-                self.gpu.registers().with(|r| r.$register.into())
-            };
-        }
-
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
             BOOTLOADER_START..=BOOTLOADER_LAST if self.is_bootloading() => {
@@ -232,13 +221,13 @@ impl<'a> MemoryBus<'a> {
             0xFEA0..=0xFEFF => 0, // Null mem
 
             // Hardware registers
-            LCDC => gpu_reg!(lcdc),
-            STAT => gpu_reg!(stat),
-            SCY => gpu_reg!(scy),
-            SCX => gpu_reg!(scx),
-            LY => gpu_reg!(ly),
-            LYC => gpu_reg!(lyc),
-            DMA => gpu_reg!(dma),
+            LCDC => self.gpu.registers().lcdc.into(),
+            STAT => self.gpu.registers().stat.into(),
+            SCY => self.gpu.registers().scy,
+            SCX => self.gpu.registers().scx,
+            LY => self.gpu.registers().ly.into(),
+            LYC => self.gpu.registers().lyc.into(),
+            DMA => self.gpu.registers().dma,
             BANK => self.memory.bank,
             0xFF00..=0xFF7F => {
                 error!("TODO: unmapped I/O register {address}");
@@ -259,25 +248,16 @@ impl<'a> MemoryBus<'a> {
     ///
     /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
-        /// Helper to set a GPU register
-        macro_rules! gpu_reg {
-            ($register:ident) => {
-                self.gpu
-                    .registers()
-                    .with_mut(|r| r.$register = value.into())
-            };
-        }
-
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
             // ROM is immutable (bootloader too, so it doesn't matter if it's
             // mapped or not)
             CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data().set_byte(address, value);
+                self.gpu.tile_data_mut().set_byte(address, value);
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps().set_byte(address, value);
+                self.gpu.tile_maps_mut().set_byte(address, value);
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
                 self.memory.cartridge_ram.set_byte(address, value);
@@ -290,17 +270,17 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            OAM_START..=OAM_LAST => self.gpu.oam().set_byte(address, value),
+            OAM_START..=OAM_LAST => self.gpu.oam_mut().set_byte(address, value),
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
-            LCDC => gpu_reg!(lcdc),
-            STAT => gpu_reg!(stat),
-            SCY => gpu_reg!(scy),
-            SCX => gpu_reg!(scx),
-            LY => gpu_reg!(ly),
-            LYC => gpu_reg!(lyc),
-            DMA => gpu_reg!(dma),
+            LCDC => self.gpu.registers_mut().lcdc = value.into(),
+            STAT => self.gpu.registers_mut().stat = value.into(),
+            SCY => self.gpu.registers_mut().scy = value,
+            SCX => self.gpu.registers_mut().scx = value,
+            LY => self.gpu.registers_mut().ly = value.into(),
+            LYC => self.gpu.registers_mut().lyc = value.into(),
+            DMA => self.gpu.registers_mut().dma = value,
             BANK => self.set_bank(value),
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
@@ -545,6 +525,26 @@ impl<T> MemoryWrite for &mut MemoryBlock<T> {
         // - u8 is the smallest type so we don't have to worry about alignment
         //   or corrupted bytes
         unsafe { *ptr.add(offset) = value }
+    }
+}
+
+/// TODO
+impl<T> MemoryRead for Option<&MemoryBlock<T>> {
+    fn byte(self, address: Address) -> u8 {
+        if let Some(memory) = self {
+            memory.byte(address)
+        } else {
+            0
+        }
+    }
+}
+
+/// TODO
+impl<T> MemoryWrite for Option<&mut MemoryBlock<T>> {
+    fn set_byte(self, address: Address, value: u8) {
+        if let Some(memory) = self {
+            memory.set_byte(address, value);
+        }
     }
 }
 

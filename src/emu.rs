@@ -82,7 +82,7 @@ impl GameBoy {
         // Set debug info to the initial system state
         exec.update_debug_info(|info| {
             let mut memory_bus =
-                MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
+                MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
             info.cpu = self.cpu.debug_info(&self.clock, &mut memory_bus);
         });
 
@@ -101,7 +101,7 @@ impl GameBoy {
 
             // Progress the CPU
             let mut memory_bus =
-                MemoryBus::new(&mut self.memory, &self.rom, &self.gpu);
+                MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
             if self.cpu.tick(&self.clock, &mut memory_bus) {
                 // Update debug info between instructions
                 exec.update_debug_info(|info| {

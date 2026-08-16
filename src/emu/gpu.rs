@@ -8,11 +8,11 @@ use crate::{
     emu::{
         SCREEN_WIDTH,
         clock::{Clock, Cycles},
-        memory::{self, Address, MemoryBlock, MemoryRead, MemoryWrite},
+        memory::{self, MemoryBlock, MemoryRead, MemoryWrite},
     },
-    util::{Bit, Mask, PackedBits, Shared, impl_bit_pack},
+    util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
-use std::{cell::RefCell, fmt::Debug, mem};
+use std::{fmt::Debug, mem};
 use tracing::info_span;
 
 const COLOR_BLACK: Color = Color::new(0, 0, 0);
@@ -25,13 +25,6 @@ const SCANLINE_DOTS: Cycles = Cycles(456);
 const SCANLINES_PER_FRAME: u8 = 154;
 /// TODO
 const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
-
-/// Shorthand to read a register from [Registers]
-macro_rules! reg {
-    ($vram:expr, $register:ident) => {
-        $vram.registers.with(|r| r.$register)
-    };
-}
 
 /// Graphics registers and processing
 #[derive(Debug, Default)]
@@ -76,72 +69,114 @@ impl Gpu {
 
         // Update registers
         // TODO does this need to be done before the calculation? probably!!
-        self.vram.registers.with_mut(|r| r.ly = scanline); // Update LY register
-        self.vram.registers.with_mut(|r| {
-            r.stat.update(|stat| LcdStatus {
-                ppu_mode,
-                lyc_equal_ly: r.ly == r.lyc,
-                ..stat
-            });
-            // TODO update LYC register
+        let reg = &mut self.vram.registers;
+        reg.ly = scanline; // Update LY register
+        reg.stat.update(|stat| LcdStatus {
+            ppu_mode,
+            lyc_equal_ly: reg.ly == reg.lyc,
+            ..stat
         });
 
         clock.is_frame_end()
     }
 
-    /// Access the GPU I/O registers
-    ///
-    /// This is abstracted through [Shared] to constrain the access to the
-    /// inner `RefCell`.
-    pub fn registers(&self) -> impl Shared<Registers> {
+    /// Get read-only access to the GPU I/O registers
+    pub fn registers(&self) -> &Registers {
         &self.vram.registers
+    }
+
+    /// Get mutable access to the GPU I/O registers
+    pub fn registers_mut(&mut self) -> &mut Registers {
+        &mut self.vram.registers
     }
 
     /// Access the Object Attribute Memory
     ///
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
-    /// return 0 and writes will do nothing.
-    pub fn oam(&self) -> impl MemoryRead + MemoryWrite {
+    /// return 0 and writes will do nothing. TODO update comment
+    pub fn oam(&self) -> impl MemoryRead {
         // OAM is only accessible to the CPU in blank modes
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                ModalMemory::Rw(&self.vram.oam)
+                Some(&self.vram.oam)
             }
-            PpuMode::OamScan | PpuMode::Drawing => ModalMemory::Null,
+            PpuMode::OamScan | PpuMode::Drawing => None,
+        }
+    }
+
+    /// Access the Object Attribute Memory
+    ///
+    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
+    /// return 0 and writes will do nothing. TODO update comment
+    pub fn oam_mut(&mut self) -> impl MemoryWrite {
+        // OAM is only accessible to the CPU in blank modes
+        match self.mode() {
+            PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
+                Some(&mut self.vram.oam)
+            }
+            PpuMode::OamScan | PpuMode::Drawing => None,
         }
     }
 
     /// Access tile data memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_data(&self) -> impl MemoryRead + MemoryWrite {
+    /// writes will do nothing. TODO update comment
+    pub fn tile_data(&self) -> impl MemoryRead {
         // VRAM is not accessible in mode 3
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.vram.tile_data),
-            PpuMode::Drawing => ModalMemory::Null,
+            | PpuMode::VerticalBlank => Some(&self.vram.tile_data),
+            PpuMode::Drawing => None,
+        }
+    }
+
+    /// Mutable access tile data memory
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
+    /// writes will do nothing. TODO update comment
+    pub fn tile_data_mut(&mut self) -> impl MemoryWrite {
+        // VRAM is not accessible in mode 3
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => Some(&mut self.vram.tile_data),
+            PpuMode::Drawing => None,
         }
     }
 
     /// Access tile map memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_maps(&self) -> impl MemoryRead + MemoryWrite {
+    /// writes will do nothing. TODO update comment
+    pub fn tile_maps(&self) -> impl MemoryRead {
         // VRAM is not accessible in mode 3
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => ModalMemory::Rw(&self.vram.tile_maps),
-            PpuMode::Drawing => ModalMemory::Null,
+            | PpuMode::VerticalBlank => Some(&self.vram.tile_maps),
+            PpuMode::Drawing => None,
+        }
+    }
+
+    /// Access tile map memory
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
+    /// writes will do nothing. TODO update comment
+    pub fn tile_maps_mut(&mut self) -> impl MemoryWrite {
+        // VRAM is not accessible in mode 3
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => Some(&mut self.vram.tile_maps),
+            PpuMode::Drawing => None,
         }
     }
 
     /// Read the `ppu_mode` flag of the `STAT` register
     fn mode(&self) -> PpuMode {
-        self.vram.registers.with(|r| r.stat.unpack().ppu_mode)
+        self.vram.registers.stat.unpack().ppu_mode
     }
 }
 
@@ -320,13 +355,13 @@ impl_bit_pack! {
 
 /// TODO
 #[derive(Debug)]
-struct Vram {
+pub struct Vram {
     /// 1-byte control registers related to graphics processing
-    registers: RefCell<Registers>,
+    registers: Registers,
     /// Object Attribute Memory
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    oam: RefCell<MemoryBlock<ObjectAttributes>>,
+    oam: MemoryBlock<ObjectAttributes>,
     /// Pixel data for tiles
     ///
     /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
@@ -334,14 +369,14 @@ struct Vram {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: RefCell<MemoryBlock<Tile>>,
+    tile_data: MemoryBlock<Tile>,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: RefCell<MemoryBlock<TileIndex>>,
+    tile_maps: MemoryBlock<TileIndex>,
 }
 
 impl Vram {
@@ -355,20 +390,20 @@ impl Vram {
     ///
     /// https://gbdev.io/pandocs/OAM.html#selection-priority
     fn get_objects(&self) -> Vec<Object> {
-        let line = reg!(self, ly);
+        let line = self.registers.ly;
         // TODO the height should be changeable between objects? maybe we need
         // to delay between each object fetch
-        let height = reg!(self, lcdc).unpack().object_size.height();
+        let height = self.registers.lcdc.unpack().object_size.height();
         // Take the first 10 objects intersecting the current line
-        let mut objects = self.oam.with(|oam| {
-            oam.as_values()
-                .iter()
-                .copied()
-                .map(|attributes| Object { attributes, height })
-                .filter(|object| object.intersects_line(line))
-                .take(10)
-                .collect::<Vec<_>>()
-        });
+        let mut objects = self
+            .oam
+            .as_values()
+            .iter()
+            .copied()
+            .map(|attributes| Object { attributes, height })
+            .filter(|object| object.intersects_line(line))
+            .take(10)
+            .collect::<Vec<_>>();
         // Sort by x because that's what we need for render order
         objects.sort_by_key(|object| object.attributes.x);
         objects
@@ -377,7 +412,8 @@ impl Vram {
     /// Look up a tile by index
     fn get_tile(&self, index: TileIndex) -> Tile {
         // Select active tiles based on the LCDC flag
-        let tiles = self.get_tiles(reg!(self, lcdc).unpack().bg_window_tiles);
+        let tiles =
+            self.get_tiles(self.registers.lcdc.unpack().bg_window_tiles);
         // SAFETY: tiles is an array of 256, so the index must be valid
         tiles[index.0 as usize]
     }
@@ -387,19 +423,17 @@ impl Vram {
     /// Each addressing mode can access exactly 256 tiles, so that's encoded in
     /// the return type.
     fn get_tiles(&self, area: TileDataArea) -> [Tile; 256] {
-        self.tile_data.with(|tile_data| {
-            let tiles = tile_data.as_values();
-            debug_assert_eq!(
-                tiles.len(),
-                128 * 3,
-                "Tile data should be 3 blocks of 128 tiles"
-            );
-            let slice = match area {
-                TileDataArea::Low => &tiles[..256],
-                TileDataArea::High => &tiles[128..],
-            };
-            slice.try_into().expect("256 tiles accessible at a time")
-        })
+        let tiles = self.tile_data.as_values();
+        debug_assert_eq!(
+            tiles.len(),
+            128 * 3,
+            "Tile data should be 3 blocks of 128 tiles"
+        );
+        let slice = match area {
+            TileDataArea::Low => &tiles[..256],
+            TileDataArea::High => &tiles[128..],
+        };
+        slice.try_into().expect("256 tiles accessible at a time")
     }
 
     /// Calculate the color index for a specific pixel
@@ -435,10 +469,10 @@ impl Vram {
 impl Default for Vram {
     fn default() -> Self {
         Self {
-            registers: RefCell::default(),
-            oam: MemoryBlock::new(memory::OAM).into(),
-            tile_data: MemoryBlock::new(memory::TILE_DATA).into(),
-            tile_maps: MemoryBlock::new(memory::TILE_MAPS).into(),
+            registers: Registers::default(),
+            oam: MemoryBlock::new(memory::OAM),
+            tile_data: MemoryBlock::new(memory::TILE_DATA),
+            tile_maps: MemoryBlock::new(memory::TILE_MAPS),
         }
     }
 }
@@ -844,36 +878,4 @@ impl_bit_pack! {
     0b101 => Obp5,
     0b110 => Obp6,
     0b111 => Obp7,
-}
-
-/// A wrapper for a `RefCell<Memory<T>>` that restricts access
-///
-/// This wrapper implements [MemoryRead] and [MemoryWrite]. The variant is
-/// picked based on the PPU mode, as some GPU memory is restricted based on
-/// the mode.
-enum ModalMemory<'a, T> {
-    /// Memory is not readable or writable
-    ///
-    /// Reading always returns `0`, writing does nothing
-    Null,
-    /// Memory is readable and writable
-    Rw(&'a RefCell<MemoryBlock<T>>),
-}
-
-impl<T> MemoryRead for ModalMemory<'_, T> {
-    fn byte(self, address: Address) -> u8 {
-        match self {
-            ModalMemory::Null => 0,
-            ModalMemory::Rw(memory) => memory.byte(address),
-        }
-    }
-}
-
-impl<T> MemoryWrite for ModalMemory<'_, T> {
-    fn set_byte(self, address: Address, value: u8) {
-        match self {
-            ModalMemory::Null => {}
-            ModalMemory::Rw(memory) => memory.set_byte(address, value),
-        }
-    }
 }

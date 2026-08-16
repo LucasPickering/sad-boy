@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     env,
     fmt::{self, Debug, Display},
     fs::File,
@@ -400,40 +399,6 @@ impl Display for BytesDisplay<'_> {
 enum DisplayMode {
     Binary,
     Hex,
-}
-
-/// A constrained abstraction for shared hardware
-///
-/// The underlying implementation is probably a [RefCell]. This trait allows
-/// it to be exposed in a way that limits access. This prevents consumers from
-/// holding the cell open an async boundary.
-pub trait Shared<T> {
-    /// Run a function with read access to the inner value, returning its output
-    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U;
-
-    /// Run a function with mutable access to the inner value, returning its
-    /// output
-    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U;
-}
-
-impl<T, C: Shared<T>> Shared<T> for &C {
-    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
-        (*self).with(f)
-    }
-
-    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
-        (*self).with_mut(f)
-    }
-}
-
-impl<T> Shared<T> for RefCell<T> {
-    fn with<U>(&self, f: impl FnOnce(&T) -> U) -> U {
-        f(&self.borrow())
-    }
-
-    fn with_mut<U>(&self, f: impl FnOnce(&mut T) -> U) -> U {
-        f(&mut self.borrow_mut())
-    }
 }
 
 /// Set up tracing to stderr or a file
