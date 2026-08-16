@@ -45,6 +45,11 @@ impl<'bk> Executor<'bk> {
         }
     }
 
+    /// TODO
+    pub fn debugger(&self) -> Option<&Debugger> {
+        self.debugger.as_ref()
+    }
+
     /// Update debug info **if debug mode is enabled**
     ///
     /// If debug mode is disabled, the given function will never be called.

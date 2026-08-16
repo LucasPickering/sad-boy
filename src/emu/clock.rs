@@ -5,7 +5,7 @@ use std::{
     cmp::Ordering,
     fmt::{self, Display},
     future,
-    ops::{Add, AddAssign, Sub},
+    ops::{Add, AddAssign, Mul, Sub, SubAssign},
     task::Poll,
     thread,
     time::{Duration, Instant},
@@ -67,7 +67,15 @@ impl Clock {
         }
     }
 
+    /// Is the current tick the first of its frame?
+    pub fn is_frame_start(&self) -> bool {
+        self.cycles.get().0.is_multiple_of(CYCLES_PER_FRAME.0)
+    }
+
     /// Is the current tick the last of its frame?
+    ///
+    /// The first tick (`0`) is the *first* of its frame. The last tick of the
+    /// frame `n` will be `n * CYCLES_PER_FRAME - 1`.
     pub fn is_frame_end(&self) -> bool {
         (self.cycles.get().0 + 1).is_multiple_of(CYCLES_PER_FRAME.0)
     }
@@ -153,6 +161,13 @@ impl Clock {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Cycles(pub u64);
 
+impl Cycles {
+    /// Increment this value by 1
+    pub fn incr(self) -> Cycles {
+        self + Cycles(1)
+    }
+}
+
 impl Display for Cycles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -186,5 +201,13 @@ impl Sub for Cycles {
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
+    }
+}
+
+impl Mul<u8> for Cycles {
+    type Output = Self;
+
+    fn mul(self, rhs: u8) -> Self::Output {
+        Self(self.0 * rhs as u64)
     }
 }

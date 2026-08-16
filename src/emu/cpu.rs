@@ -19,7 +19,7 @@ use std::{
     fmt::{self, Debug, Display},
     ops::{BitAnd, BitOr, BitXor},
 };
-use tracing::{Instrument, error, info_span, trace};
+use tracing::{error, info_span, trace};
 
 /// Central Processing Unit for a Game Boy
 ///
@@ -34,44 +34,51 @@ pub struct Cpu {
     ///
     /// `None` only on startup.
     previous_instruction: Option<InstructionDebugInfo>,
+    /// TODO
+    next_at: Cycles,
 }
 
 impl Cpu {
-    /// Execute the next CPU instruction
-    ///
-    /// This will take a variable number of CPU cycles based on the instruction
-    /// executed.
-    pub async fn execute_next(
+    /// TODO
+    pub fn tick(
         &mut self,
         clock: &Clock,
-        mut memory: MemoryBus<'_>,
-    ) {
-        async move {
-            // Parse the next instruction and check how many cycles it will take
-            let pc = self.registers.pc;
-            let (instruction, size) = memory.get_instruction(pc);
-            let duration = self.exe(&mut memory).duration(instruction);
-
-            // Wait *before* executing so state isn't updated until after the
-            // elapsed cycles
-            clock.wait(duration).await;
-            self.exe(&mut memory).execute(instruction);
-
-            // If the instruction didn't modify the PC (e.g. jumps), then
-            // advance it automatically
-            if self.registers.pc == pc {
-                self.registers.pc.0 += size as u16;
-            }
-
-            self.previous_instruction = Some(InstructionDebugInfo {
-                instruction,
-                duration,
-                end: clock.cycles() + duration,
-                size,
-            });
+        memory_bus: &mut MemoryBus<'_>,
+    ) -> bool {
+        let _span = info_span!("CPU");
+        if self.next_at <= clock.cycles() {
+            self.execute_next(clock, memory_bus);
+            true
+        } else {
+            false
         }
-        .instrument(info_span!("CPU"))
-        .await;
+    }
+
+    /// Execute the next CPU instruction
+    ///
+    /// TODO
+    fn execute_next(&mut self, clock: &Clock, memory_bus: &mut MemoryBus<'_>) {
+        // Parse the next instruction and check how many cycles it will take
+        let pc = self.registers.pc;
+        let (instruction, size) = memory_bus.get_instruction(pc);
+        let duration = self.exe(memory_bus).duration(instruction);
+
+        self.exe(memory_bus).execute(instruction);
+
+        // If the instruction didn't modify the PC (e.g. jumps), then
+        // advance it automatically
+        if self.registers.pc == pc {
+            self.registers.pc.0 += size as u16;
+        }
+
+        let end = clock.cycles() + duration;
+        self.previous_instruction = Some(InstructionDebugInfo {
+            instruction,
+            duration,
+            end,
+            size,
+        });
+        self.next_at = end;
     }
 
     /// Get debug info about the CPU
@@ -957,6 +964,8 @@ impl_bit_pack! {
     Bit(4).mask() => carry,
 }
 
+/*
+TODO
 /// Expected CPU state when exiting the bootloader
 ///
 /// This is defined here so it can access private types/fields, but exported so
@@ -991,6 +1000,7 @@ pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
         size: 2,
     }),
 };
+*/
 
 #[cfg(test)]
 mod tests {

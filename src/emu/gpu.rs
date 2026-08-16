@@ -52,9 +52,102 @@ pub struct Gpu {
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
     tile_maps: RefCell<MemoryBlock<TileIndex>>,
+    /// TODO
+    current_frame: FrameState,
 }
 
 impl Gpu {
+    /// TODO
+    ///
+    /// Return `true` if this was the last tick of the current frame, and the
+    /// frame is now ready to be drawn.
+    pub fn tick(&mut self, clock: &Clock, frame: &mut FrameBuffer) -> bool {
+        let _span = info_span!("GPU");
+
+        // On the first tick of the frame, reset the frame state
+        if clock.is_frame_start() {
+            self.current_frame = FrameState {
+                start: clock.cycles(),
+                scanline: ScanlineState::Start,
+            };
+        }
+
+        // Each scanline is a fixed number of dots, so we can calculate the
+        // scanline from the current clock cycle
+        let start = self.current_frame.start;
+        let dots = clock.cycles() - start;
+        let scanline = Scanline::from_dots(dots);
+        let ppu_mode = match scanline.0 {
+            // TODO consts
+            0..144 => {
+                self.draw_scanline_todo(todo!(), frame);
+                self.current_frame.scanline.mode()
+            }
+            144..154 => PpuMode::VerticalBlank,
+            _ => unreachable!("TODO"),
+        };
+
+        // Update registers
+        // TODO does this need to be done before the calculation? probably!!
+        self.registers.with_mut(|r| r.ly = scanline); // Update LY register
+        self.registers.with_mut(|r| {
+            r.stat.update(|stat| LcdStatus {
+                ppu_mode,
+                lyc_equal_ly: r.ly == r.lyc,
+                ..stat
+            });
+            // TODO update LYC register
+        });
+
+        clock.is_frame_end()
+    }
+
+    /// TODO
+    ///
+    /// TODO `dots` is number of dots into *this scanline*
+    fn draw_scanline_todo(&mut self, dots: Cycles, frame: &mut FrameBuffer) {
+        // TODO note about mode numbers not being sequential
+        // TODO consts for state durations
+        match &mut self.current_frame.scanline {
+            ScanlineState::Start => {
+                // I didn't find anything in the docs about the actual rate
+                // that the GB collects objects per dot, so I'm doing it all
+                // up front. This may have a semantic impact, I'm not sure.
+                let objects = self.get_objects();
+                // Render order relies on the objects being sorted
+                // NOTE: This is only for non-CGB mode. In CGB mode this
+                // will have to change
+                debug_assert!(
+                    objects.is_sorted_by_key(|object| object.attributes.x),
+                    "Objects must be sorted ascending by x coordinate"
+                );
+                // TODO move this init to
+                self.current_frame.scanline =
+                    ScanlineState::OamScan { objects };
+            }
+            ScanlineState::OamScan { objects } => {
+                if dots >= Cycles(80) {
+                    // Transition to mode 3
+                    self.current_frame.scanline = ScanlineState::Drawing {
+                        objects,
+                        remaining: Cycles(172),
+                    }
+                }
+            }
+            ScanlineState::Drawing { objects, remaining } => {
+                let elapsed = dots - Cycles(80);
+                match elapsed {
+                    Cycles(0..12) => {} // Initial delay
+                }
+            }
+            ScanlineState::Drawing {
+                objects,
+                remaining: Cycles(0),
+            } => self.current_frame.scanline = ScanlineState::HorizontalBlank,
+            ScanlineState::HorizontalBlank => {}
+        }
+    }
+
     /// Render a single frame to the frame buffer
     ///
     /// This will take exactly 70,224 cycles.
@@ -141,17 +234,8 @@ impl Gpu {
         const DRAW_MIN_CYCLES: Cycles = Cycles(172);
         /// Maximum number of dots in mode 3 (drawing)
         const DRAW_MAX_CYCLES: Cycles = Cycles(289);
-        /// First scanline of mode 1 (vertical blank)
-        const VBLANK_SCANLINE: Scanline = Scanline(144);
 
         let scanline = reg!(self, ly);
-
-        // Vblank - do nothing for this entire period
-        if scanline >= VBLANK_SCANLINE {
-            self.set_mode(PpuMode::VerticalBlank);
-            clock.wait(SCANLINE_CYCLES).await;
-            return;
-        }
 
         // Mode 2 - OAM scan
         // I didn't find anything in the docs about the actual rate that the GB
@@ -305,6 +389,7 @@ impl Default for Gpu {
             oam: MemoryBlock::new(memory::OAM).into(),
             tile_data: MemoryBlock::new(memory::TILE_DATA).into(),
             tile_maps: MemoryBlock::new(memory::TILE_MAPS).into(),
+            current_frame: FrameState::default(),
         }
     }
 }
@@ -482,6 +567,38 @@ impl_bit_pack! {
     Mask::M10 => ppu_mode,
 }
 
+#[derive(Debug)]
+struct FrameState {
+    start: Cycles,
+    scanline: ScanlineState,
+}
+
+/// TODO
+#[derive(Debug)]
+enum ScanlineState {
+    /// TODO
+    Start,
+    /// TODO
+    OamScan { objects: Vec<Object> },
+    /// TODO
+    Drawing {
+        objects: Vec<Object>,
+        remaining: Cycles,
+    },
+    /// TODO
+    HorizontalBlank,
+}
+
+impl ScanlineState {
+    fn mode(&self) -> PpuMode {
+        match self {
+            Self::Start | Self::OamScan { .. } => PpuMode::OamScan,
+            Self::Drawing { .. } => PpuMode::Drawing,
+            Self::HorizontalBlank => PpuMode::HorizontalBlank,
+        }
+    }
+}
+
 /// Draw mode within the current frame
 ///
 /// This defines what the PPU is doing within a single frame draw.
@@ -517,6 +634,25 @@ impl_bit_pack! {
 /// invalid.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Scanline(u8);
+
+impl Scanline {
+    /// Dots in a single scanline
+    const SCANLINE_DOTS: Cycles = Cycles(456);
+    /// Maximum valid scanline index
+    const MAX_SCANLINE: Scanline = Scanline(153);
+
+    /// TODO
+    fn from_dots(dots: Cycles) -> Self {
+        let scanline = dots.0 / Self::SCANLINE_DOTS.0;
+        debug_assert!(scanline <= Self::MAX_SCANLINE.0 as u64);
+        Self(scanline as u8) // Cast is safe because of the assertion
+    }
+
+    /// TODO
+    fn start(&self) -> Cycles {
+        Self::SCANLINE_DOTS * self.0
+    }
+}
 
 impl From<u8> for Scanline {
     fn from(value: u8) -> Self {
@@ -612,6 +748,7 @@ impl TileIndex {
 }
 
 /// An object that's been loaded in mode 2 and is ready to be drawn
+#[derive(Debug)]
 struct Object {
     /// Attributes loaded from OAM
     attributes: ObjectAttributes,
