@@ -1,7 +1,6 @@
 //! Game Boy clock emulation
 
 use std::{
-    cell::Cell,
     fmt::{self, Display},
     ops::{Add, AddAssign, Mul, Sub},
     thread,
@@ -12,8 +11,7 @@ use tracing::warn;
 /// Emulated hardware clock
 ///
 /// The clock drives the CPU, GPU, and whatever other components run off the
-/// main clock. This uses `Cell`s so it can be handed out to each component's
-/// future and still be ticked by the core emulator loop.
+/// main clock.
 #[derive(Debug)]
 pub struct Clock {
     /// Number of elapsed cycles (dots)
@@ -23,9 +21,9 @@ pub struct Clock {
     /// 2^64 dots / 2^22 dots per second = 2^42 seconds
     /// ```
     /// That's a lot of years.
-    cycles: Cell<Cycles>,
+    cycles: Cycles,
     /// Moment when the final tick of the previous frame was completed
-    frame_start: Cell<Instant>,
+    frame_start: Instant,
 }
 
 impl Clock {
@@ -62,8 +60,8 @@ impl Clock {
     /// Initialize a new clock
     pub fn new() -> Self {
         Self {
-            cycles: Cell::default(),
-            frame_start: Instant::now().into(),
+            cycles: Cycles(0),
+            frame_start: Instant::now(),
         }
     }
 
@@ -72,7 +70,7 @@ impl Clock {
     /// The first tick (`0`) is the *first* of its frame. The last tick of the
     /// frame `n` will be `n * CYCLES_PER_FRAME - 1`.
     pub fn is_frame_end(&self) -> bool {
-        (self.cycles.get().0 + 1).is_multiple_of(Self::CYCLES_PER_FRAME.0)
+        (self.cycles.0 + 1).is_multiple_of(Self::CYCLES_PER_FRAME.0)
     }
 
     /// Get the clock cycle count for the next end-of-frame cycle, starting at
@@ -87,17 +85,17 @@ impl Clock {
 
     /// Get the number of cycles completed in the current frame
     pub fn cycles(&self) -> Cycles {
-        self.cycles.get()
+        self.cycles
     }
 
     /// Sleep until the end of the frame
     ///
     /// Ideally this would sleep once per tick, but the sleep function is way
     /// too imprecise for that.
-    pub fn sleep(&self) {
+    pub fn sleep(&mut self) {
         const SLEEP_INCREMENT: Duration = Duration::from_millis(1);
 
-        let now = self.frame_start.get();
+        let now = self.frame_start;
         let elapsed = now.elapsed();
         if elapsed < Self::FRAME_DURATION {
             let target = now + Self::FRAME_DURATION;
@@ -108,7 +106,7 @@ impl Clock {
             }
             // Whatever's left <1ms is ignored
         } else {
-            // Frame took too long, which means the future polling took
+            // Frame took too long, which means the component ticking took
             // longer than allowed. Unfortunately we can't make time go
             // backward (yet), so just log it and pray we speed up.
             warn!(
@@ -116,12 +114,12 @@ impl Clock {
                 duration = Self::FRAME_DURATION
             );
         }
-        self.frame_start.set(Instant::now());
+        self.frame_start = Instant::now();
     }
 
     /// Advance the clock one cycle
-    pub fn tick(&self) {
-        self.cycles.update(|cycles| cycles + Cycles(1));
+    pub fn tick(&mut self) {
+        self.cycles += Cycles(1);
     }
 }
 
