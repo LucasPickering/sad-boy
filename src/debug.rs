@@ -1,4 +1,4 @@
-use crate::emu::{Address, Cycles, DebugInfo};
+use crate::emu::{Address, Cycles, GameBoy};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -7,10 +7,8 @@ use tracing::debug;
 /// The executor must be started in debug mode ([Executor::debug]) to enable the
 /// debugger.
 pub struct Debugger {
-    /// Summary info about the current system state
-    pub info: DebugInfo,
     /// When paused, the emulator doesn't advance at all
-    pub paused: bool,
+    paused: bool,
     /// Triggers for when the debugger should be paused automatically
     ///
     /// This uses a `HashSet` to prevent duplicate breakpoints and make each
@@ -28,6 +26,11 @@ impl Debugger {
         self.breakpoints.insert(Breakpoint::Address(address));
     }
 
+    /// Is the debugger currently paused?
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
     /// Unpause and set a breakpoint for the given cycle count
     pub fn unpause_until(&mut self, cycle: Cycles) {
         debug!("Unpausing debugger until cycle {cycle}");
@@ -35,11 +38,16 @@ impl Debugger {
         self.breakpoints.insert(Breakpoint::Cycle(cycle));
     }
 
-    /// Check all registered breakpoints, and pause the debugger if any have
+    /// Toggle pause state
+    pub fn toggle_pause(&mut self) {
+        self.paused ^= true;
+    }
+
+    /// Check all registered breakpoints and pause the debugger if any have
     /// been triggered
     ///
-    /// This uses the current debug info to check breakpoint statuses.
-    pub fn check_breakpoints(&mut self) {
+    /// This uses the given emulator state to check breakpoint statuses.
+    pub fn check_breakpoints(&mut self, emulator: &GameBoy) {
         let mut check = |bp: Breakpoint| {
             // Remove temporary breakpoints, leave permanent ones
             let hit = if bp.temporary() {
@@ -53,15 +61,14 @@ impl Debugger {
         // Check each potential breakpoint type. Iterating over them would be
         // a bit more foolproof, but this is O(1) and also makes it easy to
         // remove temporary BPs
-        check(Breakpoint::Cycle(self.info.clock_cycles));
-        check(Breakpoint::Address(self.info.cpu.pc));
+        check(Breakpoint::Cycle(emulator.clock().cycles()));
+        check(Breakpoint::Address(emulator.cpu().registers().pc()));
     }
 }
 
 impl Default for Debugger {
     fn default() -> Self {
         Self {
-            info: DebugInfo::default(),
             paused: true, // Start paused
             breakpoints: HashSet::new(),
         }

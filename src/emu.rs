@@ -10,14 +10,13 @@ mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};
-pub use cpu::{CpuDebugInfo, InstructionDebugInfo};
+pub use cpu::{Cpu, InstructionInfo};
 pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
     backend::{Backend, FrameBuffer},
     emu::{
-        cpu::Cpu,
         gpu::Gpu,
         memory::{Memory, MemoryBus},
         rom::Rom,
@@ -69,16 +68,13 @@ impl GameBoy {
     }
 
     /// TODO
-    ///
-    /// TODO make this take `&self`
-    pub fn debug_info(&mut self) -> DebugInfo {
-        DebugInfo {
-            clock_cycles: self.clock.cycles(),
-            cpu: self.cpu.debug_info(
-                &self.clock,
-                &mut MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu),
-            ),
-        }
+    pub fn clock(&self) -> &Clock {
+        &self.clock
+    }
+
+    /// TODO
+    pub fn cpu(&self) -> &Cpu {
+        &self.cpu
     }
 
     /// Advance the emulator one clock cycle
@@ -105,15 +101,6 @@ impl GameBoy {
         }
         self.clock.tick();
     }
-}
-
-/// Exposed read-only state for the emulator
-#[derive(Default)]
-pub struct DebugInfo {
-    /// Number of elapsed clock cycles since boot
-    pub clock_cycles: Cycles,
-    /// CPU state
-    pub cpu: CpuDebugInfo,
 }
 
 #[cfg(test)]
@@ -146,13 +133,10 @@ mod tests {
         rom_data[0x104..(0x104 + NINTENDO_LOGO.len())]
             .copy_from_slice(NINTENDO_LOGO);
 
-        // Run until the program counter hits the end of the bootloader. We
-        // can't get safe access to the CPU registers because the CPU needs
-        // mutable access to itself constantly. This raw pointer access is
-        // pretty harmless.
         let mut backend = HeadlessBackend::new();
         let mut emulator = GameBoy::test(rom_data);
-        while memory::BOOTLOADER.contains(emulator.debug_info().cpu.pc) {
+        // Run until the program counter hits the end of the bootloader
+        while memory::BOOTLOADER.contains(emulator.cpu.registers().pc()) {
             emulator.tick(&mut backend);
         }
 

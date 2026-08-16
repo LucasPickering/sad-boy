@@ -3,9 +3,7 @@
 use crate::{
     Debugger,
     backend::{Backend, FrameBuffer},
-    emu::{
-        Clock, CpuDebugInfo, Cycles, GameBoy, Instruction, InstructionDebugInfo,
-    },
+    emu::{Cpu, Cycles, GameBoy, Instruction, InstructionInfo},
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
@@ -127,26 +125,26 @@ impl TerminalBackend {
         mut debugger: Option<Debugger>,
     ) {
         // Draw initial debug state
-        debugger.as_ref().inspect(|dbg| self.draw_debug(dbg));
+        debugger
+            .as_ref()
+            .inspect(|dbg| self.draw_debug(emulator, dbg));
 
         while !self.quit.load(Ordering::Relaxed) {
             // Check if we've hit any breakpoints and need to pause
             if let Some(debugger) = &mut debugger {
-                debugger.check_breakpoints();
+                debugger.check_breakpoints(emulator);
             }
 
-            if self.drain_input(&mut debugger).is_break() {
+            if self.drain_input(emulator, &mut debugger).is_break() {
                 break;
             }
 
             // Progress the emulator as long as the debugger isn't paused
-            if !debugger.as_ref().is_some_and(|dbg| dbg.paused) {
+            if !debugger.as_ref().is_some_and(Debugger::paused) {
                 emulator.tick(self);
-                // Update debugger info and draw it to the screen
-                if let Some(debugger) = &mut debugger {
-                    debugger.info = emulator.debug_info();
-                    self.draw_debug(debugger);
-                }
+                debugger
+                    .as_ref()
+                    .inspect(|dbg| self.draw_debug(emulator, dbg));
             }
         }
     }
@@ -156,13 +154,14 @@ impl TerminalBackend {
     /// Return [ControlFlow::Break] if the loop should exit.
     fn drain_input(
         &mut self,
+        emulator: &GameBoy,
         debugger: &mut Option<Debugger>,
     ) -> ControlFlow<()> {
         // While the debugger is paused, we have nothing to do but wait for
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
         // still periodically check the `quit` flag.
-        let input_timeout = if debugger.as_ref().is_some_and(|dbg| dbg.paused) {
+        let input_timeout = if debugger.as_ref().is_some_and(Debugger::paused) {
             Duration::from_millis(100)
         } else {
             Duration::ZERO
@@ -174,25 +173,24 @@ impl TerminalBackend {
             match event {
                 InputEvent::DebugPauseToggle => {
                     if let Some(debugger) = debugger {
-                        debugger.paused ^= true;
+                        debugger.toggle_pause();
                     }
                 }
                 InputEvent::DebugStepCycle => {
                     if let Some(debugger) = debugger {
-                        debugger.unpause_until(debugger.info.clock_cycles + 1);
+                        debugger.unpause_until(emulator.clock().cycles() + 1);
                     }
                 }
                 InputEvent::DebugStepFrame => {
                     if let Some(debugger) = debugger {
-                        debugger.unpause_until(Clock::next_frame_end(
-                            debugger.info.clock_cycles,
-                        ));
+                        debugger
+                            .unpause_until(emulator.clock().next_frame_end());
                     }
                 }
                 InputEvent::DebugStepInstruction => {
                     if let Some(debugger) = debugger {
                         debugger.unpause_until(
-                            debugger.info.cpu.next_instruction.end,
+                            emulator.cpu().current_instruction().end,
                         );
                     }
                 }
@@ -219,19 +217,22 @@ impl TerminalBackend {
     /// This call is automatically throttled to a maximum framerate. While the
     /// emulator is running, there isn't value in drawing on every single tick
     /// and it causes a huge slowdown.
-    fn draw_debug(&mut self, debugger: &Debugger) {
+    fn draw_debug(&mut self, emulator: &GameBoy, debugger: &Debugger) {
         const MIN_DRAW_GAP: Duration = Duration::from_millis(100);
 
         let now = Instant::now();
-        let should_draw = debugger.paused
+        let should_draw = debugger.paused()
             || self
                 .last_debug_draw
                 .is_none_or(|instant| now - instant >= MIN_DRAW_GAP);
         if should_draw {
             // Debug UI is drawn via ratatui
-            let result = self
-                .terminal
-                .draw(|frame| frame.render_widget(debugger, frame.area()));
+            let result = self.terminal.draw(|frame| {
+                frame.render_widget(
+                    DebugInfo { emulator, debugger },
+                    frame.area(),
+                );
+            });
             if let Err(error) = result {
                 error!("Error drawing to terminal: {error}");
             }
@@ -287,7 +288,13 @@ impl Backend for TerminalBackend {
     }
 }
 
-impl Widget for &Debugger {
+/// Widget to draw debug info to the terminal
+struct DebugInfo<'a> {
+    emulator: &'a GameBoy,
+    debugger: &'a Debugger,
+}
+
+impl Widget for DebugInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Move down below the screen area
         let area = Rect::new(
@@ -300,13 +307,18 @@ impl Widget for &Debugger {
             Layout::horizontal([28, 36]).spacing(-1).areas(area);
 
         let basic_area = panel("Basic", basic_area, buf);
+        let paused = if self.debugger.paused() {
+            "PAUSED"
+        } else {
+            "RUNNING"
+        };
         Text::from_iter([
-            format!("CLOCK: {} cy", self.info.clock_cycles),
-            format!("DBG: {}", if self.paused { "PAUSED" } else { "RUNNING" }),
+            format!("CLOCK: {} cy", self.emulator.clock().cycles()),
+            format!("DBG: {paused}"),
         ])
         .render(basic_area, buf);
 
-        self.info.cpu.render(cpu_area, buf);
+        self.emulator.cpu().render(cpu_area, buf);
     }
 }
 
@@ -316,7 +328,7 @@ impl Drop for TerminalBackend {
     }
 }
 
-impl Widget for &CpuDebugInfo {
+impl Widget for &Cpu {
     fn render(self, area: Rect, buf: &mut Buffer) {
         /// Register display helper
         struct Reg<T>(T);
@@ -346,14 +358,14 @@ impl Widget for &CpuDebugInfo {
 
         let area = panel("CPU", area, buf);
 
-        let previous =
-            self.previous_instruction.unwrap_or(InstructionDebugInfo {
-                instruction: Instruction::Invalid,
-                duration: Cycles(0),
-                end: Cycles(0),
-                size: 0,
-            });
-        let next = self.next_instruction;
+        let previous = self.previous_instruction().unwrap_or(InstructionInfo {
+            instruction: Instruction::Invalid,
+            duration: Cycles(0),
+            end: Cycles(0),
+            size: 0,
+        });
+        let next = self.current_instruction();
+        let registers = self.registers();
         let lines = [
             format!(
                 "PREV: {instr} ({dur}cy/{size}B)",
@@ -368,27 +380,27 @@ impl Widget for &CpuDebugInfo {
                 size = next.size,
             ),
             // Registers
-            format!("pc: {}", self.pc),
-            format!("sp: {}", self.sp),
-            format!("a: {}", Reg(self.a)),
+            format!("pc: {}", registers.pc()),
+            format!("sp: {}", registers.sp()),
+            format!("a: {}", Reg(registers.a())),
             format!(
                 "f: {} {}",
-                IntDisplay::hex(self.f.as_u8()),
-                self.f.unpack()
+                IntDisplay::hex(registers.f().as_u8()),
+                registers.f().unpack()
             ),
-            format!("af: {}", Reg(self.af)),
-            format!("b: {}", Reg(self.b)),
-            format!("c: {}", Reg(self.c)),
-            format!("bc: {}", Reg(self.bc)),
-            format!("d: {}", Reg(self.d)),
-            format!("e: {}", Reg(self.e)),
-            format!("de: {}", Reg(self.de)),
-            format!("h: {}", Reg(self.h)),
-            format!("l: {}", Reg(self.l)),
-            format!("hl: {}", Reg(self.hl)),
+            format!("af: {}", Reg(registers.af())),
+            format!("b: {}", Reg(registers.b())),
+            format!("c: {}", Reg(registers.c())),
+            format!("bc: {}", Reg(registers.bc())),
+            format!("d: {}", Reg(registers.d())),
+            format!("e: {}", Reg(registers.e())),
+            format!("de: {}", Reg(registers.de())),
+            format!("h: {}", Reg(registers.h())),
+            format!("l: {}", Reg(registers.l())),
+            format!("hl: {}", Reg(registers.hl())),
             format!(
                 "INT: {}",
-                if self.interrupts_enabled {
+                if self.interrupts_enabled() {
                     "ENABLE"
                 } else {
                     "DISABLE"

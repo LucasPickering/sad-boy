@@ -33,94 +33,75 @@ pub struct Cpu {
     /// Most recently executed instruction
     ///
     /// `None` only on startup.
-    previous_instruction: Option<InstructionDebugInfo>,
+    previous_instruction: Option<InstructionInfo>,
     /// TODO
-    next_at: Cycles,
+    current_instruction: InstructionInfo,
 }
 
 impl Cpu {
     /// TODO
-    pub fn tick(
+    pub fn registers(&self) -> &Registers {
+        &self.registers
+    }
+
+    /// Are interrupts currently enabled?
+    pub fn interrupts_enabled(&self) -> bool {
+        self.interrupts_enabled
+    }
+
+    /// Get the most recently *completed* instruction
+    ///
+    /// Return `None` iff no instructions have been executed yet.
+    pub fn previous_instruction(&self) -> Option<InstructionInfo> {
+        self.previous_instruction
+    }
+
+    /// TODO
+    pub fn current_instruction(&self) -> InstructionInfo {
+        self.current_instruction
+    }
+
+    /// Advance the CPU one clock cycle
+    pub(super) fn tick(
         &mut self,
         clock: &Clock,
         memory_bus: &mut MemoryBus<'_>,
-    ) -> bool {
+    ) {
         let _span = info_span!("CPU");
-        if self.next_at <= clock.cycles() {
-            self.execute_next(clock, memory_bus);
-            true
-        } else {
-            false
-        }
-    }
 
-    /// Execute the next CPU instruction
-    ///
-    /// TODO
-    fn execute_next(&mut self, clock: &Clock, memory_bus: &mut MemoryBus<'_>) {
-        // Parse the next instruction and check how many cycles it will take
-        let pc = self.registers.pc;
-        let (instruction, size) = memory_bus.get_instruction(pc);
-        let duration = self.exe(memory_bus).duration(instruction);
-
-        self.exe(memory_bus).execute(instruction);
-
-        // If the instruction didn't modify the PC (e.g. jumps), then
-        // advance it automatically
-        if self.registers.pc == pc {
-            self.registers.pc.0 += size as u16;
-        }
-
-        let end = clock.cycles() + duration;
-        self.previous_instruction = Some(InstructionDebugInfo {
-            instruction,
-            duration,
-            end,
-            size,
-        });
-        self.next_at = end;
-    }
-
-    /// Get debug info about the CPU
-    ///
-    /// This is a read-only summary of current CPU state for the debugger. This
-    /// needs the memory bus to load the next instruction from memory. That
-    /// reference is `mut` so it can cache the instruction if needed.
-    pub fn debug_info(
-        &mut self,
-        clock: &Clock,
-        memory: &mut MemoryBus,
-    ) -> CpuDebugInfo {
-        // Parse the next instruction from memory. This seems duplicative, but
-        // it will be cached within the memory bus so it won't be parsed during
-        // the next execution.
-        let (instruction, size) = memory.get_instruction(self.registers.pc);
-        let duration = self.exe(memory).duration(instruction);
-
-        let reg = &self.registers;
-        CpuDebugInfo {
-            a: reg.a,
-            f: reg.f,
-            af: reg.af(),
-            b: reg.b,
-            c: reg.c,
-            bc: reg.bc(),
-            d: reg.d,
-            e: reg.e,
-            de: reg.de(),
-            h: reg.h,
-            l: reg.l,
-            hl: reg.hl(),
-            pc: reg.pc,
-            sp: reg.sp,
-            interrupts_enabled: self.interrupts_enabled,
-            previous_instruction: self.previous_instruction,
-            next_instruction: InstructionDebugInfo {
+        // Previous instruction is done; load the next one
+        if self.current_instruction.end < clock.cycles() {
+            let (instruction, size) =
+                memory_bus.get_instruction(self.registers.pc);
+            let duration = self.exe(memory_bus).duration(instruction);
+            self.previous_instruction = Some(self.current_instruction);
+            self.current_instruction = InstructionInfo {
                 instruction,
                 duration,
                 end: clock.cycles() + duration,
                 size,
-            },
+            };
+        }
+
+        // On the last cycle of the instruction, execute it
+        //
+        // I'm not sure if this is actually the correct semantics but it seems
+        // logical to me. The impact of the instruction is visible after the
+        // *last* cycle of its duration.
+        if self.current_instruction.end == clock.cycles() {
+            // Parse the next instruction and check how many cycles it will take
+            let pc = self.registers.pc;
+
+            let InstructionInfo {
+                instruction, size, ..
+            } = self.current_instruction;
+            self.exe(memory_bus).execute(instruction);
+
+            // If the instruction didn't modify the PC (e.g. jumps), then
+            // advance it automatically
+            if self.registers.pc == pc {
+                self.registers.pc.0 += size as u16;
+            }
         }
     }
 
@@ -136,69 +117,12 @@ impl Cpu {
     }
 }
 
-/// Exposed debug state for the CPU
-pub struct CpuDebugInfo {
-    // ===== Registers ====
-    pub a: u8,
-    pub f: PackedBits<BcdFlags>,
-    pub af: u16,
-    pub b: u8,
-    pub c: u8,
-    pub bc: u16,
-    pub d: u8,
-    pub e: u8,
-    pub de: u16,
-    pub h: u8,
-    pub l: u8,
-    pub hl: u16,
-    pub pc: Address,
-    pub sp: Address,
-
-    /// Interrupt enable flag
-    pub interrupts_enabled: bool,
-    /// Most recently executed instruction
-    ///
-    /// `None` only on startup.
-    pub previous_instruction: Option<InstructionDebugInfo>,
-    /// Next instruction to execute
-    pub next_instruction: InstructionDebugInfo,
-}
-
-impl Default for CpuDebugInfo {
-    fn default() -> Self {
-        Self {
-            a: 0,
-            f: 0.into(),
-            af: 0,
-            b: 0,
-            c: 0,
-            bc: 0,
-            d: 0,
-            e: 0,
-            de: 0,
-            h: 0,
-            l: 0,
-            hl: 0,
-            pc: Address(0),
-            sp: Address(0),
-            interrupts_enabled: false,
-            previous_instruction: None,
-            next_instruction: InstructionDebugInfo {
-                instruction: Instruction::Nop,
-                duration: Cycles(0),
-                end: Cycles(0),
-                size: 0,
-            },
-        }
-    }
-}
-
 /// Summary info for a CPU instruction
 ///
 /// This could be an instruction that was previously executed, is currently
 /// being executed, or will be executed in the future.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct InstructionDebugInfo {
+pub struct InstructionInfo {
     /// Instruction being executed
     pub instruction: Instruction,
     /// Number of cycles it will take to execute this instruction from when
@@ -208,6 +132,17 @@ pub struct InstructionDebugInfo {
     pub end: Cycles,
     /// Number of bytes this instruction takes up in the ROM
     pub size: usize,
+}
+
+impl Default for InstructionInfo {
+    fn default() -> Self {
+        Self {
+            instruction: Instruction::Invalid,
+            duration: Cycles(0),
+            end: Cycles(0),
+            size: 0,
+        }
+    }
 }
 
 /// Helper for executing CPU instructions
@@ -397,8 +332,10 @@ impl CpuExe<'_, '_> {
     /// condition codes can be variable. This will compute the condition to
     /// provide a current execution duration. This means the condition will end
     /// up being computed at least twice (once during duration calculation, once
-    /// during execution). TODO this could lead to bugs, if shared memory (VRAM)
-    /// is modified between the two computations.
+    /// during execution). The calculation will always be the same in both
+    /// locations though, since conditions can only depend on the flag register,
+    /// and that register can only be changed by CPU instructions. No operations
+    /// outside the CPU can affect that register.
     fn duration(&self, instruction: Instruction) -> Cycles {
         let cycles = match instruction {
             Instruction::Adc(operand)
@@ -798,7 +735,7 @@ const _: () = assert!(
 /// Registers in a Game Boy CPU
 #[derive(Default, PartialEq)]
 #[repr(C)] // Field ordering/alignment is important
-struct Registers {
+pub struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
     // accessed as separate bytes or a pair together. The pairs are SWAPPED
     // here because `af` means `a` is the high byte and `f` is the low byte.
@@ -827,6 +764,58 @@ struct Registers {
     /// on the stack*, meaning the SP must be decremented *before* pushing
     /// and incremented *after* popping.
     sp: Address,
+}
+
+impl Registers {
+    /// Get the value in the general-purpose register `a`
+    pub fn a(&self) -> u8 {
+        self.a
+    }
+
+    /// Get the value in the flags register `f`
+    pub fn f(&self) -> PackedBits<BcdFlags> {
+        self.f
+    }
+
+    /// Get the value in the general-purpose register `b`
+    pub fn b(&self) -> u8 {
+        self.b
+    }
+
+    /// Get the value in the general-purpose register `c`
+    pub fn c(&self) -> u8 {
+        self.c
+    }
+
+    /// Get the value in the general-purpose register `d`
+    pub fn d(&self) -> u8 {
+        self.d
+    }
+
+    /// Get the value in the general-purpose register `e`
+    pub fn e(&self) -> u8 {
+        self.e
+    }
+
+    /// Get the value in the general-purpose register `h`
+    pub fn h(&self) -> u8 {
+        self.h
+    }
+
+    /// Get the value in the general-purpose register `l`
+    pub fn l(&self) -> u8 {
+        self.l
+    }
+
+    /// Get the address in the `pc` (program counter) register
+    pub fn pc(&self) -> Address {
+        self.pc
+    }
+
+    /// Get the address in the `sp` (stack pointer) register
+    pub fn sp(&self) -> Address {
+        self.sp
+    }
 }
 
 impl Debug for Registers {
@@ -869,7 +858,7 @@ macro_rules! register_pair {
     // Internal branch
     ($pair:ident, $pair_mut:ident, $r_low:ident) => {
         /// Get the value of the `$pair` register pair
-        fn $pair(&self) -> u16 {
+        pub fn $pair(&self) -> u16 {
             let ptr8 = std::ptr::from_ref(&self.$r_low);
             debug_assert_eq!(
                 ptr8.align_offset(2),

@@ -73,14 +73,14 @@ impl Clock {
         (self.cycles.0 + 1).is_multiple_of(Self::CYCLES_PER_FRAME.0)
     }
 
-    /// Get the clock cycle count for the next end-of-frame cycle, starting at
-    /// the given cycle
+    /// Get the cycle count for the next end-of-frame cycle
     ///
-    /// If the given cycle is already the end of a frame, then the end of the
+    /// If the current cycle is already the end of a frame, then the end of the
     /// *following* frame will be returned.
-    pub fn next_frame_end(cycles: Cycles) -> Cycles {
+    pub fn next_frame_end(&self) -> Cycles {
         // +1 ensures the last cycle of a frame jumps to the next frame
-        Cycles((cycles + 1).0.next_multiple_of(Self::CYCLES_PER_FRAME.0))
+        let cycle = self.cycles + 1;
+        Cycles(cycle.0.next_multiple_of(Self::CYCLES_PER_FRAME.0))
     }
 
     /// Get the number of cycles completed in the current frame

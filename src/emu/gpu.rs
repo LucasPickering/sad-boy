@@ -38,9 +38,13 @@ pub struct Gpu {
 impl Gpu {
     /// TODO
     ///
-    /// Return `true` if this was the last tick of the current frame, and the
+    /// Return `true` if this was the last tick of the current frame and the
     /// frame is now ready to be drawn.
-    pub fn tick(&mut self, clock: &Clock, frame: &mut FrameBuffer) -> bool {
+    pub(super) fn tick(
+        &mut self,
+        clock: &Clock,
+        frame: &mut FrameBuffer,
+    ) -> bool {
         let _span = info_span!("GPU");
 
         // Each scanline is a fixed number of dots, so we can calculate the
