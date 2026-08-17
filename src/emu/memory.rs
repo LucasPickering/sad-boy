@@ -508,7 +508,9 @@ impl<T> MemoryWrite for &mut MemoryBlock<T> {
     }
 }
 
-/// TODO
+/// If `Some`, read from the memory; if `None`, return `0`
+///
+/// The GPU uses modal memory that is dynamically inaccessible.
 impl<T> MemoryRead for Option<&MemoryBlock<T>> {
     fn byte(self, address: Address) -> u8 {
         if let Some(memory) = self {
@@ -519,7 +521,9 @@ impl<T> MemoryRead for Option<&MemoryBlock<T>> {
     }
 }
 
-/// TODO
+/// If `Some`, write to the memory; if `None`, do nothing
+///
+/// The GPU uses modal memory that is dynamically inaccessible.
 impl<T> MemoryWrite for Option<&mut MemoryBlock<T>> {
     fn set_byte(self, address: Address, value: u8) {
         if let Some(memory) = self {

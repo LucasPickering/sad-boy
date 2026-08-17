@@ -21,22 +21,25 @@ const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
 const COLOR_WHITE: Color = Color::new(255, 255, 255);
 /// Dots in a single scanline
 const SCANLINE_DOTS: Cycles = Cycles(456);
-/// TODO
+/// Number of scanlines in each frame
 const SCANLINES_PER_FRAME: u8 = 154;
-/// TODO
+/// Number of scanlines in each frame that involve drawing
+///
+/// This is [SCANLINES_PER_FRAME] minus the number of vertical blank lines in
+/// each frame.
 const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
 
 /// Graphics registers and processing
 #[derive(Debug, Default)]
 pub struct Gpu {
-    /// TODO
+    /// Memory specific to the GPU
     vram: Vram,
-    /// TODO
+    /// State machine for the current scanline being drawn
     current_scanline: ScanlineState,
 }
 
 impl Gpu {
-    /// TODO
+    /// Advance the GPU one clock cycle
     ///
     /// Return `true` if this was the last tick of the current frame and the
     /// frame is now ready to be drawn.
@@ -97,7 +100,7 @@ impl Gpu {
     /// Access the Object Attribute Memory
     ///
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
-    /// return 0 and writes will do nothing. TODO update comment
+    /// return 0 and writes will do nothing.
     pub fn oam(&self) -> impl MemoryRead {
         // OAM is only accessible to the CPU in blank modes
         match self.mode() {
@@ -111,7 +114,7 @@ impl Gpu {
     /// Access the Object Attribute Memory
     ///
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
-    /// return 0 and writes will do nothing. TODO update comment
+    /// return 0 and writes will do nothing.
     pub fn oam_mut(&mut self) -> impl MemoryWrite {
         // OAM is only accessible to the CPU in blank modes
         match self.mode() {
@@ -125,7 +128,7 @@ impl Gpu {
     /// Access tile data memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing. TODO update comment
+    /// writes will do nothing.
     pub fn tile_data(&self) -> impl MemoryRead {
         // VRAM is not accessible in mode 3
         match self.mode() {
@@ -139,7 +142,7 @@ impl Gpu {
     /// Mutable access tile data memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing. TODO update comment
+    /// writes will do nothing.
     pub fn tile_data_mut(&mut self) -> impl MemoryWrite {
         // VRAM is not accessible in mode 3
         match self.mode() {
@@ -153,7 +156,7 @@ impl Gpu {
     /// Access tile map memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing. TODO update comment
+    /// writes will do nothing.
     pub fn tile_maps(&self) -> impl MemoryRead {
         // VRAM is not accessible in mode 3
         match self.mode() {
@@ -167,7 +170,7 @@ impl Gpu {
     /// Access tile map memory
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing. TODO update comment
+    /// writes will do nothing.
     pub fn tile_maps_mut(&mut self) -> impl MemoryWrite {
         // VRAM is not accessible in mode 3
         match self.mode() {
@@ -357,7 +360,7 @@ impl_bit_pack! {
     Mask::M10 => ppu_mode,
 }
 
-/// TODO
+/// Graphics-related memory
 #[derive(Debug)]
 pub struct Vram {
     /// 1-byte control registers related to graphics processing
@@ -481,17 +484,20 @@ impl Default for Vram {
     }
 }
 
-/// TODO
+/// Draw state of a single scanline
+///
+/// This is a state machine that progresses as the scanline is drawn. This is
+/// *not* used for vblank scanlines, since those are stateless. See [PpuMode].
 #[derive(Debug, Default)]
 enum ScanlineState {
-    /// TODO
+    /// Initial state: no work has been done
     #[default]
     Start,
-    /// TODO
+    /// Objects have been scanned
     OamScan { objects: Vec<Object> },
-    /// TODO
+    /// Pixels are being drawn to the screen
     Drawing { objects: Vec<Object>, x: u8 },
-    /// TODO
+    /// Scanline is done, waiting for the next line
     HorizontalBlank,
 }
 

@@ -118,7 +118,9 @@ impl TerminalBackend {
         })
     }
 
-    /// TODO
+    /// Run the emulator with the surrounding TUI
+    ///
+    /// If a [Debugger] is provided, run in debug mode and start paused.
     pub fn run(
         &mut self,
         emulator: &mut GameBoy,

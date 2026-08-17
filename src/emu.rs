@@ -38,7 +38,10 @@ pub struct GameBoy {
     /// Read-only memory from the cartridge
     rom: Rom,
     memory: Memory,
-    /// TODO
+    /// Next frame to be drawn to the screen
+    ///
+    /// This is incrementally updated by the GPU during a frame, then pushed
+    /// to the screen all at once.
     frame: FrameBuffer,
 }
 
@@ -81,6 +84,11 @@ impl GameBoy {
     /// If this is the final clock cycle of the frame, this will sleep at the
     /// end of the tick to idle for the rest of the frame time.
     pub fn tick(&mut self, backend: &mut dyn Backend) {
+        // Draw the empty frame on first tick just so we have something
+        if self.clock.cycles() == Cycles(0) {
+            backend.draw(&self.frame);
+        }
+
         // Tick *before* operations because it ensures the clock cycle number
         // seen by the emulator is the same as what's visible externally after
         // the tick (e.g. in the debugger). This means tick #0 never really
