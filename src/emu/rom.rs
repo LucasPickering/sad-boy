@@ -101,7 +101,7 @@ impl Debug for Rom {
 pub fn parse_instruction(
     input: &[u8],
     address: Address,
-) -> Result<(Instruction, usize), InstructionParseError> {
+) -> Result<(Instruction, u16), InstructionParseError> {
     let mut input = &input[(address.0 as usize)..];
     let start = input.checkpoint();
     // Don't use Parser::parse() because its error type doesn't print well
@@ -115,7 +115,7 @@ pub fn parse_instruction(
                 .expect("Complete parser should not return Incomplete");
             InstructionParseError::new(input, input.offset_from(&start), error)
         })?;
-    let size = input.offset_from(&start);
+    let size = input.offset_from(&start) as u16;
     trace!(
         %instruction,
         bytes = %BytesDisplay::binary(taken),

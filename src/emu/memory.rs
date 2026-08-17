@@ -11,7 +11,7 @@ use std::{
     cell::RefCell,
     fmt::{self, Debug, Display},
     mem,
-    ops::Add,
+    ops::{Add, AddAssign},
     ptr,
     range::RangeInclusive,
     str::FromStr,
@@ -137,7 +137,7 @@ impl<'a> MemoryBus<'a> {
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
-    pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
+    pub fn get_instruction(&self, address: Address) -> (Instruction, u16) {
         // Instruction parsing is set up to read from either the bootloader or
         // the ROM. Reading from anywhere else is a bug.
         //
@@ -318,6 +318,12 @@ impl Add<u16> for Address {
 
     fn add(self, rhs: u16) -> Self::Output {
         Self(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u16> for Address {
+    fn add_assign(&mut self, rhs: u16) {
+        self.0 += rhs;
     }
 }
 

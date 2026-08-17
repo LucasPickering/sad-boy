@@ -3,7 +3,7 @@
 use crate::{
     Debugger,
     backend::{Backend, FrameBuffer},
-    emu::{Cpu, Cycles, GameBoy, Instruction, InstructionInfo},
+    emu::{Cpu, Cycles, GameBoy, InstructionInfo, instruction::Instruction},
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
@@ -125,43 +125,52 @@ impl TerminalBackend {
         mut debugger: Option<Debugger>,
     ) {
         // Draw initial debug state
-        debugger
-            .as_ref()
-            .inspect(|dbg| self.draw_debug(emulator, dbg));
+        if let Some(debugger) = &debugger {
+            self.draw_debug(emulator, debugger);
+        }
 
+        // This loop runs constantly, even if the debugger is paused. Its run
+        // rate is throttled by two things:
+        // - End-of-frame sleep in the emulator (while unpaused)
+        // - Input read timeout (while paused)
         while !self.quit.load(Ordering::Relaxed) {
-            // Check if we've hit any breakpoints and need to pause
             if let Some(debugger) = &mut debugger {
-                debugger.check_breakpoints(emulator);
-            }
-
-            if self.drain_input(emulator, &mut debugger).is_break() {
-                break;
-            }
-
-            // Progress the emulator as long as the debugger isn't paused
-            if !debugger.as_ref().is_some_and(Debugger::paused) {
+                if !debugger.paused() {
+                    // After the tick, check breakpoints for pauses. Breakpoints
+                    // only depend on emulator state, so we only need to check
+                    // them after the state has changed.
+                    emulator.tick(self);
+                    debugger.check_breakpoints(emulator);
+                }
+                self.draw_debug(emulator, debugger);
+            } else {
+                // No debugger - just run normally
                 emulator.tick(self);
             }
-            debugger
-                .as_ref()
-                .inspect(|dbg| self.draw_debug(emulator, dbg));
+
+            // Check the input queue
+            if self.drain_input(emulator, debugger.as_mut()).is_break() {
+                break;
+            }
         }
     }
 
     /// Drain all events from the input queue
     ///
-    /// Return [ControlFlow::Break] if the loop should exit.
+    /// Return [ControlFlow::Break] if the loop should exit. A [Debugger] is
+    /// provided only if running in debug mode. If not given, all debug events
+    /// will be ignored.
     fn drain_input(
         &mut self,
         emulator: &GameBoy,
-        debugger: &mut Option<Debugger>,
+        mut debugger: Option<&mut Debugger>,
     ) -> ControlFlow<()> {
         // While the debugger is paused, we have nothing to do but wait for
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
         // still periodically check the `quit` flag.
-        let input_timeout = if debugger.as_ref().is_some_and(Debugger::paused) {
+        let input_timeout = if debugger.as_ref().is_some_and(|dbg| dbg.paused())
+        {
             Duration::from_millis(100)
         } else {
             Duration::ZERO
@@ -171,32 +180,24 @@ impl TerminalBackend {
         while let Some(event) = self.next_event(input_timeout) {
             debug!(?event, "Input event");
             match event {
-                InputEvent::DebugPauseToggle => {
-                    if let Some(debugger) = debugger {
-                        debugger.toggle_pause();
-                    }
-                }
-                InputEvent::DebugStepCycle => {
-                    if let Some(debugger) = debugger {
-                        debugger.unpause_until(emulator.clock().cycles() + 1);
-                    }
-                }
-                InputEvent::DebugStepFrame => {
-                    if let Some(debugger) = debugger {
-                        debugger
-                            .unpause_until(emulator.clock().next_frame_end());
-                    }
-                }
-                InputEvent::DebugStepInstruction => {
-                    if let Some(debugger) = debugger {
-                        debugger.unpause_until(
-                            emulator.cpu().current_instruction().end,
-                        );
-                    }
-                }
-
+                // Primary events
                 InputEvent::Quit => return ControlFlow::Break(()), // Exit
                 InputEvent::Button(_) => todo!("TODO track input state"),
+
+                // Debug events
+                InputEvent::Debug(event)
+                    if let Some(debugger) = &mut debugger =>
+                {
+                    match event {
+                        DebugEvent::PauseToggle => debugger.toggle_pause(),
+                        DebugEvent::StepCycle => debugger.step_cycle(emulator),
+                        DebugEvent::StepFrame => debugger.step_frame(emulator),
+                        DebugEvent::StepInstruction => {
+                            debugger.step_instruction(emulator);
+                        }
+                    }
+                }
+                InputEvent::Debug(_) => {}
             }
         }
         ControlFlow::Continue(())
@@ -263,10 +264,10 @@ impl TerminalBackend {
     /// Map a key event to an [InputEvent]
     fn map_key(key: Key) -> Option<InputEvent> {
         match key {
-            Key::Char(' ') => Some(InputEvent::DebugPauseToggle),
-            Key::Right => Some(InputEvent::DebugStepInstruction),
-            Key::CtrlRight => Some(InputEvent::DebugStepCycle),
-            Key::ShiftRight => Some(InputEvent::DebugStepFrame),
+            Key::Char(' ') => Some(InputEvent::Debug(DebugEvent::PauseToggle)),
+            Key::Right => Some(InputEvent::Debug(DebugEvent::StepInstruction)),
+            Key::CtrlRight => Some(InputEvent::Debug(DebugEvent::StepCycle)),
+            Key::ShiftRight => Some(InputEvent::Debug(DebugEvent::StepFrame)),
             Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
             _ => None,
         }
@@ -521,16 +522,25 @@ enum InputEvent {
     /// Input mapped to an emulated button on the Game Boy
     #[expect(unused)]
     Button(Button),
-    /// Pause or unpause execution in the debugger
-    DebugPauseToggle,
-    /// Advance the debugger one clock cycle
-    DebugStepCycle,
-    /// Advance the debugger to the end of the current frame
-    DebugStepFrame,
-    /// Advance the debugger to the end of the current CPU instruction
-    DebugStepInstruction,
+    /// Input specific to the debugger
+    ///
+    /// This is a sub-enum so it can be easily ignored when debug is disabled.
+    Debug(DebugEvent),
     /// Exit the app
     Quit,
+}
+
+/// An input event specific to the debugger
+#[derive(Debug)]
+enum DebugEvent {
+    /// Pause or unpause execution in the debugger
+    PauseToggle,
+    /// Advance the debugger one clock cycle
+    StepCycle,
+    /// Advance the debugger to the end of the current frame
+    StepFrame,
+    /// Advance the debugger to the end of the current CPU instruction
+    StepInstruction,
 }
 
 /// Pressable Buttons on a Game Boy

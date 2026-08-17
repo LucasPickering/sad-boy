@@ -20,6 +20,7 @@ pub trait Backend {
 }
 
 /// An in-memory [Backend] for testing and headless operation
+#[derive(Default)]
 pub struct HeadlessBackend {
     /// Most recent drawn frame
     last_frame: Option<FrameBuffer>,
@@ -27,7 +28,7 @@ pub struct HeadlessBackend {
 
 impl HeadlessBackend {
     pub fn new() -> Self {
-        Self { last_frame: None }
+        Self::default()
     }
 
     /// Assert that the screen pixels match the given pixel array

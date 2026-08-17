@@ -5,13 +5,12 @@
 mod clock;
 mod cpu;
 mod gpu;
-mod instruction;
+pub mod instruction;
 mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};
 pub use cpu::{Cpu, InstructionInfo};
-pub use instruction::Instruction;
 pub use memory::Address;
 
 use crate::{
@@ -67,12 +66,12 @@ impl GameBoy {
         }
     }
 
-    /// TODO
+    /// Get the system clock
     pub fn clock(&self) -> &Clock {
         &self.clock
     }
 
-    /// TODO
+    /// Get the CPU state
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
     }
@@ -82,6 +81,12 @@ impl GameBoy {
     /// If this is the final clock cycle of the frame, this will sleep at the
     /// end of the tick to idle for the rest of the frame time.
     pub fn tick(&mut self, backend: &mut dyn Backend) {
+        // Tick *before* operations because it ensures the clock cycle number
+        // seen by the emulator is the same as what's visible externally after
+        // the tick (e.g. in the debugger). This means tick #0 never really
+        // happens, but that's okay. Zeroes are free.
+        self.clock.tick();
+
         // Progress the CPU
         let mut memory_bus =
             MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
@@ -99,7 +104,6 @@ impl GameBoy {
         if self.clock.is_frame_end() {
             self.clock.sleep();
         }
-        self.clock.tick();
     }
 }
 

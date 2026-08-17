@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::backend::Backend;
 use crate::emu::{Address, Cycles, GameBoy};
 use std::collections::HashSet;
 use tracing::debug;
@@ -17,6 +19,13 @@ pub struct Debugger {
 }
 
 impl Debugger {
+    pub fn new() -> Self {
+        Self {
+            paused: true, // Start paused
+            breakpoints: HashSet::new(),
+        }
+    }
+
     /// Set a breakpoint at the given address
     ///
     /// When the CPU reaches this address (i.e. when `pc == address`), the
@@ -32,7 +41,7 @@ impl Debugger {
     }
 
     /// Unpause and set a breakpoint for the given cycle count
-    pub fn unpause_until(&mut self, cycle: Cycles) {
+    fn unpause_until(&mut self, cycle: Cycles) {
         debug!("Unpausing debugger until cycle {cycle}");
         self.paused = false;
         self.breakpoints.insert(Breakpoint::Cycle(cycle));
@@ -41,6 +50,22 @@ impl Debugger {
     /// Toggle pause state
     pub fn toggle_pause(&mut self) {
         self.paused ^= true;
+    }
+
+    /// Step forward one clock cycle
+    pub fn step_cycle(&mut self, emulator: &GameBoy) {
+        self.unpause_until(emulator.clock().cycles() + 1);
+    }
+
+    /// Step forward to the end of the current frame
+    pub fn step_frame(&mut self, emulator: &GameBoy) {
+        self.unpause_until(emulator.clock().next_frame_end());
+    }
+
+    /// Step forward to the end of the current CPU isntruction
+    pub fn step_instruction(&mut self, emulator: &GameBoy) {
+        tracing::debug!("{:?}", emulator.cpu().current_instruction());
+        self.unpause_until(emulator.cpu().current_instruction().end);
     }
 
     /// Check all registered breakpoints and pause the debugger if any have
@@ -55,7 +80,10 @@ impl Debugger {
             } else {
                 self.breakpoints.contains(&bp)
             };
-            self.paused |= hit;
+            if hit {
+                debug!(breakpoint = ?bp, "Hit breakpoint");
+                self.paused = true;
+            }
         };
 
         // Check each potential breakpoint type. Iterating over them would be
@@ -64,14 +92,26 @@ impl Debugger {
         check(Breakpoint::Cycle(emulator.clock().cycles()));
         check(Breakpoint::Address(emulator.cpu().registers().pc()));
     }
+
+    /// Run the emulator until the debugger pauses
+    ///
+    /// This is a simple main loop for unit tests
+    #[cfg(test)]
+    fn run_to_pause(
+        &mut self,
+        emulator: &mut GameBoy,
+        backend: &mut dyn Backend,
+    ) {
+        while !self.paused {
+            emulator.tick(backend);
+            self.check_breakpoints(emulator);
+        }
+    }
 }
 
 impl Default for Debugger {
     fn default() -> Self {
-        Self {
-            paused: true, // Start paused
-            breakpoints: HashSet::new(),
-        }
+        Self::new()
     }
 }
 
@@ -95,5 +135,127 @@ impl Breakpoint {
             Self::Cycle(_) => true,
             Self::Address(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        backend::HeadlessBackend,
+        emu::{
+            Clock, GameBoy, InstructionInfo,
+            instruction::{Instruction, Load, Register8, Register16},
+        },
+    };
+
+    /// Test stepping by a single clock cycle
+    #[test]
+    fn step_cycle() {
+        let mut backend = HeadlessBackend::new();
+        let mut emulator = GameBoy::test(vec![]);
+        let mut debugger = Debugger::new();
+
+        assert_eq!(emulator.clock().cycles(), Cycles(0));
+
+        debugger.step_cycle(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(1));
+
+        debugger.step_cycle(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(2));
+    }
+
+    /// Test stepping by GPU frame
+    #[test]
+    fn step_frame() {
+        let mut backend = HeadlessBackend::new();
+        // Instructions come from the bootloader so we don't need a ROM
+        let mut emulator = GameBoy::test(vec![0; 1024]);
+        let mut debugger = Debugger::new();
+
+        // Assert initial state
+        assert_eq!(emulator.clock().cycles(), Cycles(0));
+
+        // Finish the first frame
+        debugger.step_frame(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Clock::CYCLES_PER_FRAME);
+
+        // Another step finishes the second frame
+        debugger.step_frame(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Clock::CYCLES_PER_FRAME * 2);
+
+        // If we're partway through a frame, the step finishes it
+        debugger.step_cycle(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Clock::CYCLES_PER_FRAME * 2 + 1);
+        debugger.step_frame(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Clock::CYCLES_PER_FRAME * 3);
+    }
+
+    /// Test stepping by CPU instruction
+    #[test]
+    fn step_instruction() {
+        let mut backend = HeadlessBackend::new();
+        // Instructions come from the bootloader so we don't need a ROM
+        let mut emulator = GameBoy::test(vec![]);
+        let mut debugger = Debugger::new();
+
+        // Assert initial state
+        assert_eq!(emulator.clock().cycles(), Cycles(0));
+        assert_eq!(
+            emulator.cpu().current_instruction(),
+            InstructionInfo {
+                instruction: Instruction::Ld(Load::R16Const {
+                    dest: Register16::Sp,
+                    source: 0xfffe,
+                }),
+                duration: Cycles(3),
+                end: Cycles(3),
+                size: 3
+            }
+        );
+
+        // Check the first couple instructions
+        debugger.step_instruction(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(3));
+        assert_eq!(
+            emulator.cpu().current_instruction(),
+            InstructionInfo {
+                instruction: Instruction::Xor(Register8::A.into()),
+                duration: Cycles(1),
+                end: Cycles(4),
+                size: 1
+            }
+        );
+
+        debugger.step_instruction(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(4));
+        assert_eq!(
+            emulator.cpu().current_instruction(),
+            InstructionInfo {
+                instruction: Instruction::Ld(Load::R16Const {
+                    dest: Register16::Hl,
+                    source: 0x9fff,
+                }),
+                duration: Cycles(3),
+                end: Cycles(7),
+                size: 3
+            }
+        );
+
+        // If the instruction is partially finished, we still go to the end
+        debugger.step_cycle(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(5));
+        debugger.step_instruction(&emulator);
+        debugger.run_to_pause(&mut emulator, &mut backend);
+        assert_eq!(emulator.clock().cycles(), Cycles(7));
     }
 }

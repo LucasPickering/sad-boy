@@ -99,20 +99,9 @@ impl Cpu {
     ) {
         let _span = info_span!("CPU");
 
-        // Previous instruction is done; load the next one
-        if self.current_instruction.end < clock.cycles() {
-            // Check the cache or load it from the ROM
-            let (instruction, size) =
-                self.instruction_cache.load(memory_bus, self.registers.pc);
-            let duration = instruction.duration(self.registers.flags());
-
-            self.previous_instruction = Some(self.current_instruction);
-            self.current_instruction = InstructionInfo {
-                instruction,
-                duration,
-                end: clock.cycles() + duration,
-                size,
-            };
+        // If this instruction is still ticking, do nothing
+        if clock.cycles() < self.current_instruction.end {
+            return;
         }
 
         // On the last cycle of the instruction, execute it
@@ -120,21 +109,20 @@ impl Cpu {
         // I'm not sure if this is actually the correct semantics but it seems
         // logical to me. The impact of the instruction is visible after the
         // *last* cycle of its duration.
-        if self.current_instruction.end == clock.cycles() {
-            // Parse the next instruction and check how many cycles it will take
-            let pc = self.registers.pc;
+        let pc = self.registers.pc;
+        let InstructionInfo {
+            instruction, size, ..
+        } = self.current_instruction;
+        self.exe(memory_bus).execute(instruction);
 
-            let InstructionInfo {
-                instruction, size, ..
-            } = self.current_instruction;
-            self.exe(memory_bus).execute(instruction);
-
-            // If the instruction didn't modify the PC (e.g. jumps), then
-            // advance it automatically
-            if self.registers.pc == pc {
-                self.registers.pc.0 += size as u16;
-            }
+        // If the instruction didn't modify the PC (e.g. jumps), then
+        // advance it automatically
+        if self.registers.pc == pc {
+            self.registers.pc += size;
         }
+
+        // Now that this instruction is done, we need to load the next one
+        self.load_next_instruction(clock, memory_bus);
     }
 
     fn exe<'cpu, 'mem>(
@@ -146,6 +134,21 @@ impl Cpu {
             interrupts_enabled: &mut self.interrupts_enabled,
             memory,
         }
+    }
+
+    /// Read the next instruction from the current `pc` register and load it
+    /// to [Self::current_instruction]
+    fn load_next_instruction(&mut self, clock: &Clock, memory_bus: &MemoryBus) {
+        let (instruction, size) =
+            self.instruction_cache.load(memory_bus, self.registers.pc);
+        let duration = instruction.duration(self.registers.flags());
+        self.previous_instruction = Some(self.current_instruction);
+        self.current_instruction = InstructionInfo {
+            instruction,
+            duration,
+            end: clock.cycles() + duration,
+            size,
+        };
     }
 }
 
@@ -163,7 +166,7 @@ pub struct InstructionInfo {
     /// Clock cycle on which this instruction will/did complete
     pub end: Cycles,
     /// Number of bytes this instruction takes up in the ROM
-    pub size: usize,
+    pub size: u16,
 }
 
 impl Default for InstructionInfo {
@@ -995,7 +998,7 @@ impl Instruction {
 /// pretty big difference in performance.
 #[derive(Debug)]
 struct InstructionCache {
-    cache: HashMap<Address, (Instruction, usize)>,
+    cache: HashMap<Address, (Instruction, u16)>,
     /// `true` while running the bootloader, `false` once it's been unmapped
     ///
     /// This is used to track when the bootloader is unmapped so the cache can
@@ -1016,7 +1019,7 @@ impl InstructionCache {
         &mut self,
         memory_bus: &MemoryBus<'_>,
         address: Address,
-    ) -> (Instruction, usize) {
+    ) -> (Instruction, u16) {
         // When exiting the bootloader, clear the cache because all the
         // instructions in that range are going to change
         if memory_bus.is_bootloading() != self.is_bootloading {
