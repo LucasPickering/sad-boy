@@ -17,7 +17,7 @@ use nix::{
 };
 use ratatui::{
     Terminal,
-    layout::{Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     prelude::{Buffer, TermionBackend},
     symbols::merge::MergeStrategy,
     text::Text,
@@ -126,6 +126,8 @@ impl TerminalBackend {
         emulator: &mut GameBoy,
         mut debugger: Option<Debugger>,
     ) {
+        self.draw(emulator.frame());
+
         // Draw initial debug state
         if let Some(debugger) = &debugger {
             self.draw_debug(emulator, debugger);
@@ -299,15 +301,19 @@ struct DebugInfo<'a> {
 
 impl Widget for DebugInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let [left_area, memory_area] =
+            Layout::horizontal([TERM_WIDTH.into(), Constraint::Min(0)])
+                .areas(area);
+        // Leave space for the screen in the top-left
+        let [_, mut bottom_left_area] =
+            Layout::vertical([TERM_HEIGHT.into(), Constraint::Min(0)])
+                .areas(left_area);
+        bottom_left_area.width += 1; // Combine borders into the Memory panel
         // Move down below the screen area
-        let area = Rect::new(
-            0,
-            TERM_HEIGHT,
-            area.width,
-            area.height - TERM_HEIGHT + 1,
-        );
         let [basic_area, cpu_area] =
-            Layout::horizontal([28, 36]).spacing(-1).areas(area);
+            Layout::horizontal([Constraint::Min(0), 36.into()])
+                .spacing(-1)
+                .areas(bottom_left_area);
 
         let basic_area = panel("Basic", basic_area, buf);
         let paused = if self.debugger.paused() {
@@ -315,13 +321,19 @@ impl Widget for DebugInfo<'_> {
         } else {
             "RUNNING"
         };
+
+        // Basic
         Text::from_iter([
-            format!("CLOCK: {} cy", self.emulator.clock().cycles()),
+            format!("CLOCK: {}", self.emulator.clock().cycles()),
             format!("DBG: {paused}"),
         ])
         .render(basic_area, buf);
 
+        // CPU
         self.emulator.cpu().render(cpu_area, buf);
+
+        // Memory
+        panel("Memory", memory_area, buf);
     }
 }
 

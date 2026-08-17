@@ -79,16 +79,16 @@ impl GameBoy {
         &self.cpu
     }
 
+    /// Get the in-memory frame buffer
+    pub fn frame(&self) -> &FrameBuffer {
+        &self.frame
+    }
+
     /// Advance the emulator one clock cycle
     ///
     /// If this is the final clock cycle of the frame, this will sleep at the
     /// end of the tick to idle for the rest of the frame time.
     pub fn tick(&mut self, backend: &mut dyn Backend) {
-        // Draw the empty frame on first tick just so we have something
-        if self.clock.cycles() == Cycles(0) {
-            backend.draw(&self.frame);
-        }
-
         // Tick *before* operations because it ensures the clock cycle number
         // seen by the emulator is the same as what's visible externally after
         // the tick (e.g. in the debugger). This means tick #0 never really
