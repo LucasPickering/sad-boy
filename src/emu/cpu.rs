@@ -16,6 +16,7 @@ use crate::{
     util::{Bit, BitPack, PackedBits, impl_bit_pack},
 };
 use std::{
+    collections::HashMap,
     fmt::{self, Debug, Display},
     ops::{BitAnd, BitOr, BitXor},
 };
@@ -24,7 +25,7 @@ use tracing::{error, info_span, trace};
 /// Central Processing Unit for a Game Boy
 ///
 /// This holds the CPU registers and executes instructions.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug)]
 pub struct Cpu {
     /// Mutable values directly in the CPU
     registers: Registers,
@@ -34,12 +35,41 @@ pub struct Cpu {
     ///
     /// `None` only on startup.
     previous_instruction: Option<InstructionInfo>,
-    /// TODO
+    /// Currently executing instruction
+    ///
+    /// Once the instruction's outcome has been applied, this it will be moved
+    /// to `previous_instruction`. Thus, the effect of `current_instruction`
+    /// will not yet be visible.
     current_instruction: InstructionInfo,
+    /// A cache for instructions parsed from the ROM
+    instruction_cache: InstructionCache,
 }
 
 impl Cpu {
-    /// TODO
+    /// Initialize the CPU
+    pub fn new() -> Self {
+        // The first instruction is right from the bootloader. Hard-coding this
+        // feels kinda icky but boy it is a lot easier than plumbing everything.
+        let first_instruction = Instruction::Ld(Load::R16Const {
+            dest: Register16::Sp,
+            source: 0xfffe,
+        });
+        let duration = first_instruction.duration(BcdFlags::default());
+        Self {
+            registers: Registers::default(),
+            interrupts_enabled: false,
+            previous_instruction: None,
+            current_instruction: InstructionInfo {
+                instruction: first_instruction,
+                duration,
+                end: duration,
+                size: 3,
+            },
+            instruction_cache: InstructionCache::new(),
+        }
+    }
+
+    /// Get CPU registers
     pub fn registers(&self) -> &Registers {
         &self.registers
     }
@@ -56,7 +86,7 @@ impl Cpu {
         self.previous_instruction
     }
 
-    /// TODO
+    /// Get the currently execution instruction
     pub fn current_instruction(&self) -> InstructionInfo {
         self.current_instruction
     }
@@ -71,9 +101,11 @@ impl Cpu {
 
         // Previous instruction is done; load the next one
         if self.current_instruction.end < clock.cycles() {
+            // Check the cache or load it from the ROM
             let (instruction, size) =
-                memory_bus.get_instruction(self.registers.pc);
-            let duration = self.exe(memory_bus).duration(instruction);
+                self.instruction_cache.load(memory_bus, self.registers.pc);
+            let duration = instruction.duration(self.registers.flags());
+
             self.previous_instruction = Some(self.current_instruction);
             self.current_instruction = InstructionInfo {
                 instruction,
@@ -326,132 +358,6 @@ impl CpuExe<'_, '_> {
         }
     }
 
-    /// How many CPU cycles will this instruction take to execute?
-    ///
-    /// Most instructions take a fixed amount of time, but instructions with
-    /// condition codes can be variable. This will compute the condition to
-    /// provide a current execution duration. This means the condition will end
-    /// up being computed at least twice (once during duration calculation, once
-    /// during execution). The calculation will always be the same in both
-    /// locations though, since conditions can only depend on the flag register,
-    /// and that register can only be changed by CPU instructions. No operations
-    /// outside the CPU can affect that register.
-    fn duration(&self, instruction: Instruction) -> Cycles {
-        let cycles = match instruction {
-            Instruction::Adc(operand)
-            | Instruction::Add(Add::A(operand))
-            | Instruction::And(operand)
-            | Instruction::Cp(operand)
-            | Instruction::Or(operand)
-            | Instruction::Sbc(operand)
-            | Instruction::Sub(operand)
-            | Instruction::Xor(operand) => match operand {
-                Operand::V8(Value8::Register(_)) => 1,
-                Operand::V8(Value8::Hl) | Operand::Const(_) => 2,
-            },
-            Instruction::Add(Add::Hl(_)) => 2,
-            Instruction::Add(Add::Sp(_)) => 4,
-            Instruction::Bit(_, value) => match value {
-                Value8::Register(_) => 2,
-                Value8::Hl => 3,
-            },
-            Instruction::Call {
-                condition: Some(cond),
-                ..
-            } if !self.condition(cond) => 3, // Call is NOT made
-            Instruction::Call { .. } => 6, // Call is made
-            Instruction::Ccf => 1,
-            Instruction::Cpl => 1,
-            Instruction::Daa => 1,
-            Instruction::Dec(dec_inc) | Instruction::Inc(dec_inc) => {
-                match dec_inc {
-                    DecInc::V8(Value8::Register(_)) => 1,
-                    DecInc::V8(Value8::Hl) => 3,
-                    DecInc::R16(_) => 2,
-                }
-            }
-            Instruction::Di => 1,
-            Instruction::Ei => 1,
-            Instruction::Halt | Instruction::Stop => todo!(),
-            Instruction::Jp(jump) => match jump {
-                // Jump NOT taken
-                Jump::AddressCc(cond, _) if !self.condition(cond) => 3,
-                // Jump taken
-                Jump::Address(_) | Jump::AddressCc(_, _) => 4,
-                Jump::Hl => 1,
-            },
-            Instruction::Jr {
-                condition: Some(cond),
-                ..
-            } if !self.condition(cond) => 2, // Jump NOT taken
-            Instruction::Jr { .. } => 3, // Jump taken
-            Instruction::Ld(load) => match load {
-                Load::AddressA { .. } | Load::AAddress { .. } => 4,
-                Load::AddressSp { .. } => 5,
-                Load::HlSpOffset { .. } => 3,
-                Load::SpHl => 2,
-                Load::V8Const {
-                    dest: Value8::Register(_),
-                    ..
-                } => 2,
-                Load::V8Const {
-                    dest: Value8::Hl, ..
-                } => 3,
-                Load::V8V8 {
-                    dest: Value8::Register(_),
-                    source: Value8::Register(_),
-                } => 1,
-                Load::V8V8 {
-                    dest: Value8::Hl,
-                    source: Value8::Register(_),
-                }
-                | Load::V8V8 {
-                    dest: Value8::Register(_),
-                    source: Value8::Hl,
-                } => 2,
-                Load::V8V8 {
-                    dest: Value8::Hl,
-                    source: Value8::Hl,
-                } => unreachable!("LD [HL],[HL] should parse as HALT"),
-                Load::R16Const { .. } => 3,
-                Load::R16MemA { .. } | Load::AR16Mem { .. } => 2,
-            },
-            Instruction::Ldh(load) => match load {
-                LoadHigh::AC => 2,
-                LoadHigh::AConst(_) => 3,
-                LoadHigh::CA => 2,
-                LoadHigh::ConstA(_) => 3,
-            },
-            Instruction::Nop => 1,
-            Instruction::Pop(_) => 3,
-            Instruction::Push(_) => 4,
-            Instruction::Res(_, value)
-            | Instruction::Set(_, value)
-            | Instruction::Rl(value)
-            | Instruction::Rlc(value)
-            | Instruction::Rr(value)
-            | Instruction::Rrc(value)
-            | Instruction::Sla(value)
-            | Instruction::Sra(value)
-            | Instruction::Srl(value)
-            | Instruction::Swap(value) => match value {
-                Value8::Register(_) => 2,
-                Value8::Hl => 4,
-            },
-            Instruction::Ret(None) | Instruction::Reti => 4,
-            Instruction::Ret(Some(cond)) if self.condition(cond) => 5,
-            Instruction::Ret(Some(_)) => 2,
-            Instruction::Rla
-            | Instruction::Rlca
-            | Instruction::Rra
-            | Instruction::Rrca => 1,
-            Instruction::Rst(_) => 4,
-            Instruction::Scf => 1,
-            Instruction::Invalid => 0,
-        };
-        Cycles(cycles)
-    }
-
     /// Execute a function call
     fn call(
         &mut self,
@@ -625,13 +531,7 @@ impl CpuExe<'_, '_> {
 
     /// Evaluate a [ConditionCode]
     fn condition(&self, condition: ConditionCode) -> bool {
-        let flags = self.registers.flags();
-        match condition {
-            ConditionCode::Z => flags.zero,
-            ConditionCode::Nz => !flags.zero,
-            ConditionCode::C => flags.carry,
-            ConditionCode::Nc => !flags.carry,
-        }
+        self.registers.flags().condition(condition)
     }
 
     /// Get the value of an 8-bit register
@@ -929,6 +829,18 @@ pub struct BcdFlags {
     carry: bool,
 }
 
+impl BcdFlags {
+    /// Evaluate a [ConditionCode] based on these falgs
+    fn condition(self, condition: ConditionCode) -> bool {
+        match condition {
+            ConditionCode::Z => self.zero,
+            ConditionCode::Nz => !self.zero,
+            ConditionCode::C => self.carry,
+            ConditionCode::Nc => !self.carry,
+        }
+    }
+}
+
 impl Display for BcdFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn b(b: bool) -> &'static str {
@@ -951,6 +863,172 @@ impl_bit_pack! {
     Bit(6).mask() => subtract,
     Bit(5).mask() => half_carry,
     Bit(4).mask() => carry,
+}
+
+impl Instruction {
+    /// How many CPU cycles will this instruction take to execute?
+    ///
+    /// Most instructions take a fixed amount of time, but instructions with
+    /// condition codes can be variable. This will compute the condition to
+    /// provide a current execution duration. This means the condition will end
+    /// up being computed at least twice (once during duration calculation, once
+    /// during execution). The calculation will always be the same in both
+    /// locations though, since conditions can only depend on the flag register,
+    /// and that register can only be changed by CPU instructions. No operations
+    /// outside the CPU can affect that register.
+    fn duration(self, flags: BcdFlags) -> Cycles {
+        let cycles = match self {
+            Self::Adc(operand)
+            | Self::Add(Add::A(operand))
+            | Self::And(operand)
+            | Self::Cp(operand)
+            | Self::Or(operand)
+            | Self::Sbc(operand)
+            | Self::Sub(operand)
+            | Self::Xor(operand) => match operand {
+                Operand::V8(Value8::Register(_)) => 1,
+                Operand::V8(Value8::Hl) | Operand::Const(_) => 2,
+            },
+            Self::Add(Add::Hl(_)) => 2,
+            Self::Add(Add::Sp(_)) => 4,
+            Self::Bit(_, value) => match value {
+                Value8::Register(_) => 2,
+                Value8::Hl => 3,
+            },
+            Self::Call {
+                condition: Some(cond),
+                ..
+            } if !flags.condition(cond) => 3, // Call is NOT made
+            Self::Call { .. } => 6, // Call is made
+            Self::Ccf => 1,
+            Self::Cpl => 1,
+            Self::Daa => 1,
+            Self::Dec(dec_inc) | Self::Inc(dec_inc) => match dec_inc {
+                DecInc::V8(Value8::Register(_)) => 1,
+                DecInc::V8(Value8::Hl) => 3,
+                DecInc::R16(_) => 2,
+            },
+            Self::Di => 1,
+            Self::Ei => 1,
+            Self::Halt | Self::Stop => todo!(),
+            Self::Jp(jump) => match jump {
+                // Jump NOT taken
+                Jump::AddressCc(cond, _) if !flags.condition(cond) => 3,
+                // Jump taken
+                Jump::Address(_) | Jump::AddressCc(_, _) => 4,
+                Jump::Hl => 1,
+            },
+            Self::Jr {
+                condition: Some(cond),
+                ..
+            } if !flags.condition(cond) => 2, // Jump NOT taken
+            Self::Jr { .. } => 3, // Jump taken
+            Self::Ld(load) => match load {
+                Load::AddressA { .. } | Load::AAddress { .. } => 4,
+                Load::AddressSp { .. } => 5,
+                Load::HlSpOffset { .. } => 3,
+                Load::SpHl => 2,
+                Load::V8Const {
+                    dest: Value8::Register(_),
+                    ..
+                } => 2,
+                Load::V8Const {
+                    dest: Value8::Hl, ..
+                } => 3,
+                Load::V8V8 {
+                    dest: Value8::Register(_),
+                    source: Value8::Register(_),
+                } => 1,
+                Load::V8V8 {
+                    dest: Value8::Hl,
+                    source: Value8::Register(_),
+                }
+                | Load::V8V8 {
+                    dest: Value8::Register(_),
+                    source: Value8::Hl,
+                } => 2,
+                Load::V8V8 {
+                    dest: Value8::Hl,
+                    source: Value8::Hl,
+                } => unreachable!("LD [HL],[HL] should parse as HALT"),
+                Load::R16Const { .. } => 3,
+                Load::R16MemA { .. } | Load::AR16Mem { .. } => 2,
+            },
+            Self::Ldh(load) => match load {
+                LoadHigh::AC => 2,
+                LoadHigh::AConst(_) => 3,
+                LoadHigh::CA => 2,
+                LoadHigh::ConstA(_) => 3,
+            },
+            Self::Nop => 1,
+            Self::Pop(_) => 3,
+            Self::Push(_) => 4,
+            Self::Res(_, value)
+            | Self::Set(_, value)
+            | Self::Rl(value)
+            | Self::Rlc(value)
+            | Self::Rr(value)
+            | Self::Rrc(value)
+            | Self::Sla(value)
+            | Self::Sra(value)
+            | Self::Srl(value)
+            | Self::Swap(value) => match value {
+                Value8::Register(_) => 2,
+                Value8::Hl => 4,
+            },
+            Self::Ret(None) | Self::Reti => 4,
+            Self::Ret(Some(cond)) if flags.condition(cond) => 5,
+            Self::Ret(Some(_)) => 2,
+            Self::Rla | Self::Rlca | Self::Rra | Self::Rrca => 1,
+            Self::Rst(_) => 4,
+            Self::Scf => 1,
+            Self::Invalid => 0,
+        };
+        Cycles(cycles)
+    }
+}
+
+/// A cache for CPU instructions
+///
+/// This caches each loaded instruction from memory so they don't have to be
+/// repeatedly parsed. Instruction parsing is fairly expensive. This makes a
+/// pretty big difference in performance.
+#[derive(Debug)]
+struct InstructionCache {
+    cache: HashMap<Address, (Instruction, usize)>,
+    /// `true` while running the bootloader, `false` once it's been unmapped
+    ///
+    /// This is used to track when the bootloader is unmapped so the cache can
+    /// be cleared.
+    is_bootloading: bool,
+}
+
+impl InstructionCache {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            is_bootloading: true,
+        }
+    }
+
+    /// Load a CPU instruction from an address in memory
+    fn load(
+        &mut self,
+        memory_bus: &MemoryBus<'_>,
+        address: Address,
+    ) -> (Instruction, usize) {
+        // When exiting the bootloader, clear the cache because all the
+        // instructions in that range are going to change
+        if memory_bus.is_bootloading() != self.is_bootloading {
+            self.is_bootloading = memory_bus.is_bootloading();
+            self.cache.clear();
+        }
+
+        *self
+            .cache
+            .entry(address)
+            .or_insert_with(|| memory_bus.get_instruction(address))
+    }
 }
 
 /*

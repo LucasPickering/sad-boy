@@ -59,7 +59,7 @@ impl GameBoy {
     fn new(rom: Rom) -> Self {
         Self {
             clock: Clock::new(),
-            cpu: Cpu::default(),
+            cpu: Cpu::new(),
             gpu: Gpu::default(),
             rom,
             memory: Memory::default(),

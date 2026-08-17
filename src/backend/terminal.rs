@@ -88,8 +88,8 @@ pub struct TerminalBackend {
 impl TerminalBackend {
     /// Initialize a new terminal adapter with the given pixel dimensions
     ///
-    /// This will also register listeners to listen for quit signals from the
-    /// OS.
+    /// This will register listeners to listen for quit signals from the
+    /// OS and spawn a background thread to listen for keyboard input.
     pub fn new() -> io::Result<Self> {
         let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
         write!(out, "{}", cursor::Hide)?;
@@ -142,10 +142,10 @@ impl TerminalBackend {
             // Progress the emulator as long as the debugger isn't paused
             if !debugger.as_ref().is_some_and(Debugger::paused) {
                 emulator.tick(self);
-                debugger
-                    .as_ref()
-                    .inspect(|dbg| self.draw_debug(emulator, dbg));
             }
+            debugger
+                .as_ref()
+                .inspect(|dbg| self.draw_debug(emulator, dbg));
         }
     }
 

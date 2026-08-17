@@ -390,7 +390,7 @@ mod tests {
         #[case] expected_value: u8,
         #[case] expected_flags: BcdFlags,
     ) {
-        let mut cpu = Cpu::default();
+        let mut cpu = Cpu::new();
         let mut memory = Memory::default();
         let rom = Rom::empty();
         let mut gpu = Gpu::default();
@@ -428,7 +428,7 @@ mod tests {
         #[case] expected_value: u16,
         #[case] expected_flags: BcdFlags,
     ) {
-        let mut cpu = Cpu::default();
+        let mut cpu = Cpu::new();
         let mut memory = Memory::default();
         let rom = Rom::empty();
         let mut gpu = Gpu::default();

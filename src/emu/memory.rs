@@ -9,7 +9,6 @@ use crate::{
 use std::{
     any,
     cell::RefCell,
-    collections::HashMap,
     fmt::{self, Debug, Display},
     mem,
     ops::Add,
@@ -17,7 +16,7 @@ use std::{
     range::RangeInclusive,
     str::FromStr,
 };
-use tracing::{error, info};
+use tracing::error;
 use winnow::{Parser, error::ContextError};
 
 /// Code executed at boot, before entering the ROM
@@ -115,8 +114,7 @@ bounds!(
 /// component based on given memory addresses. This allows each component of
 /// memory/registers/etc. to be owned by its relevant module and handed out to
 /// the CPU only as needed. This doesn't own any emulator state itself because
-/// this struct is ephemeral. It's thrown away at the end of emulation, which
-/// means its state can't be asserted on in tests.
+/// this struct is ephemeral. It's thrown away at the end of each tick
 ///
 /// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
@@ -127,29 +125,19 @@ pub struct MemoryBus<'a> {
     rom: &'a Rom,
     /// VRAM and graphics-related IO registers
     gpu: &'a mut Gpu,
-    /// An extremely naive cache for instructions parsed from the ROM
-    instruction_cache: HashMap<Address, (Instruction, usize)>,
 }
 
 impl<'a> MemoryBus<'a> {
     /// Construct a memory bus from references to each addressable component
     pub fn new(memory: &'a mut Memory, rom: &'a Rom, gpu: &'a mut Gpu) -> Self {
-        Self {
-            memory,
-            rom,
-            gpu,
-            instruction_cache: HashMap::new(),
-        }
+        Self { memory, rom, gpu }
     }
 
     /// Load the CPU instruction at the given address
     ///
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
-    pub fn get_instruction(
-        &mut self,
-        address: Address,
-    ) -> (Instruction, usize) {
+    pub fn get_instruction(&self, address: Address) -> (Instruction, usize) {
         // Instruction parsing is set up to read from either the bootloader or
         // the ROM. Reading from anywhere else is a bug.
         //
@@ -162,20 +150,17 @@ impl<'a> MemoryBus<'a> {
         );
 
         // Cache instructions because parsing is expensive
-        let is_bootloading = self.is_bootloading();
-        *self.instruction_cache.entry(address).or_insert_with(|| {
-            let source = if is_bootloading {
-                // If the bootloader is enabled, then we should only be running
-                // bootloader code. Out-of-bounds here implies the bootloader
-                // exited without unmapping itself, or something
-                // else re-mapped the bootloader.
-                BOOTLOADER_CODE
-            } else {
-                self.rom.bytes()
-            };
-            rom::parse_instruction(source, address).unwrap_or_else(|error| {
-                panic!("Failed to parse instruction: {error}");
-            })
+        let source = if self.is_bootloading() {
+            // If the bootloader is enabled, then we should only be running
+            // bootloader code. Out-of-bounds here implies the bootloader exited
+            // without unmapping itself, or something else re-mapped the
+            // bootloader.
+            BOOTLOADER_CODE
+        } else {
+            self.rom.bytes()
+        };
+        rom::parse_instruction(source, address).unwrap_or_else(|error| {
+            panic!("Failed to parse instruction: {error}");
         })
     }
 
@@ -281,7 +266,7 @@ impl<'a> MemoryBus<'a> {
             LY => self.gpu.registers_mut().ly = value.into(),
             LYC => self.gpu.registers_mut().lyc = value.into(),
             DMA => self.gpu.registers_mut().dma = value,
-            BANK => self.set_bank(value),
+            BANK => self.memory.bank = value,
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
@@ -310,22 +295,11 @@ impl<'a> MemoryBus<'a> {
         self.set8(address + 1, high);
     }
 
-    /// Set the value of the `BANK` register
-    fn set_bank(&mut self, value: u8) {
-        // If exiting the bootloader, clear the instruction cache because new
-        // executable memory is loaded in that range
-        if self.is_bootloading() && value > 0 {
-            info!("Exiting bootloader");
-            self.instruction_cache = HashMap::new();
-        }
-        self.memory.bank = value;
-    }
-
     /// Is the bootloader currently mapped?
     ///
     /// This is `true` only during initial boot. The bootloader unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
-    fn is_bootloading(&self) -> bool {
+    pub fn is_bootloading(&self) -> bool {
         self.memory.bank == 0
     }
 }
