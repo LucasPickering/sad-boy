@@ -1,7 +1,10 @@
 #[cfg(test)]
 use crate::backend::Backend;
 use crate::emu::{Address, Cycles, GameBoy};
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    fmt::{self, Display},
+};
 use tracing::debug;
 
 /// Debugger enables pausing, stepping, and inspection
@@ -26,6 +29,16 @@ impl Debugger {
         }
     }
 
+    /// Is the debugger currently paused?
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Get a list of currently set breakpoints
+    pub fn breakpoints(&self) -> impl Iterator<Item = Breakpoint> {
+        self.breakpoints.iter().copied()
+    }
+
     /// Set a breakpoint at the given address
     ///
     /// When the CPU reaches this address (i.e. when `pc == address`), the
@@ -33,18 +46,6 @@ impl Debugger {
     pub fn set_breakpoint(&mut self, address: Address) {
         debug!("Setting breakpoint at {address}");
         self.breakpoints.insert(Breakpoint::Address(address));
-    }
-
-    /// Is the debugger currently paused?
-    pub fn paused(&self) -> bool {
-        self.paused
-    }
-
-    /// Unpause and set a breakpoint for the given cycle count
-    fn unpause_until(&mut self, cycle: Cycles) {
-        debug!("Unpausing debugger until cycle {cycle}");
-        self.paused = false;
-        self.breakpoints.insert(Breakpoint::Cycle(cycle));
     }
 
     /// Toggle pause state
@@ -66,6 +67,13 @@ impl Debugger {
     pub fn step_instruction(&mut self, emulator: &GameBoy) {
         tracing::debug!("{:?}", emulator.cpu().current_instruction());
         self.unpause_until(emulator.cpu().current_instruction().end);
+    }
+
+    /// Unpause and set a breakpoint for the given cycle count
+    fn unpause_until(&mut self, cycle: Cycles) {
+        debug!("Unpausing debugger until cycle {cycle}");
+        self.paused = false;
+        self.breakpoints.insert(Breakpoint::Cycle(cycle));
     }
 
     /// Check all registered breakpoints and pause the debugger if any have
@@ -121,7 +129,7 @@ impl Default for Debugger {
 /// of them can trigger a pause. This is used for user-provided breakpoints as
 /// well as internal ones (e.g. when stepping by cycle/instruction).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum Breakpoint {
+pub enum Breakpoint {
     /// Pause when the clock hits a certain cycle count
     Cycle(Cycles),
     /// Pause when the program counter hits a certain address
@@ -134,6 +142,15 @@ impl Breakpoint {
         match self {
             Self::Cycle(_) => true,
             Self::Address(_) => false,
+        }
+    }
+}
+
+impl Display for Breakpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cycle(cycles) => write!(f, "Cycle {cycles}"),
+            Self::Address(address) => write!(f, "{address}"),
         }
     }
 }

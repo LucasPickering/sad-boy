@@ -5,12 +5,15 @@
 use crate::{
     backend::terminal::{TERM_HEIGHT, TERM_WIDTH},
     debugger::Debugger,
-    emu::{Cpu, Cycles, GameBoy, InstructionInfo, instruction::Instruction},
+    emu::{
+        Clock, Cpu, Cycles, GameBoy, InstructionInfo, instruction::Instruction,
+    },
     util::IntDisplay,
 };
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::Buffer,
+    style::{Modifier, Styled},
     symbols::merge::MergeStrategy,
     text::Text,
     widgets::{Block, BorderType, Borders, Widget},
@@ -34,34 +37,47 @@ impl Widget for DebugInfo<'_> {
                 .areas(left_area);
         bottom_left_area.width += 1; // Combine borders into the Memory panel
         // Move down below the screen area
-        let [basic_area, cpu_area] =
+        let [debugger_area, cpu_area] =
             Layout::horizontal([Constraint::Min(0), 36.into()])
                 .spacing(-1)
                 .areas(bottom_left_area);
 
-        let basic_area = panel("Basic", basic_area, buf);
-        let paused = if self.debugger.paused() {
-            "PAUSED"
-        } else {
-            "RUNNING"
-        };
-
-        // Basic
-        Text::from_iter([
-            format!("CLOCK: {}", self.emulator.clock().cycles()),
-            format!("DBG: {paused}"),
-        ])
-        .render(basic_area, buf);
-
-        // CPU
-        self.emulator.cpu().render(cpu_area, buf);
+        DebuggerInfo(self.debugger).render(debugger_area, buf);
+        CpuInfo {
+            clock: self.emulator.clock(),
+            cpu: self.emulator.cpu(),
+        }
+        .render(cpu_area, buf);
 
         // Memory
         panel("Memory", memory_area, buf);
     }
 }
 
-impl Widget for &Cpu {
+/// Widget for debugger info
+struct DebuggerInfo<'a>(&'a Debugger);
+
+impl Widget for DebuggerInfo<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let area = panel("Debugger", area, buf);
+        let mut text = Text::from_iter([
+            if self.0.paused() { "PAUSED" } else { "RUNNING" }.into(),
+            "Breakpoints".set_style(Modifier::UNDERLINED),
+        ]);
+        for breakpoint in self.0.breakpoints() {
+            text.push_line(breakpoint.to_string());
+        }
+        text.render(area, buf);
+    }
+}
+
+/// Widget for CPU info
+struct CpuInfo<'a> {
+    clock: &'a Clock,
+    cpu: &'a Cpu,
+}
+
+impl Widget for CpuInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         /// Register display helper
         struct Reg<T>(T);
@@ -91,15 +107,17 @@ impl Widget for &Cpu {
 
         let area = panel("CPU", area, buf);
 
-        let previous = self.previous_instruction().unwrap_or(InstructionInfo {
-            instruction: Instruction::Invalid,
-            duration: Cycles(0),
-            end: Cycles(0),
-            size: 0,
-        });
-        let next = self.current_instruction();
-        let registers = self.registers();
+        let previous =
+            self.cpu.previous_instruction().unwrap_or(InstructionInfo {
+                instruction: Instruction::Invalid,
+                duration: Cycles(0),
+                end: Cycles(0),
+                size: 0,
+            });
+        let next = self.cpu.current_instruction();
+        let registers = self.cpu.registers();
         let lines = [
+            format!("CLOCK: {}", self.clock.cycles()),
             format!(
                 "PREV: {instr} ({dur}cy/{size}B)",
                 instr = previous.instruction,
@@ -133,7 +151,7 @@ impl Widget for &Cpu {
             format!("hl: {}", Reg(registers.hl())),
             format!(
                 "INT: {}",
-                if self.interrupts_enabled() {
+                if self.cpu.interrupts_enabled() {
                     "ENABLE"
                 } else {
                     "DISABLE"

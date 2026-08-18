@@ -131,13 +131,6 @@ impl Clock {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Cycles(pub u64);
 
-impl Cycles {
-    /// Increment this value by 1
-    pub fn incr(self) -> Cycles {
-        self + Cycles(1)
-    }
-}
-
 impl Display for Cycles {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
