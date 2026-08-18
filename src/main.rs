@@ -1,11 +1,11 @@
 mod backend;
-mod debug;
+mod debugger;
 mod emu;
 mod util;
 
 use crate::{
     backend::{HeadlessBackend, TerminalBackend},
-    debug::Debugger,
+    debugger::Debugger,
     emu::{Address, GameBoy},
     util::{TracingOutput, initialize_tracing},
 };
