@@ -10,10 +10,7 @@ use crate::{
     Debugger,
     backend::{
         Backend, FrameBuffer,
-        terminal::{
-            input::{DebugEvent, InputEvent},
-            tui::DebugInfo,
-        },
+        terminal::{input::InputEvent, tui::DebugInfo},
     },
     emu::GameBoy,
 };
@@ -67,7 +64,7 @@ impl TerminalBackend {
     /// Initialize a new terminal adapter with the given pixel dimensions
     ///
     /// This will register listeners to listen for quit signals from the
-    /// OS and spawn a background thread to listen for keyboard input.
+    /// OS.
     pub fn new() -> io::Result<Self> {
         initialize_panic_handler();
         initialize_terminal()?;
@@ -91,39 +88,28 @@ impl TerminalBackend {
     /// Run the emulator with the surrounding TUI
     ///
     /// If a [Debugger] is provided, run in debug mode and start paused.
-    pub fn run(
-        &mut self,
-        emulator: &mut GameBoy,
-        mut debugger: Option<Debugger>,
-    ) {
+    pub fn run(&mut self, emulator: &mut GameBoy, mut debugger: Debugger) {
         self.draw(emulator.frame());
 
         // Draw initial debug state
-        if let Some(debugger) = &debugger {
-            self.draw_debug(emulator, debugger);
-        }
+        self.draw_debug(emulator, &debugger);
 
         // This loop runs constantly, even if the debugger is paused. Its run
         // rate is throttled by two things:
         // - End-of-frame sleep in the emulator (while unpaused)
         // - Input read timeout (while paused)
         while !self.quit.load(Ordering::Relaxed) {
-            if let Some(debugger) = &mut debugger {
-                if !debugger.paused() {
-                    // After the tick, check breakpoints for pauses. Breakpoints
-                    // only depend on emulator state, so we only need to check
-                    // them after the state has changed.
-                    emulator.tick(self);
-                    debugger.check_breakpoints(emulator);
-                }
-                self.draw_debug(emulator, debugger);
-            } else {
-                // No debugger - just run normally
+            if !debugger.paused() {
+                // After the tick, check breakpoints for pauses. Breakpoints
+                // only depend on emulator state, so we only need to check
+                // them after the state has changed.
                 emulator.tick(self);
+                debugger.check_breakpoints(emulator);
             }
+            self.draw_debug(emulator, &debugger);
 
             // Check the input queue
-            if self.drain_input(emulator, debugger.as_mut()).is_break() {
+            if self.drain_input(emulator, &mut debugger).is_break() {
                 break;
             }
         }
@@ -137,14 +123,13 @@ impl TerminalBackend {
     fn drain_input(
         &mut self,
         emulator: &GameBoy,
-        mut debugger: Option<&mut Debugger>,
+        debugger: &mut Debugger,
     ) -> ControlFlow<()> {
         // While the debugger is paused, we have nothing to do but wait for
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
         // still periodically check the `quit` flag.
-        let input_timeout = if debugger.as_ref().is_some_and(|dbg| dbg.paused())
-        {
+        let input_timeout = if debugger.paused() {
             Duration::from_millis(100)
         } else {
             Duration::ZERO
@@ -156,22 +141,14 @@ impl TerminalBackend {
             match event {
                 // Primary events
                 InputEvent::Quit => return ControlFlow::Break(()), // Exit
-                InputEvent::Button(_) => todo!("TODO track input state"),
 
                 // Debug events
-                InputEvent::Debug(event)
-                    if let Some(debugger) = &mut debugger =>
-                {
-                    match event {
-                        DebugEvent::PauseToggle => debugger.toggle_pause(),
-                        DebugEvent::StepCycle => debugger.step_cycle(emulator),
-                        DebugEvent::StepFrame => debugger.step_frame(emulator),
-                        DebugEvent::StepInstruction => {
-                            debugger.step_instruction(emulator);
-                        }
-                    }
+                InputEvent::DebugPauseToggle => debugger.toggle_pause(),
+                InputEvent::DebugStepCycle => debugger.step_cycle(emulator),
+                InputEvent::DebugStepFrame => debugger.step_frame(emulator),
+                InputEvent::DebugStepInstruction => {
+                    debugger.step_instruction(emulator);
                 }
-                InputEvent::Debug(_) => {}
             }
         }
         ControlFlow::Continue(())

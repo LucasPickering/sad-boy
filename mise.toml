@@ -2,7 +2,7 @@
 description = "Run the emulator with a profiler"
 run = [
   "cargo build --release",
-  "samply record ./target/release/sad-boy ./roms/tetris.gb --debug",
+  "samply record ./target/release/sad-boy ./roms/tetris.gb",
 ]
 tools."cargo:samply" = "0.13"
 
@@ -21,7 +21,7 @@ run = """
 RUST_LOG="$usage_log_level" \
     watchexec --on-busy-update=restart --shell=none --wrap-process=none \
     --watch=Cargo.toml --watch=Cargo.lock --watch=src/ \
-    -- cargo run -- $usage_rom --debug
+    -- cargo run -- $usage_rom
 """
 tools.watchexec = "2.3.3"
 usage = """

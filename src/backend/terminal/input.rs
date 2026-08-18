@@ -10,42 +10,16 @@ use std::time::Duration;
 /// This is a mapped input event to its app-relevant meaning.
 #[derive(Debug)]
 pub enum InputEvent {
-    /// Input mapped to an emulated button on the Game Boy
-    #[expect(unused)]
-    Button(Button),
-    /// Input specific to the debugger
-    ///
-    /// This is a sub-enum so it can be easily ignored when debug is disabled.
-    Debug(DebugEvent),
+    /// Pause or unpause execution in the debugger
+    DebugPauseToggle,
+    /// Advance the debugger one clock cycle
+    DebugStepCycle,
+    /// Advance the debugger to the end of the current frame
+    DebugStepFrame,
+    /// Advance the debugger to the end of the current CPU instruction
+    DebugStepInstruction,
     /// Exit the app
     Quit,
-}
-
-/// An input event specific to the debugger
-#[derive(Debug)]
-pub enum DebugEvent {
-    /// Pause or unpause execution in the debugger
-    PauseToggle,
-    /// Advance the debugger one clock cycle
-    StepCycle,
-    /// Advance the debugger to the end of the current frame
-    StepFrame,
-    /// Advance the debugger to the end of the current CPU instruction
-    StepInstruction,
-}
-
-/// Pressable Buttons on a Game Boy
-#[derive(Debug)]
-#[expect(unused)]
-pub enum Button {
-    A,
-    B,
-    Up,
-    Down,
-    Left,
-    Right,
-    Start,
-    Select,
 }
 
 /// Load the next input event from the terminal
@@ -77,14 +51,14 @@ fn map_event(event: Event) -> Option<InputEvent> {
     let modi = |modifier| modifiers.contains(modifier);
     // TODO use a better dynamic mapping (steal from slumber)
     let event = match code {
-        KeyCode::Char(' ') => InputEvent::Debug(DebugEvent::PauseToggle),
+        KeyCode::Char(' ') => InputEvent::DebugPauseToggle,
         KeyCode::Right if modi(KeyModifiers::CONTROL) => {
-            InputEvent::Debug(DebugEvent::StepCycle)
+            InputEvent::DebugStepCycle
         }
         KeyCode::Right if modi(KeyModifiers::SHIFT) => {
-            InputEvent::Debug(DebugEvent::StepFrame)
+            InputEvent::DebugStepFrame
         }
-        KeyCode::Right => InputEvent::Debug(DebugEvent::StepInstruction),
+        KeyCode::Right => InputEvent::DebugStepInstruction,
         KeyCode::Char('q') => InputEvent::Quit,
         KeyCode::Char('c') if modi(KeyModifiers::CONTROL) => InputEvent::Quit,
         _ => return None,
