@@ -6,7 +6,6 @@
 use crate::{
     backend::{Color, FrameBuffer},
     emu::{
-        SCREEN_WIDTH,
         clock::{Clock, Cycles},
         memory::{self, MemoryBlock, MemoryRead, MemoryWrite},
     },
@@ -15,10 +14,6 @@ use crate::{
 use std::{fmt::Debug, mem};
 use tracing::info_span;
 
-const COLOR_BLACK: Color = Color::new(0, 0, 0);
-const COLOR_DARK_GRAY: Color = Color::new(85, 85, 85);
-const COLOR_LIGHT_GRAY: Color = Color::new(170, 170, 170);
-const COLOR_WHITE: Color = Color::new(255, 255, 255);
 /// Dots in a single scanline
 const SCANLINE_DOTS: Cycles = Cycles(456);
 /// Number of scanlines in each frame
@@ -28,6 +23,7 @@ const SCANLINES_PER_FRAME: u8 = 154;
 /// This is [SCANLINES_PER_FRAME] minus the number of vertical blank lines in
 /// each frame.
 const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
+const SCREEN_WIDTH: u8 = FrameBuffer::WIDTH as u8;
 
 /// Graphics registers and processing
 #[derive(Debug, Default)]
@@ -187,6 +183,20 @@ impl Gpu {
     }
 }
 
+#[cfg(test)]
+impl Gpu {
+    /// Tick until the next frame is done
+    fn draw_frame(&mut self, clock: &mut Clock, frame: &mut FrameBuffer) {
+        loop {
+            // Clock has to tick first
+            clock.tick();
+            if self.tick(clock, frame) {
+                break;
+            }
+        }
+    }
+}
+
 /// Registers in the GPU
 ///
 /// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
@@ -263,7 +273,7 @@ impl_bit_pack! {
 /// Selector for a block of tile map memory
 ///
 /// Used for multiple flags in [LcdControl].
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum TileMapArea {
     /// `0x9800–0x9BFF`
     Low,
@@ -285,7 +295,7 @@ impl_bit_pack! {
 /// - Block 2: `0x9000-0x97FF`
 ///
 /// At any given time two blocks are accessible: 0-1 or 1-2.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum TileDataArea {
     /// `0x8000-0x8FFF` (blocks 0 and 1)
     ///
@@ -305,7 +315,7 @@ impl_bit_pack! {
 }
 
 /// Size of the next object to draw (flag in [LcdControl])
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum ObjectSize {
     /// 8x8
     Small,
@@ -314,7 +324,7 @@ enum ObjectSize {
 }
 
 impl ObjectSize {
-    fn height(&self) -> u8 {
+    fn height(self) -> u8 {
         match self {
             ObjectSize::Small => 8,
             ObjectSize::Large => 16,
@@ -366,6 +376,8 @@ pub struct Vram {
     /// 1-byte control registers related to graphics processing
     registers: Registers,
     /// Object Attribute Memory
+    ///
+    /// This is a list of up to 40 moveable objects.
     ///
     /// https://gbdev.io/pandocs/OAM.html
     oam: MemoryBlock<ObjectAttributes>,
@@ -465,10 +477,10 @@ impl Vram {
     fn get_color(&self, index: ColorIndex) -> Color {
         // TODO look this up in the BGP register
         match index {
-            ColorIndex::Zero => COLOR_BLACK,
-            ColorIndex::One => COLOR_DARK_GRAY,
-            ColorIndex::Two => COLOR_LIGHT_GRAY,
-            ColorIndex::Three => COLOR_WHITE,
+            ColorIndex::Zero => Color::BLACK,
+            ColorIndex::One => Color::DARK_GRAY,
+            ColorIndex::Two => Color::LIGHT_GRAY,
+            ColorIndex::Three => Color::WHITE,
         }
     }
 }
@@ -572,14 +584,6 @@ impl ScanlineState {
             // Stay in this mode until the end of the scanline
             Self::HorizontalBlank => ScanlineState::HorizontalBlank,
         }
-        /*
-          TODO include this assert
-        debug_assert!(
-            (DRAW_MIN_CYCLES..=DRAW_MAX_CYCLES).contains(&mode_3_length),
-            "Mode 3 should be take [{DRAW_MIN_CYCLES:?}, {DRAW_MAX_CYCLES:?}] \
-            dots, but took {mode_3_length:?}"
-        );
-        */
     }
 }
 
@@ -649,6 +653,7 @@ impl From<Scanline> for u8 {
 /// Index of a color within the active palette
 ///
 /// https://gbdev.io/pandocs/Palettes.html
+#[derive(Clone, Copy, Debug)]
 enum ColorIndex {
     Zero,
     One,
@@ -672,6 +677,14 @@ struct Tile {
 const _: () = assert!(mem::size_of::<Tile>() == 16);
 
 impl Tile {
+    /// Create a tile from an 8x8 array of [ColorIndex]es
+    #[cfg(test)]
+    fn from_color_indexes(pixels: [[ColorIndex; 8]; 8]) -> Self {
+        Self {
+            lines: pixels.map(TileLine::from_color_indexes),
+        }
+    }
+
     /// Get a color index for a single pixel in the tile
     ///
     /// `x` and `y` must both be in the range `[0, 7]`. This will panic
@@ -707,6 +720,29 @@ struct TileLine {
     high: u8,
 }
 const _: () = assert!(mem::size_of::<TileLine>() == 2);
+
+impl TileLine {
+    /// Create a tile line from 8 [ColorIndex]es
+    #[cfg(test)]
+    fn from_color_indexes(pixels: [ColorIndex; 8]) -> Self {
+        // There's definitely a fun bit-twiddly way to do this but I'm taking
+        // the easy way for now
+        let mut low = 0;
+        let mut high = 0;
+        for x in 0..8u8 {
+            let bit = Bit(x);
+            let (low_bit, high_bit) = match pixels[x as usize] {
+                ColorIndex::Zero => (false, false),
+                ColorIndex::One => (false, true),
+                ColorIndex::Two => (true, false),
+                ColorIndex::Three => (true, true),
+            };
+            low = bit.set(low, low_bit);
+            high = bit.set(high, high_bit);
+        }
+        Self { low, high }
+    }
+}
 
 /// Index of a single tile in a tile map
 ///
@@ -817,6 +853,7 @@ const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
 /// semantic data.
 ///
 /// https://gbdev.io/pandocs/OAM.html#byte-3--attributesflags
+#[derive(Default)]
 struct ObjectFlags {
     /// TODO
     priority: bool,
@@ -843,7 +880,9 @@ impl_bit_pack! {
 }
 
 /// Color palette selection in OAM flags for DMG (original Game Boy) mode
+#[derive(Default)]
 enum DmgPalette {
+    #[default]
     Obp0,
     Obp1,
 }
@@ -855,7 +894,9 @@ impl_bit_pack! {
 }
 
 /// VRAM bank selection in OAM flags
+#[derive(Default)]
 enum VramBank {
+    #[default]
     Bank0,
     Bank1,
 }
@@ -867,7 +908,9 @@ impl_bit_pack! {
 }
 
 /// Color palette selection in OAM flags for CGB (Game Boy Color) mode
+#[derive(Default)]
 enum CgbPalette {
+    #[default]
     Obp0,
     Obp1,
     Obp2,
@@ -888,4 +931,39 @@ impl_bit_pack! {
     0b101 => Obp5,
     0b110 => Obp6,
     0b111 => Obp7,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::BitPack;
+
+    /// Test drawing a simple object to the screen
+    #[test]
+    fn objects() {
+        let mut clock = Clock::new();
+        let mut gpu = Gpu::default();
+        let mut frame = FrameBuffer::new();
+
+        // Create a tile of all light gray
+        let vram = &mut gpu.vram;
+        vram.tile_data.as_values_mut()[128] =
+            Tile::from_color_indexes([[ColorIndex::Two; 8]; 8]);
+
+        // Put an object in the top-left with that tile
+        vram.oam.as_values_mut()[0] = ObjectAttributes {
+            y: 16,
+            x: 8,
+            tile_index: TileIndex(0),
+            flags: ObjectFlags::default().pack(),
+        };
+
+        // Render one frame
+        gpu.draw_frame(&mut clock, &mut frame);
+
+        let mut expected =
+            FrameBuffer::from_pixels(vec![Color::BLACK; FrameBuffer::LENGTH]);
+        expected.set_region(0, 0, 8, 8, Color::LIGHT_GRAY);
+        frame.assert_pixels(&expected);
+    }
 }

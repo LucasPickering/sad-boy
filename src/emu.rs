@@ -24,11 +24,6 @@ use crate::{
 use color_eyre::eyre;
 use std::path::Path;
 
-/// Width of the screen in pixels
-const SCREEN_WIDTH: u8 = 160;
-/// Height of the screen in pixels
-const SCREEN_HEIGHT: u8 = 144;
-
 /// Game Boy emulator
 #[derive(Debug)]
 pub struct GameBoy {
@@ -65,7 +60,7 @@ impl GameBoy {
             gpu: Gpu::default(),
             rom,
             memory: Memory::default(),
-            frame: FrameBuffer::new(SCREEN_WIDTH.into(), SCREEN_HEIGHT.into()),
+            frame: FrameBuffer::new(),
         }
     }
 
@@ -158,14 +153,10 @@ mod tests {
         assert_eq!(emulator.clock.cycles(), Cycles(23_580_484));
 
         // TODO look for logo
-        let expected = FrameBuffer::test(
-            SCREEN_WIDTH.into(),
-            SCREEN_HEIGHT.into(),
-            vec![
-                Color::new(255, 255, 255);
-                SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize
-            ],
-        );
+        let expected = FrameBuffer::from_pixels(vec![
+            Color::new(255, 255, 255);
+            FrameBuffer::LENGTH
+        ]);
         backend.assert_pixels(&expected);
     }
 }

@@ -462,6 +462,12 @@ impl<T> MemoryBlock<T> {
         &self.memory
     }
 
+    /// Get a mutable reference to the inner slice of `T` values
+    #[cfg(test)]
+    pub fn as_values_mut(&mut self) -> &mut [T] {
+        &mut self.memory
+    }
+
     /// Translate a global memory address into an offset for a single byte in
     /// `self.memory`
     ///
