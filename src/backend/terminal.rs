@@ -7,6 +7,11 @@ use crate::{
     util::IntDisplay,
 };
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen},
+};
 use nix::{
     fcntl::OFlag,
     libc,
@@ -18,7 +23,7 @@ use nix::{
 use ratatui::{
     Terminal,
     layout::{Constraint, Layout, Rect},
-    prelude::{Buffer, TermionBackend},
+    prelude::{Buffer, CrosstermBackend},
     symbols::merge::MergeStrategy,
     text::Text,
     widgets::{Block, BorderType, Borders, Widget},
@@ -31,22 +36,14 @@ use std::{
     mem,
     num::NonZero,
     ops::ControlFlow,
+    panic,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc,
     },
-    thread,
     time::{Duration, Instant},
 };
-use termion::{
-    cursor,
-    event::Key,
-    input::TermRead,
-    raw::{IntoRawMode, RawTerminal},
-    screen::{AlternateScreen, IntoAlternateScreen},
-};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// Width of the screen in terminal columns
 const TERM_WIDTH: u16 = 60;
@@ -69,13 +66,8 @@ const QUIT_SIGNALS: [i32; 4] = [
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to stdout. It reads input from stdin.
 pub struct TerminalBackend {
-    /// Queue of events to be handled
-    ///
-    /// A background thread listens for input events and pushes them into this
-    /// queue. The main loop pops off the queue via [Self::next_event].
-    input_rx: mpsc::Receiver<InputEvent>,
     /// Channel to write output to (stdout)
-    terminal: Terminal<TermionBackend<AlternateScreen<RawTerminal<Stdout>>>>,
+    terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Flag set by the signal handler when a termination signal is received
     quit: Arc<AtomicBool>,
     /// Last time debug info was drawn to the screen
@@ -91,10 +83,10 @@ impl TerminalBackend {
     /// This will register listeners to listen for quit signals from the
     /// OS and spawn a background thread to listen for keyboard input.
     pub fn new() -> io::Result<Self> {
-        let mut out = io::stdout().into_raw_mode()?.into_alternate_screen()?;
-        write!(out, "{}", cursor::Hide)?;
-        out.flush()?;
-        let terminal = Terminal::new(TermionBackend::new(out))?;
+        initialize_panic_handler();
+        initialize_terminal()?;
+
+        let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
         // Start a signal listener for SIGINT and friends.
         // We need to catch signals to allow the screen to clean up before exit.
@@ -103,15 +95,7 @@ impl TerminalBackend {
             signal_hook::flag::register(signal, quit.clone()).unwrap();
         }
 
-        // Listen for input in a background thread. Termion only exposes a fully
-        // blocking interator for input handling, so we can't access it in the
-        // main thread. The background thread will put any relevant events in
-        // the queue.
-        let (input_tx, input_rx) = mpsc::channel();
-        thread::spawn(move || Self::handle_input(input_tx));
-
         Ok(Self {
-            input_rx,
             terminal,
             quit,
             last_debug_draw: None,
@@ -207,13 +191,18 @@ impl TerminalBackend {
         ControlFlow::Continue(())
     }
 
-    /// Load the next input event from the event queue
+    /// Load the next input event from the terminal
+    ///
+    /// Return `None` if there was an error or no event occurred within the
+    /// given timeout.
     fn next_event(&mut self, timeout: Duration) -> Option<InputEvent> {
-        // Grab the next event off the queue
-        match self.input_rx.recv_timeout(timeout) {
-            Ok(event) => Some(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
-            Err(mpsc::RecvTimeoutError::Disconnected) => todo!(),
+        // It's possible that polling the terminal directly in the main loop
+        // will be too slow. In that case, we can punt this to another thread.
+        if event::poll(timeout).unwrap() {
+            let event = event::read().unwrap();
+            Self::map_event(event)
+        } else {
+            None
         }
     }
 
@@ -245,36 +234,41 @@ impl TerminalBackend {
         }
     }
 
-    /// Monitor stdin for input
-    ///
-    /// When a relevant event is received, it's pushed into the given channel.
-    /// This will only terminate on an error or end of stream, so it should run
-    /// in a background thread.
-    fn handle_input(input_tx: mpsc::Sender<InputEvent>) {
-        for result in io::stdin().keys() {
-            match result.map(Self::map_key) {
-                Ok(Some(event)) => {
-                    // If the channel is closed, we can just exit
-                    if input_tx.send(event).is_err() {
-                        break;
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => error!("Error reading input: {error}"),
+    /// Map a crossterm event to an [InputEvent]
+    fn map_event(event: Event) -> Option<InputEvent> {
+        let Event::Key(KeyEvent {
+            kind: KeyEventKind::Press,
+            code,
+            modifiers,
+            ..
+        }) = event
+        else {
+            return None;
+        };
+        let modi = |modifier| modifiers.contains(modifier);
+        // TODO use a better dynamic mapping (steal from slumber)
+        let event = match code {
+            KeyCode::Char(' ') => InputEvent::Debug(DebugEvent::PauseToggle),
+            KeyCode::Right if modi(KeyModifiers::CONTROL) => {
+                InputEvent::Debug(DebugEvent::StepCycle)
             }
-        }
+            KeyCode::Right if modi(KeyModifiers::SHIFT) => {
+                InputEvent::Debug(DebugEvent::StepFrame)
+            }
+            KeyCode::Right => InputEvent::Debug(DebugEvent::StepInstruction),
+            KeyCode::Char('q') => InputEvent::Quit,
+            KeyCode::Char('c') if modi(KeyModifiers::CONTROL) => {
+                InputEvent::Quit
+            }
+            _ => return None,
+        };
+        Some(event)
     }
+}
 
-    /// Map a key event to an [InputEvent]
-    fn map_key(key: Key) -> Option<InputEvent> {
-        match key {
-            Key::Char(' ') => Some(InputEvent::Debug(DebugEvent::PauseToggle)),
-            Key::Right => Some(InputEvent::Debug(DebugEvent::StepInstruction)),
-            Key::CtrlRight => Some(InputEvent::Debug(DebugEvent::StepCycle)),
-            Key::ShiftRight => Some(InputEvent::Debug(DebugEvent::StepFrame)),
-            Key::Char('q') | Key::Ctrl('c') => Some(InputEvent::Quit),
-            _ => None,
-        }
+impl Drop for TerminalBackend {
+    fn drop(&mut self) {
+        let _ = restore_terminal();
     }
 }
 
@@ -284,7 +278,7 @@ impl Backend for TerminalBackend {
         // directly to the output
         let mut f = || {
             // Shitty try block
-            write!(self.terminal.backend_mut(), "{}", cursor::Goto(1, 1))?;
+            write!(self.terminal.backend_mut(), "{}", cursor::MoveTo(0, 0))?;
             draw_frame(frame, false, self.terminal.backend_mut())
         };
         if let Err(error) = f() {
@@ -334,12 +328,6 @@ impl Widget for DebugInfo<'_> {
 
         // Memory
         panel("Memory", memory_area, buf);
-    }
-}
-
-impl Drop for TerminalBackend {
-    fn drop(&mut self) {
-        let _ = write!(self.terminal.backend_mut(), "{}", cursor::Show);
     }
 }
 
@@ -424,6 +412,31 @@ impl Widget for &Cpu {
         ];
         Text::from_iter(lines).render(area, buf);
     }
+}
+
+/// Set up terminal for the TUI
+fn initialize_terminal() -> io::Result<()> {
+    info!("Initializing terminal");
+    crossterm::terminal::enable_raw_mode()?;
+    crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
+    Ok(())
+}
+
+/// Return terminal to initial state
+fn restore_terminal() -> io::Result<()> {
+    info!("Restoring terminal");
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+/// Restore terminal state during a panic
+fn initialize_panic_handler() {
+    let original_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        let _ = restore_terminal();
+        original_hook(panic_info);
+    }));
 }
 
 /// Draw an outline for a panel, returning the inner area

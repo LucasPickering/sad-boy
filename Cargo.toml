@@ -15,11 +15,11 @@ rust-version = "1.95.0"
 base64 = "0.22.1"
 clap = {version = "=4.6.2", default-features = false, features = ["cargo", "derive", "help", "std", "suggestions", "usage"]}
 color-eyre = {version = "0.6.5", default-features = false}
+crossterm = {version = "0.29.0", default-features = false}
 nix = {version = "0.31.3", default-features = false, features = ["fs", "mman"]}
 paste = "1.0.15"
-ratatui = {version = "0.30.2", default-features = false, features = ["termion"]}
+ratatui = {version = "0.30.2", default-features = false, features = ["crossterm"]}
 signal-hook = {version = "0.4.4", default-features = false}
-termion = {version = "4.0.6", default-features = false}
 tracing = {version = "0.1.44", default-features = false}
 tracing-subscriber = {version = "0.3.23", default-features = false, features = ["ansi", "fmt", "registry"]}
 winnow = {version = "1.0.3", default-features = false, features = ["ascii", "binary", "parser", "std"]}
