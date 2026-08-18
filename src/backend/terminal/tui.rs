@@ -1,9 +1,11 @@
-//! Terminal UI surrounding the debugger
+//! Terminal UI surrounding the emulator
 //!
 //! This is the Ratatui implementation of the interactive TUI.
 
 use crate::{
-    backend::terminal::{TERM_HEIGHT, TERM_WIDTH},
+    backend::terminal::{
+        RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH, input::TuiEvent,
+    },
     debugger::Debugger,
     emu::{
         Clock, Cpu, Cycles, GameBoy, InstructionInfo, instruction::Instruction,
@@ -20,14 +22,58 @@ use ratatui::{
 };
 use std::fmt::{self, Display};
 
-/// Widget to draw debug info to the terminal
-pub struct DebugInfo<'a> {
-    pub emulator: &'a GameBoy,
-    pub debugger: &'a Debugger,
+/// Terminal UI surrounding the emulator
+///
+/// This handles everything drawn to the terminal *except for* the emulator
+/// screen. It also handles input events.
+#[derive(Default)]
+pub struct Tui {}
+
+impl Tui {
+    /// Draw the TUI to the terminal
+    pub fn draw(
+        &self,
+        terminal: &mut RatatuiTerminal,
+        emulator: &GameBoy,
+        debugger: &Debugger,
+    ) {
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    TuiWidget { emulator, debugger },
+                    frame.area(),
+                );
+            })
+            .unwrap();
+    }
+
+    /// Update UI state according to an input event
+    pub fn update(
+        &mut self,
+        emulator: &GameBoy,
+        debugger: &mut Debugger,
+        event: TuiEvent,
+    ) {
+        match event {
+            TuiEvent::DebugPauseToggle => debugger.toggle_pause(),
+            TuiEvent::DebugStepCycle => debugger.step_cycle(emulator),
+            TuiEvent::DebugStepFrame => debugger.step_frame(emulator),
+            TuiEvent::DebugStepInstruction => {
+                debugger.step_instruction(emulator);
+            }
+        }
+    }
 }
 
-impl Widget for DebugInfo<'_> {
+/// Widget for all interactive elements
+struct TuiWidget<'a> {
+    emulator: &'a GameBoy,
+    debugger: &'a Debugger,
+}
+
+impl Widget for TuiWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // Show breakpoints always so we can set them while running
         let [left_area, memory_area] =
             Layout::horizontal([TERM_WIDTH.into(), Constraint::Min(0)])
                 .areas(area);
@@ -43,14 +89,20 @@ impl Widget for DebugInfo<'_> {
                 .areas(bottom_left_area);
 
         DebuggerInfo(self.debugger).render(debugger_area, buf);
-        CpuInfo {
-            clock: self.emulator.clock(),
-            cpu: self.emulator.cpu(),
-        }
-        .render(cpu_area, buf);
 
-        // Memory
-        panel("Memory", memory_area, buf);
+        // Only show emulator state info if the debugger is paused. The state
+        // changes too quickly while running to be useful.
+        if self.debugger.paused() {
+            CpuInfo {
+                clock: self.emulator.clock(),
+                cpu: self.emulator.cpu(),
+            }
+            .render(cpu_area, buf);
+
+            // Memory
+            panel("Memory", memory_area, buf);
+            // TODO draw memory
+        }
     }
 }
 

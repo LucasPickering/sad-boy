@@ -10,6 +10,21 @@ use std::time::Duration;
 /// This is a mapped input event to its app-relevant meaning.
 #[derive(Debug)]
 pub enum InputEvent {
+    /// Exit the app
+    Quit,
+    /// An event that should be routed to the TUI
+    Tui(TuiEvent),
+}
+
+impl From<TuiEvent> for InputEvent {
+    fn from(v: TuiEvent) -> Self {
+        Self::Tui(v)
+    }
+}
+
+/// An input event intended for the TUI
+#[derive(Debug)]
+pub enum TuiEvent {
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,
     /// Advance the debugger one clock cycle
@@ -18,8 +33,6 @@ pub enum InputEvent {
     DebugStepFrame,
     /// Advance the debugger to the end of the current CPU instruction
     DebugStepInstruction,
-    /// Exit the app
-    Quit,
 }
 
 /// Load the next input event from the terminal
@@ -51,14 +64,14 @@ fn map_event(event: Event) -> Option<InputEvent> {
     let modi = |modifier| modifiers.contains(modifier);
     // TODO use a better dynamic mapping (steal from slumber)
     let event = match code {
-        KeyCode::Char(' ') => InputEvent::DebugPauseToggle,
+        KeyCode::Char(' ') => TuiEvent::DebugPauseToggle.into(),
         KeyCode::Right if modi(KeyModifiers::CONTROL) => {
-            InputEvent::DebugStepCycle
+            TuiEvent::DebugStepCycle.into()
         }
         KeyCode::Right if modi(KeyModifiers::SHIFT) => {
-            InputEvent::DebugStepFrame
+            TuiEvent::DebugStepFrame.into()
         }
-        KeyCode::Right => InputEvent::DebugStepInstruction,
+        KeyCode::Right => TuiEvent::DebugStepInstruction.into(),
         KeyCode::Char('q') => InputEvent::Quit,
         KeyCode::Char('c') if modi(KeyModifiers::CONTROL) => InputEvent::Quit,
         _ => return None,

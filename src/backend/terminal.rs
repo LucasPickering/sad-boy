@@ -10,7 +10,7 @@ use crate::{
     Debugger,
     backend::{
         Backend, FrameBuffer,
-        terminal::{input::InputEvent, tui::DebugInfo},
+        terminal::{input::InputEvent, tui::Tui},
     },
     emu::GameBoy,
 };
@@ -28,7 +28,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tracing::{debug, error, info};
 
@@ -44,20 +44,19 @@ const QUIT_SIGNALS: [i32; 4] = [
     signal::SIGTERM,
 ];
 
+type RatatuiTerminal = Terminal<CrosstermBackend<Stdout>>;
+
 /// A [Backend] implementation to draw to the terminal
 ///
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to stdout. It reads input from stdin.
 pub struct TerminalBackend {
     /// Channel to write output to (stdout)
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: RatatuiTerminal,
+    /// Interactive portions around the emulator screen
+    tui: Tui,
     /// Flag set by the signal handler when a termination signal is received
     quit: Arc<AtomicBool>,
-    /// Last time debug info was drawn to the screen
-    ///
-    /// `None` iff debug info has never been drawn. Used to throttle debug draw
-    /// rate while running the emulator.
-    last_debug_draw: Option<Instant>,
 }
 
 impl TerminalBackend {
@@ -80,8 +79,8 @@ impl TerminalBackend {
 
         Ok(Self {
             terminal,
+            tui: Tui::default(),
             quit,
-            last_debug_draw: None,
         })
     }
 
@@ -91,8 +90,8 @@ impl TerminalBackend {
     pub fn run(&mut self, emulator: &mut GameBoy, mut debugger: Debugger) {
         self.draw(emulator.frame());
 
-        // Draw initial debug state
-        self.draw_debug(emulator, &debugger);
+        // Draw initial TUI
+        self.tui.draw(&mut self.terminal, emulator, &debugger);
 
         // This loop runs constantly, even if the debugger is paused. Its run
         // rate is throttled by two things:
@@ -106,25 +105,34 @@ impl TerminalBackend {
                 emulator.tick(self);
                 debugger.check_breakpoints(emulator);
             }
-            self.draw_debug(emulator, &debugger);
 
-            // Check the input queue
-            if self.drain_input(emulator, &mut debugger).is_break() {
-                break;
+            // Check for input
+            let handled_event = match self.drain_input(emulator, &mut debugger)
+            {
+                ControlFlow::Break(()) => break,
+                ControlFlow::Continue(handled) => handled,
+            };
+            // Only redraw the TUI if there was at least one input event.
+            // Without input, the screen can't change. Drawing on every tick is
+            // extraordinarily expensive.
+            if handled_event || debugger.paused() {
+                self.tui.draw(&mut self.terminal, emulator, &debugger);
             }
         }
     }
 
     /// Drain all events from the input queue
     ///
-    /// Return [ControlFlow::Break] if the loop should exit. A [Debugger] is
-    /// provided only if running in debug mode. If not given, all debug events
-    /// will be ignored.
+    /// ## Return
+    ///
+    /// - `ControlFlow::Continue(true)` if at least one event was handled
+    /// - `ControlFlow::Continue(false)` if the queue was empty
+    /// - `ControlFlow::Break` if the loop should exit (quit event)
     fn drain_input(
         &mut self,
         emulator: &GameBoy,
         debugger: &mut Debugger,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<(), bool> {
         // While the debugger is paused, we have nothing to do but wait for
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
@@ -136,51 +144,19 @@ impl TerminalBackend {
         };
 
         // Drain the input queue
+        let mut handled = false;
         while let Some(event) = input::next_event(input_timeout) {
+            handled = true;
             debug!(?event, "Input event");
             match event {
                 // Primary events
-                InputEvent::Quit => return ControlFlow::Break(()), // Exit
-
-                // Debug events
-                InputEvent::DebugPauseToggle => debugger.toggle_pause(),
-                InputEvent::DebugStepCycle => debugger.step_cycle(emulator),
-                InputEvent::DebugStepFrame => debugger.step_frame(emulator),
-                InputEvent::DebugStepInstruction => {
-                    debugger.step_instruction(emulator);
+                InputEvent::Quit => return ControlFlow::Break(()),
+                InputEvent::Tui(event) => {
+                    self.tui.update(emulator, debugger, event);
                 }
             }
         }
-        ControlFlow::Continue(())
-    }
-
-    /// Draw debug info to the screen
-    ///
-    /// This call is automatically throttled to a maximum framerate. While the
-    /// emulator is running, there isn't value in drawing on every single tick
-    /// and it causes a huge slowdown.
-    fn draw_debug(&mut self, emulator: &GameBoy, debugger: &Debugger) {
-        const MIN_DRAW_GAP: Duration = Duration::from_millis(100);
-
-        let now = Instant::now();
-        let should_draw = debugger.paused()
-            || self
-                .last_debug_draw
-                .is_none_or(|instant| now - instant >= MIN_DRAW_GAP);
-        if should_draw {
-            // Debug UI is drawn via ratatui
-            let result = self.terminal.draw(|frame| {
-                frame.render_widget(
-                    DebugInfo { emulator, debugger },
-                    frame.area(),
-                );
-            });
-
-            if let Err(error) = result {
-                error!("Error drawing to terminal: {error}");
-            }
-            self.last_debug_draw = Some(now);
-        }
+        ControlFlow::Continue(handled)
     }
 }
 
