@@ -28,9 +28,7 @@ impl Bit {
     /// ```
     #[must_use]
     pub fn set(self, bits: u8, flag: bool) -> u8 {
-        // TODO there must be a branch less way to do this
-        let mask = self.mask();
-        if flag { bits | mask } else { bits & !mask }
+        bits & !self.mask() | u8::from(flag) << self.0
     }
 
     /// Get a [Mask] for this single bit

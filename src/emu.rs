@@ -143,14 +143,13 @@ mod tests {
         let mut backend = HeadlessBackend::new();
         let mut emulator = GameBoy::test(rom_data);
         // Run until the program counter hits the end of the bootloader
-        while memory::BOOTLOADER.contains(emulator.cpu.registers().pc()) {
+        while emulator.cpu.registers().pc() <= memory::BOOTLOADER.last() {
             emulator.tick(&mut backend);
         }
 
-        // TODO
-        // assert_eq!(emu.cpu, cpu::BOOTLOADER_EXPECTED);
         assert_eq!(emulator.memory.bank(), 1);
         assert_eq!(emulator.clock.cycles(), Cycles(23_580_484));
+        // TODO check CPU state
 
         // TODO look for logo
         let expected = FrameBuffer::from_pixels(vec![

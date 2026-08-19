@@ -1034,44 +1034,6 @@ impl InstructionCache {
     }
 }
 
-/*
-TODO
-/// Expected CPU state when exiting the bootloader
-///
-/// This is defined here so it can access private types/fields, but exported so
-/// it can be used in the emulator-level test. I think this is better than
-/// exposing a bunch of internals.
-#[cfg(test)]
-pub static BOOTLOADER_EXPECTED: Cpu = Cpu {
-    registers: Registers {
-        a: 1,
-        f: PackedBits::new(0b0000_0000),
-        b: 0,
-        c: 19,
-        // The final bootloader routine is to compare the Nintendo logo in the
-        // bootloader to the one in the cartridge. DE points to the logo in the
-        // the bootloader, HL in the cart.
-        //
-        // Starts at $00A8, +$30 for the logo comparison
-        d: 0x00,
-        e: 0xD8,
-        // Starts at $0104, +$30 for the logo comparison, +$19 for the checksum
-        h: 0x01,
-        l: 0x4D,
-        sp: Address(0xFFFE), // Stack is empty
-        pc: Address(0x0100), // First instruction of the ROM
-    },
-    // https://gbdev.io/pandocs/Interrupts.html#ime-interrupt-master-enable-flag-write-only
-    interrupts_enabled: false,
-    previous_instruction: Some(InstructionDebugInfo {
-        instruction: Instruction::Ldh(LoadHigh::ConstA(0x50)),
-        duration: Cycles(3),
-        end: Cycles(0), // TODO
-        size: 2,
-    }),
-};
-*/
-
 #[cfg(test)]
 mod tests {
     use super::*;

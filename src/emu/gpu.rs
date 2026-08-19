@@ -251,7 +251,7 @@ pub struct LcdControl {
     bg_tile_map: TileMapArea,
     /// Size of the next object to draw
     object_size: ObjectSize,
-    /// TODO
+    /// Enable/disable object display
     object_enable: bool,
     /// Disable the background AND window
     ///
@@ -345,15 +345,17 @@ impl_bit_pack! {
 /// Bit-packed values in the `STAT` register
 ///
 /// https://gbdev.io/pandocs/STAT.html
+///
+/// https://gbdev.io/pandocs/Interrupt_Sources.html#int-48--stat-interrupt
 #[derive(Debug)]
 pub struct LcdStatus {
-    /// TODO
+    /// Enable the `LY == LYC` condition for the `STAT` interrupt
     lyc_interrupt: bool,
-    /// TODO
+    /// Enable the Mode 2 condition for the `STAT` interrupt
     mode_2_interrupt: bool,
-    /// TODO
+    /// Enable the Mode 1 condition for the `STAT` interrupt
     mode_1_interrupt: bool,
-    /// TODO
+    /// Enable the Mode 0 condition for the `STAT` interrupt
     mode_0_interrupt: bool,
     /// Is the `LY` register currently equal to the `LYC` register?
     ///
@@ -461,15 +463,18 @@ impl Vram {
 
     /// Calculate the color index for a specific pixel
     fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
+        let lcdc = self.registers.lcdc.unpack();
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
-        // First, check for objects. These are pre-sorted by x
-        let object_size = self.registers.lcdc.unpack().object_size;
-        if let Some((tile_index, x, y)) = objects
-            .iter()
-            .find_map(|object| object.get_pixel(x, y, object_size))
-        {
-            let tile = self.get_tile(tile_index);
-            return tile.color_index(x, y);
+        // First, check for objects
+        if lcdc.object_enable {
+            // These are pre-sorted by x
+            if let Some((tile_index, x, y)) = objects
+                .iter()
+                .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
+            {
+                let tile = self.get_tile(tile_index);
+                return tile.color_index(x, y);
+            }
         }
 
         // TODO check window
@@ -528,9 +533,13 @@ impl ScanlineState {
         }
     }
 
-    /// TODO
+    /// Advance scanline drawing one cycle
     ///
-    /// TODO `dots` is number of dots into *this scanline*
+    /// ## Params
+    ///
+    /// - `scanline`: y value of the scanline being drawn
+    /// - `dots`: number of elapsed dots in this scanline so far (first call is
+    ///   0)
     fn tick(
         self,
         scanline: Scanline,
@@ -539,10 +548,15 @@ impl ScanlineState {
         frame: &mut FrameBuffer,
     ) -> Self {
         const SCREEN_WIDTH: u8 = FrameBuffer::WIDTH as u8;
+        /// Length of mode 2 (OAM scan)
+        const OAM_DURATION: Cycles = Cycles(80);
+        /// Delay in mode 3 (draw) before drawing starts
+        const DRAW_DELAY: Cycles = Cycles(12);
+
         let next_dot = dots + 1;
 
-        // TODO note about mode numbers not being sequential
-        // TODO consts for state durations
+        // Mode numbers are not sequential by the order they occur. They're
+        // numbered based on how they're represented in the STAT register
         match self {
             // Mode 2 - OAM scan
             Self::Start => {
@@ -560,7 +574,7 @@ impl ScanlineState {
                 Self::OamScan { objects }
             }
             // Stay in mode 2
-            state @ Self::OamScan { .. } if next_dot < Cycles(80) => state,
+            state @ Self::OamScan { .. } if next_dot < OAM_DURATION => state,
             // End of OAM scan - transition to mode 3
             Self::OamScan { objects } => Self::Drawing { objects, x: 0 },
             // Mode 3 - draw pixels
@@ -570,10 +584,10 @@ impl ScanlineState {
                 objects,
                 x: x @ 0..SCREEN_WIDTH,
             } => {
-                let elapsed = dots - Cycles(80);
+                let elapsed = dots - OAM_DURATION;
 
                 // There's an initial 12-cycle delay per line
-                if elapsed < Cycles(12) {
+                if elapsed < DRAW_DELAY {
                     Self::Drawing { objects, x }
                 } else {
                     // Calculate the color for a single pixel
@@ -642,9 +656,9 @@ impl Scanline {
     fn from_clock(clock: &Clock) -> (Self, Cycles) {
         let frame_dots = clock.cycles().0 % Clock::CYCLES_PER_FRAME.0;
         let scanline = frame_dots / SCANLINE_DOTS.0;
-        debug_assert!(scanline <= SCANLINES_PER_FRAME.into(), "TODO");
+        debug_assert!(scanline <= SCANLINES_PER_FRAME.into());
         let dots = Cycles(frame_dots % SCANLINE_DOTS.0);
-        debug_assert!(dots < SCANLINE_DOTS, "TODO");
+        debug_assert!(dots < SCANLINE_DOTS);
 
         // Cast is safe because of the assertions
         (Self(scanline as u8), dots)
@@ -933,17 +947,17 @@ impl<const N: u8> Sub for Shifted<N> {
 /// https://gbdev.io/pandocs/OAM.html#byte-3--attributesflags
 #[derive(Default)]
 struct ObjectFlags {
-    /// TODO
-    priority: bool,
+    /// Control object transparency
+    priority: ObjectPriority,
     /// Flip the object vertically?
     y_flip: bool,
-    /// Flip the object horizontall??
+    /// Flip the object horizontally?
     x_flip: bool,
-    /// TODO
+    /// Color palette selection for DMG (original Game Boy) mode
     dmg_palette: DmgPalette,
-    /// TODO
+    /// Which swappable VRAM bank is loaded?
     bank: VramBank,
-    /// TODO
+    /// Color palette selection for CGB (Game Boy Color) mode
     cgb_palette: CgbPalette,
 }
 
@@ -955,6 +969,26 @@ impl_bit_pack! {
     Bit(5).mask() => x_flip,
     Bit(6).mask() => y_flip,
     Bit(7).mask() => priority,
+}
+
+/// Control object transparency
+///
+/// This controls how color index 0 is handled in objects. It can be used to
+/// make objects transparent, such that they render behind the window and
+/// background.
+#[derive(Default)]
+enum ObjectPriority {
+    /// Color index 0 is drawn as color 0
+    #[default]
+    Object,
+    /// Color index 0 is transparent (background/window draw on top)
+    Background,
+}
+
+impl_bit_pack! {
+    enum ObjectPriority;
+    0b0 => Object,
+    0b1 => Background,
 }
 
 /// Color palette selection in OAM flags for DMG (original Game Boy) mode
@@ -1025,6 +1059,10 @@ mod tests {
 
         // Create a tile of all light gray
         let vram = &mut gpu.vram;
+        vram.registers.lcdc.update(|lcdc| LcdControl {
+            object_enable: true,
+            ..lcdc
+        });
         // TODO don't hard-code 128
         vram.tile_data.as_values_mut()[128] =
             Tile::from_color_indexes([[ColorIndex::Two; 8]; 8]);

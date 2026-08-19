@@ -101,7 +101,6 @@ impl Widget for TuiWidget<'_> {
 
             // Memory
             panel("Memory", memory_area, buf);
-            // TODO draw memory
         }
     }
 }
