@@ -24,6 +24,7 @@ impl From<TuiEvent> for InputEvent {
 
 /// An input event intended for the TUI
 #[derive(Debug)]
+#[expect(clippy::enum_variant_names)]
 pub enum TuiEvent {
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,

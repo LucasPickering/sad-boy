@@ -11,7 +11,11 @@ use crate::{
     },
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
-use std::{fmt::Debug, mem};
+use std::{
+    fmt::Debug,
+    mem,
+    ops::{Add, Sub},
+};
 use tracing::info_span;
 
 /// Dots in a single scanline
@@ -23,7 +27,6 @@ const SCANLINES_PER_FRAME: u8 = 154;
 /// This is [SCANLINES_PER_FRAME] minus the number of vertical blank lines in
 /// each frame.
 const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
-const SCREEN_WIDTH: u8 = FrameBuffer::WIDTH as u8;
 
 /// Graphics registers and processing
 #[derive(Debug, Default)]
@@ -65,6 +68,7 @@ impl Gpu {
                 self.current_scanline.mode()
             }
             SCANLINES_PER_FRAME_DRAWN..SCANLINES_PER_FRAME => {
+                self.current_scanline = ScanlineState::Start;
                 PpuMode::VerticalBlank
             }
             _ => unreachable!("Invalid scanline: {scanline:?}"),
@@ -315,7 +319,7 @@ impl_bit_pack! {
 }
 
 /// Size of the next object to draw (flag in [LcdControl])
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ObjectSize {
     /// 8x8
     Small,
@@ -326,8 +330,8 @@ enum ObjectSize {
 impl ObjectSize {
     fn height(self) -> u8 {
         match self {
-            ObjectSize::Small => 8,
-            ObjectSize::Large => 16,
+            ObjectSize::Small => Tile::HEIGHT,
+            ObjectSize::Large => Tile::HEIGHT * 2,
         }
     }
 }
@@ -459,8 +463,10 @@ impl Vram {
     fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
         // First, check for objects. These are pre-sorted by x
-        if let Some((tile_index, x, y)) =
-            objects.iter().find_map(|object| object.get_pixel(x, y))
+        let object_size = self.registers.lcdc.unpack().object_size;
+        if let Some((tile_index, x, y)) = objects
+            .iter()
+            .find_map(|object| object.get_pixel(x, y, object_size))
         {
             let tile = self.get_tile(tile_index);
             return tile.color_index(x, y);
@@ -532,6 +538,9 @@ impl ScanlineState {
         vram: &Vram,
         frame: &mut FrameBuffer,
     ) -> Self {
+        const SCREEN_WIDTH: u8 = FrameBuffer::WIDTH as u8;
+        let next_dot = dots + 1;
+
         // TODO note about mode numbers not being sequential
         // TODO consts for state durations
         match self {
@@ -551,7 +560,7 @@ impl ScanlineState {
                 Self::OamScan { objects }
             }
             // Stay in mode 2
-            state @ Self::OamScan { .. } if dots < Cycles(80) => state,
+            state @ Self::OamScan { .. } if next_dot < Cycles(80) => state,
             // End of OAM scan - transition to mode 3
             Self::OamScan { objects } => Self::Drawing { objects, x: 0 },
             // Mode 3 - draw pixels
@@ -582,7 +591,11 @@ impl ScanlineState {
             } => Self::HorizontalBlank,
             // Mode 0 - horizontal blank
             // Stay in this mode until the end of the scanline
-            Self::HorizontalBlank => ScanlineState::HorizontalBlank,
+            Self::HorizontalBlank if next_dot < SCANLINE_DOTS => {
+                ScanlineState::HorizontalBlank
+            }
+            // Reset for the next line
+            Self::HorizontalBlank => ScanlineState::Start,
         }
     }
 }
@@ -653,7 +666,7 @@ impl From<Scanline> for u8 {
 /// Index of a color within the active palette
 ///
 /// https://gbdev.io/pandocs/Palettes.html
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ColorIndex {
     Zero,
     One,
@@ -677,6 +690,11 @@ struct Tile {
 const _: () = assert!(mem::size_of::<Tile>() == 16);
 
 impl Tile {
+    /// Width of a tile, in pixels
+    const WIDTH: u8 = 8;
+    /// Height of a tile, in pixels
+    const HEIGHT: u8 = 8;
+
     /// Create a tile from an 8x8 array of [ColorIndex]es
     #[cfg(test)]
     fn from_color_indexes(pixels: [[ColorIndex; 8]; 8]) -> Self {
@@ -785,33 +803,50 @@ impl Object {
         // attributes.y is shifted +16. Shift the line up to match. Subtracting
         // could incur underflow. Addition can't overflow because the max line
         // value is 153.
-        let line = line.0 + 16;
+        let line = Shifted::shift(line.0);
         let top = self.attributes.y; // Top edge (inclusive)
         let bottom = self.attributes.y + self.height; // Bottom edge (exclusive)
         bottom > line && top <= line
     }
 
-    /// Look up a single pixel in an object
+    /// Check if a pixel intersects this object
+    ///
+    /// `size` is the current object size from the `LCDC` register.
     ///
     /// Return the tile that the pixel should be grabbed from, as well as the
-    /// `(x, y)` offset into that tile.
-    fn get_pixel(&self, x: u8, y: u8) -> Option<(TileIndex, u8, u8)> {
-        let x = x + 8;
-        let y = y + 16;
+    /// `(x, y)` offset into that tile. Return `None` if the pixel doesn't
+    /// intersect with this object.
+    fn get_pixel(
+        &self,
+        x: u8,
+        y: u8,
+        size: ObjectSize,
+    ) -> Option<(TileIndex, u8, u8)> {
+        // attributes.x/y are shifted; shift the input coordinates to match
+        let x = Shifted::shift(x);
+        let y = Shifted::shift(y);
         if self.attributes.x <= x
-            && x < (self.attributes.x + 8)
+            && x < (self.attributes.x + Tile::WIDTH)
             && self.attributes.y <= y
-            && y < (self.attributes.y + 16)
+            && y < (self.attributes.y + size.height())
         {
-            let tile_index = if y < 8 {
-                self.attributes.tile_index
-            } else {
-                self.attributes.tile_index.next()
-            };
+            // Shift x/y to be relative to the tile start
             // SAFETY: these won't underflow/overflow because of the bounds
             // checks above
             let x = x - self.attributes.x;
             let y = y - self.attributes.y;
+
+            // Bounds checking enforces these
+            debug_assert!(x < 8);
+            debug_assert!(y < 16);
+
+            // For large objects, check if this is the upper or lower tile
+            let tile_index = if size == ObjectSize::Large && y >= 8 {
+                self.attributes.tile_index.next()
+            } else {
+                self.attributes.tile_index
+            };
+
             Some((tile_index, x, y))
         } else {
             None
@@ -830,12 +865,12 @@ struct ObjectAttributes {
     ///
     /// The +16 allows moving an object above the screen without underflowing
     /// the byte.
-    y: u8,
+    y: Shifted<16>,
     /// Horizontal position of the object + 8
     ///
     /// The +8 allows moving an object left of the screen without underflowing
     /// the byte.
-    x: u8,
+    x: Shifted<8>,
     /// Index of the tile defining this object
     ///
     /// For 8x8 tiles, this is the index into the tile map for the object's
@@ -846,6 +881,49 @@ struct ObjectAttributes {
     flags: PackedBits<ObjectFlags>,
 }
 const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
+
+/// An x/y value increased by a static amount
+///
+/// The contained value *has been shifted* by adding `N` to it. To get the
+/// original value back, subtract `N`.
+///
+/// This is a newtype wrapper for [ObjectAttributes::x] and
+/// [ObjectAttributes::y]. These fields are shifted up statically to allow for
+/// "negative" off-screen coordinates within a signed value. The newtype makes
+/// it harder to write buggy code related to these fields.
+///
+/// The const parameter ensures the 1-byte runtime size.
+///
+/// **This should never be constructed directly.** Use [Shifted::default] or
+/// [Shifted::shift].
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct Shifted<const N: u8>(u8);
+
+impl<const N: u8> Shifted<N> {
+    /// Create a new [Shifted] containing `value + N`
+    fn shift(value: u8) -> Self {
+        Self(value + N)
+    }
+}
+
+/// Addition with `u8` retains the `Shifted` wrapper
+impl<const N: u8> Add<u8> for Shifted<N> {
+    type Output = Self;
+
+    fn add(self, rhs: u8) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+/// Subtraction between two `Shifted`s cancels out the shift, so it returns a
+/// `u8`
+impl<const N: u8> Sub for Shifted<N> {
+    type Output = u8;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.0 - rhs.0
+    }
+}
 
 /// Flags in byte 3 of [ObjectAttributes]
 ///
@@ -947,13 +1025,14 @@ mod tests {
 
         // Create a tile of all light gray
         let vram = &mut gpu.vram;
+        // TODO don't hard-code 128
         vram.tile_data.as_values_mut()[128] =
             Tile::from_color_indexes([[ColorIndex::Two; 8]; 8]);
 
         // Put an object in the top-left with that tile
         vram.oam.as_values_mut()[0] = ObjectAttributes {
-            y: 16,
-            x: 8,
+            y: Shifted::shift(0),
+            x: Shifted::shift(0),
             tile_index: TileIndex(0),
             flags: ObjectFlags::default().pack(),
         };
@@ -965,5 +1044,30 @@ mod tests {
             FrameBuffer::from_pixels(vec![Color::BLACK; FrameBuffer::LENGTH]);
         expected.set_region(0, 0, 8, 8, Color::LIGHT_GRAY);
         frame.assert_pixels(&expected);
+    }
+
+    /// Test [Tile::color_index]
+    #[test]
+    fn tile_color_index() {
+        let row = [
+            ColorIndex::Zero,
+            ColorIndex::One,
+            ColorIndex::Two,
+            ColorIndex::Three,
+            ColorIndex::Three,
+            ColorIndex::Two,
+            ColorIndex::One,
+            ColorIndex::Zero,
+        ];
+        let lines = [row; 8];
+        let tile = Tile::from_color_indexes(lines);
+
+        for x in 0..8u8 {
+            for y in 0..8u8 {
+                let expected = lines[y as usize][x as usize];
+                let actual = tile.color_index(x, y);
+                assert_eq!(actual, expected, "Mismatch at ({x}, {y})");
+            }
+        }
     }
 }

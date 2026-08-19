@@ -21,10 +21,16 @@ impl Bit {
     }
 
     /// Set the value of a bit in a byte, returning the new byte
+    ///
+    /// ```
+    /// assert_eq!(Bit(4).set(0b0101_0101, false), 0b0100_0101);
+    /// assert_eq!(Bit(3).set(0b0101_1101, true), 0b0101_1101);
+    /// ```
     #[must_use]
     pub fn set(self, bits: u8, flag: bool) -> u8 {
-        let new = u8::from(flag) << self.0;
-        (bits | new) & new
+        // TODO there must be a branch less way to do this
+        let mask = self.mask();
+        if flag { bits | mask } else { bits & !mask }
     }
 
     /// Get a [Mask] for this single bit
@@ -109,6 +115,14 @@ impl BitAnd for Mask {
 
     fn bitand(self, rhs: Self) -> Self::Output {
         Self(self.0 & rhs.0)
+    }
+}
+
+impl BitOr<Mask> for u8 {
+    type Output = u8;
+
+    fn bitor(self, rhs: Mask) -> Self::Output {
+        self | rhs.0
     }
 }
 
@@ -435,4 +449,23 @@ pub enum TracingOutput {
     File,
     /// Print tracing to stderr
     Stderr,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Test [Bit::set]
+    #[rstest]
+    #[case::set_zero(0b0101_0101, 4, false, 0b0100_0101)]
+    #[case::set_zero(0b0101_0101, 5, true, 0b0111_0101)]
+    fn bit_set(
+        #[case] byte: u8,
+        #[case] bit: u8,
+        #[case] flag: bool,
+        #[case] expected: u8,
+    ) {
+        assert_eq!(Bit(bit).set(byte, flag), expected);
+    }
 }

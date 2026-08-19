@@ -211,7 +211,7 @@ impl FrameBuffer {
                 expected,
             } in truncated
             {
-                writeln!(messages, "At ({x},{y}): {actual} != {expected}")
+                writeln!(messages, "At {x},{y}: {actual} != {expected}")
                     .unwrap();
             }
             if truncated.len() < mismatched.len() {
