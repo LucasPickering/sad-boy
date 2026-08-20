@@ -1,7 +1,3 @@
-mod memory_view;
-
-pub use memory_view::MemoryView;
-
 use crate::{
     emu::{
         gpu::Vram,
@@ -12,8 +8,10 @@ use crate::{
 };
 use std::{
     fmt::{self, Debug, Display},
+    mem,
     ops::{Add, AddAssign},
     range::RangeInclusive,
+    slice,
     str::FromStr,
 };
 use tracing::error;
@@ -61,7 +59,8 @@ pub const CARTRIDGE_RAM: AddressRange =
 /// Address range for general-purpose writable RAM
 pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
-const ECHO_RAM: AddressRange = AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
+pub const ECHO_RAM: AddressRange =
+    AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
 /// Object Attribute Memory (part of VRAM)
 pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
 /// Address range for additional general-purpose writable RAM
@@ -193,24 +192,25 @@ impl<'a> MemoryBus<'a> {
                 0
             }
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.vram.tile_data().get(address)
+                get_slice_byte_opt(self.vram.tile_data(), TILE_DATA, address)
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.vram.tile_maps().get(address)
+                get_slice_byte_opt(self.vram.tile_maps(), TILE_MAPS, address)
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.ram.cartridge_ram().get(address)
+                get_slice_byte(&self.ram.cartridge_ram, CARTRIDGE_RAM, address)
             }
-            RAM_START..=RAM_LAST => self.ram.ram().get(address),
+            RAM_START..=RAM_LAST => get_slice_byte(&self.ram.ram, RAM, address),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
-                // TODO dedupe with set8
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
                 // Shift to the main RAM section
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.get8(address)
             }
-            OAM_START..=OAM_LAST => self.vram.oam().get(address),
+            OAM_START..=OAM_LAST => {
+                get_slice_byte_opt(self.vram.oam(), OAM, address)
+            }
             0xFEA0..=0xFEFF => 0, // Null mem
 
             // Hardware registers
@@ -227,7 +227,9 @@ impl<'a> MemoryBus<'a> {
                 0
             }
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => self.ram.high_ram().get(address),
+            HIGH_RAM_START..=HIGH_RAM_LAST => {
+                get_slice_byte(&self.ram.high_ram, HIGH_RAM, address)
+            }
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
                 0
@@ -244,16 +246,27 @@ impl<'a> MemoryBus<'a> {
             // ROM is immutable (bootstrapp too, so it doesn't matter if it's
             // mapped or not)
             CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
-            TILE_DATA_START..=TILE_DATA_LAST => {
-                self.vram.tile_data().set(address, value);
+            TILE_DATA_START..=TILE_DATA_LAST => set_slice_byte_opt(
+                self.vram.tile_data_mut(),
+                TILE_DATA,
+                address,
+                value,
+            ),
+            TILE_MAPS_START..=TILE_MAPS_LAST => set_slice_byte_opt(
+                self.vram.tile_maps_mut(),
+                TILE_MAPS,
+                address,
+                value,
+            ),
+            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => set_slice_byte(
+                &mut self.ram.cartridge_ram,
+                CARTRIDGE_RAM,
+                address,
+                value,
+            ),
+            RAM_START..=RAM_LAST => {
+                set_slice_byte(&mut self.ram.ram, RAM, address, value);
             }
-            TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.vram.tile_maps().set(address, value);
-            }
-            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.ram.cartridge_ram().set(address, value);
-            }
-            RAM_START..=RAM_LAST => self.ram.ram().set(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
@@ -261,7 +274,9 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            OAM_START..=OAM_LAST => self.vram.oam().set(address, value),
+            OAM_START..=OAM_LAST => {
+                set_slice_byte_opt(self.vram.oam_mut(), OAM, address, value);
+            }
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
@@ -276,7 +291,12 @@ impl<'a> MemoryBus<'a> {
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
-                self.ram.high_ram().set(address, value);
+                set_slice_byte(
+                    &mut self.ram.high_ram,
+                    HIGH_RAM,
+                    address,
+                    value,
+                );
             }
 
             0xFFFF => error!("TODO: Interrupt Enabled Register write"),
@@ -459,18 +479,6 @@ pub struct RandomAccessMemory {
 }
 
 impl RandomAccessMemory {
-    fn ram(&self) -> MemoryView<'_> {
-        MemoryView::from_slice(&self.ram, RAM)
-    }
-
-    fn high_ram(&self) -> MemoryView<'_> {
-        MemoryView::from_slice(&self.high_ram, HIGH_RAM)
-    }
-
-    fn cartridge_ram(&self) -> MemoryView<'_> {
-        MemoryView::from_slice(&self.cartridge_ram, CARTRIDGE_RAM)
-    }
-
     /// Get the value of the `BANK` register
     #[cfg(test)]
     pub fn bank(&self) -> u8 {
@@ -486,5 +494,110 @@ impl Default for RandomAccessMemory {
             high_ram: [0; HIGH_RAM.len()],
             cartridge_ram: [0; CARTRIDGE_RAM.len()],
         }
+    }
+}
+
+/// A marker trait denoting that a type can be cast to raw bytes
+///
+/// This serves two purposes:
+/// - An added layer of safety to make sure types are opting in to providing a
+///   stable memory layout
+/// - Accessors can return `&[impl RawBytes]` to mask their return type, for
+///   cases where the type is only needed for the memory bus
+pub trait RawBytes {}
+
+impl RawBytes for u8 {}
+
+/// Get a byte from a slice of arbitrary values
+///
+/// This will reinterpret the slice as raw bytes. `T` should have a stable byte
+/// representation.
+///
+/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
+/// not equal to the length of `range`.
+fn get_slice_byte<T: RawBytes>(
+    slice: &[T],
+    range: AddressRange,
+    address: Address,
+) -> u8 {
+    let byte_len = mem::size_of_val(slice);
+    // Make sure the length of the address range matches the byte length
+    // of the slice
+    debug_assert_eq!(
+        byte_len,
+        range.len(),
+        "Slice byte length must match address range length",
+    );
+    // SAFETY:
+    // - Pointer is valid because the corresponding slice is still alive
+    // - Length is correct because it's calculated from the slice above
+    // - range.offset() ensures the offset is in the address range, which is the
+    //   same length as the slice
+    let bytes =
+        unsafe { slice::from_raw_parts(slice.as_ptr().cast::<u8>(), byte_len) };
+    bytes[range.offset(address)]
+}
+
+/// Get a byte from an optional slice of arbitrary values
+///
+/// If `slice` is `None`, return `0`. This will reinterpret the slice as raw
+/// bytes. `T` should have a stable byte representation.
+///
+/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
+/// not equal to the length of `range`.
+fn get_slice_byte_opt<T: RawBytes>(
+    slice: Option<&[T]>,
+    range: AddressRange,
+    address: Address,
+) -> u8 {
+    match slice {
+        Some(slice) => get_slice_byte(slice, range, address),
+        None => 0,
+    }
+}
+
+/// Set a byte in a slice of arbitrary values
+///
+/// This will reinterpret the slice as raw bytes. `T` should have a stable byte
+/// representation.
+///
+/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
+/// not equal to the length of `range`.
+fn set_slice_byte<T: RawBytes>(
+    slice: &mut [T],
+    range: AddressRange,
+    address: Address,
+    value: u8,
+) {
+    let byte_len = mem::size_of_val(slice);
+    // Make sure the length of the address range matches the byte length
+    // of the slice
+    debug_assert_eq!(
+        byte_len,
+        range.len(),
+        "Slice byte length must match address range length",
+    );
+    // SAFETY: See get_slice_byte() (it's all the same logic)
+    let bytes = unsafe {
+        slice::from_raw_parts_mut(slice.as_mut_ptr().cast::<u8>(), byte_len)
+    };
+    bytes[range.offset(address)] = value;
+}
+
+/// Set a byte in an optional slice of arbitrary values
+///
+/// If `slice` is `None`, do nothing. This will reinterpret the slice as raw
+/// bytes. `T` should have a stable byte representation.
+///
+/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
+/// not equal to the length of `range`.
+fn set_slice_byte_opt<T: RawBytes>(
+    slice: Option<&mut [T]>,
+    range: AddressRange,
+    address: Address,
+    value: u8,
+) {
+    if let Some(slice) = slice {
+        set_slice_byte(slice, range, address, value);
     }
 }

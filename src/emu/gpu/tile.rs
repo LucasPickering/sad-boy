@@ -4,7 +4,7 @@
 //! containing [TileIndex]es. These indexes map to actual tiles.
 
 use crate::{
-    emu::gpu::ColorIndex,
+    emu::{gpu::ColorIndex, memory::RawBytes},
     util::{Bit, impl_bit_pack},
 };
 use std::mem;
@@ -58,6 +58,9 @@ impl Tile {
         }
     }
 }
+
+// Memory bus accesses this as raw bytes
+impl RawBytes for Tile {}
 
 /// A single 8-pixel line in a tile
 ///
@@ -115,6 +118,9 @@ impl TileIndex {
         Self(self.0 + 1)
     }
 }
+
+// Memory bus accesses this as raw bytes
+impl RawBytes for TileIndex {}
 
 /// Selector for a block of tile *map* memory
 ///
@@ -189,6 +195,13 @@ impl TileData {
         &self.data
     }
 
+    /// Get a mutable slice of **all** tiles (not just the active blocks)
+    ///
+    /// Use this for the memory bus.
+    pub fn as_slice_mut(&mut self) -> &mut [Tile] {
+        &mut self.data
+    }
+
     /// Get a tile by index
     ///
     /// `area` defines which tile blocks are active: low+middle or middle+high.
@@ -253,6 +266,13 @@ impl TileMaps {
     /// Use this for the memory bus.
     pub fn as_slice(&self) -> &[TileIndex] {
         self.maps.as_flattened()
+    }
+
+    /// Get a mutable slice of both tile maps
+    ///
+    /// Use this for the memory bus.
+    pub fn as_slice_mut(&mut self) -> &mut [TileIndex] {
+        self.maps.as_flattened_mut()
     }
 
     /// Get a tile by its coordinate

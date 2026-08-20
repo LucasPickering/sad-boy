@@ -12,7 +12,7 @@ use crate::{
         gpu::tile::{
             Tile, TileData, TileDataArea, TileIndex, TileMapArea, TileMaps,
         },
-        memory::{self, MemoryView},
+        memory::RawBytes,
     },
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
@@ -148,52 +148,88 @@ impl Vram {
 
     /// Access the Object Attribute Memory
     ///
-    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
-    /// return 0 and writes will do nothing.
-    pub fn oam(&self) -> MemoryView<'_> {
-        // OAM is only accessible to the CPU in blank modes
-        let range = memory::OAM;
+    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, return
+    /// `None`. The concrete return type is masked because this is only used for
+    /// the memory bus.
+    pub fn oam(&self) -> Option<&[impl RawBytes]> {
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(&self.oam, range)
+                Some(&self.oam)
             }
-            PpuMode::OamScan | PpuMode::Drawing => MemoryView::null(range),
+            PpuMode::OamScan | PpuMode::Drawing => None,
+        }
+    }
+
+    /// Access the Object Attribute Memory mutably
+    ///
+    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, return
+    /// `None`. The concrete return type is masked because this is only used for
+    /// the memory bus.
+    pub fn oam_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+        match self.mode() {
+            PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
+                Some(&mut self.oam)
+            }
+            PpuMode::OamScan | PpuMode::Drawing => None,
         }
     }
 
     /// Access tile data memory
     ///
-    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_data(&self) -> MemoryView<'_> {
-        // VRAM is not accessible in mode 3
-        let range = memory::TILE_DATA;
+    /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
+    /// concrete return type is masked because this is only used for the
+    /// memory bus.
+    pub fn tile_data(&self) -> Option<&[impl RawBytes]> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(self.tile_data.as_slice(), range)
-            }
-            PpuMode::Drawing => MemoryView::null(range),
+            | PpuMode::VerticalBlank => Some(self.tile_data.as_slice()),
+            PpuMode::Drawing => None,
+        }
+    }
+
+    /// Access tile data memory mutably
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
+    /// concrete return type is masked because this is only used for the
+    /// memory bus.
+    pub fn tile_data_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => Some(self.tile_data.as_slice_mut()),
+            PpuMode::Drawing => None,
         }
     }
 
     /// Access tile map memory
     ///
-    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_maps(&self) -> MemoryView<'_> {
-        // VRAM is not accessible in mode 3
-        let range = memory::TILE_MAPS;
+    /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
+    /// concrete return type is masked because this is only used for the
+    /// memory bus.
+    pub fn tile_maps(&self) -> Option<&[impl RawBytes]> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(self.tile_maps.as_slice(), range)
-            }
-            PpuMode::Drawing => MemoryView::null(range),
+            | PpuMode::VerticalBlank => Some(self.tile_maps.as_slice()),
+            PpuMode::Drawing => None,
         }
     }
+
+    /// Access tile map memory mutably
+    ///
+    /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
+    /// concrete return type is masked because this is only used for the
+    /// memory bus.
+    pub fn tile_maps_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+        match self.mode() {
+            PpuMode::OamScan
+            | PpuMode::HorizontalBlank
+            | PpuMode::VerticalBlank => Some(self.tile_maps.as_slice_mut()),
+            PpuMode::Drawing => None,
+        }
+    }
+
     /// Read the `ppu_mode` flag of the `STAT` register
     fn mode(&self) -> PpuMode {
         self.registers.stat.unpack().ppu_mode
@@ -740,6 +776,9 @@ struct ObjectAttributes {
     flags: PackedBits<ObjectFlags>,
 }
 const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
+
+// Memory bus accesses this as raw bytes
+impl RawBytes for ObjectAttributes {}
 
 /// An x/y value increased by a static amount
 ///
