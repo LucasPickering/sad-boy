@@ -92,14 +92,58 @@ impl Gpu {
         clock.is_frame_end()
     }
 
+    pub fn vram_mut(&mut self) -> &mut Vram {
+        &mut self.vram
+    }
+}
+
+#[cfg(test)]
+impl Gpu {
+    /// Tick until the next frame is done
+    fn draw_frame(&mut self, clock: &mut Clock, frame: &mut FrameBuffer) {
+        loop {
+            // Clock has to tick first
+            clock.tick();
+            if self.tick(clock, frame) {
+                break;
+            }
+        }
+    }
+}
+
+/// Graphics-related memory
+///
+/// This is separate from the [Gpu] struct because the render logic to VRAM and
+/// the state machine.
+#[derive(Debug)]
+pub struct Vram {
+    /// 1-byte control registers related to graphics processing
+    registers: Registers,
+    /// Object Attribute Memory
+    ///
+    /// This is a list of up to 40 moveable objects.
+    ///
+    /// https://gbdev.io/pandocs/OAM.html
+    oam: [ObjectAttributes; 40],
+    /// Pixel data for tiles
+    ///
+    /// https://gbdev.io/pandocs/Tile_Data.html
+    tile_data: TileData,
+    /// Two 32x32 tile maps (lower and upper)
+    ///
+    /// https://gbdev.io/pandocs/Tile_Maps.html
+    tile_maps: TileMaps,
+}
+
+impl Vram {
     /// Get read-only access to the GPU I/O registers
     pub fn registers(&self) -> &Registers {
-        &self.vram.registers
+        &self.registers
     }
 
     /// Get mutable access to the GPU I/O registers
     pub fn registers_mut(&mut self) -> &mut Registers {
-        &mut self.vram.registers
+        &mut self.registers
     }
 
     /// Access the Object Attribute Memory
@@ -111,7 +155,7 @@ impl Gpu {
         let range = memory::OAM;
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(&self.vram.oam, range)
+                MemoryView::from_slice(&self.oam, range)
             }
             PpuMode::OamScan | PpuMode::Drawing => MemoryView::null(range),
         }
@@ -128,7 +172,7 @@ impl Gpu {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
             | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(self.vram.tile_data.as_slice(), range)
+                MemoryView::from_slice(self.tile_data.as_slice(), range)
             }
             PpuMode::Drawing => MemoryView::null(range),
         }
@@ -145,28 +189,141 @@ impl Gpu {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
             | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(self.vram.tile_maps.as_slice(), range)
+                MemoryView::from_slice(self.tile_maps.as_slice(), range)
             }
             PpuMode::Drawing => MemoryView::null(range),
         }
     }
-
     /// Read the `ppu_mode` flag of the `STAT` register
     fn mode(&self) -> PpuMode {
-        self.vram.registers.stat.unpack().ppu_mode
+        self.registers.stat.unpack().ppu_mode
+    }
+
+    /// Get a list of **up to 10** visible objects for the current scanline
+    ///
+    /// When there are more than 10 objects intersecting with the current
+    /// scanline, the objects earlier in memory (with lower addresses) get
+    /// priority.
+    ///
+    /// Returned objects will always be sorted by x coordinate (ascending).
+    ///
+    /// https://gbdev.io/pandocs/OAM.html#selection-priority
+    fn get_objects(&self) -> Vec<Object> {
+        let line = self.registers.ly;
+        // TODO the height should be changeable between objects? maybe we need
+        // to delay between each object fetch
+        let height = self.lcdc().object_size.height();
+        // Take the first 10 objects intersecting the current line
+        let mut objects = self
+            .oam
+            .iter()
+            .copied()
+            .map(|attributes| Object { attributes, height })
+            .filter(|object| object.intersects_line(line))
+            .take(10)
+            .collect::<Vec<_>>();
+        // Sort by x because that's what we need for render order
+        objects.sort_by_key(|object| object.attributes.x);
+        objects
+    }
+
+    /// Calculate the color index for a specific pixel
+    ///
+    /// This is the main rendering logic that walks through
+    /// objects/window/background.
+    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
+        // https://gbdev.io/pandocs/OAM.html#drawing-priority
+
+        self.get_object_pixel(objects, x, y)
+            // TODO check window
+            .unwrap_or_else(|| self.get_background_pixel(x, y))
+    }
+
+    /// Calculate a pixel from visible objects
+    ///
+    /// Return `None` if no objects intersect the pixel.
+    fn get_object_pixel(
+        &self,
+        objects: &[Object],
+        x: u8,
+        y: u8,
+    ) -> Option<ColorIndex> {
+        let lcdc = self.lcdc();
+        if lcdc.object_enable {
+            // These are pre-sorted by x
+            if let Some((tile_index, x, y)) = objects
+                .iter()
+                .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
+            {
+                let tile = self.tile_data.get(tile_index, TileDataArea::Low);
+                return Some(tile.pixel(x, y));
+            }
+        }
+        None
+    }
+
+    /// Calculate a pixel from the background map
+    ///
+    /// The background covers the entire screen and wraps at the edge, so every
+    /// pixel will have a background color.
+    fn get_background_pixel(&self, x: u8, y: u8) -> ColorIndex {
+        // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
+        // Map the x/y coordinate within the tile map. This will scroll and
+        // intentionally wraps at the end of the map boundary. The map is 32x32
+        // tiles and each tile is 8x8, so it's 256x256 pixels.
+        let x = self.registers.scx.wrapping_add(x);
+        let y = self.registers.scy.wrapping_add(y);
+
+        // First we need to find the tile INDEX in the tile MAP, then use THAT
+        // index to find the underlying TILE
+        // TODO use a const for tile map width. Maybe TileMap should be a
+        // struct?
+        let tile_x = x / Tile::WIDTH;
+        let tile_y = y / Tile::HEIGHT;
+        // TODO select tile map correctly
+        // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
+        let tile_index = self.tile_maps.get(tile_x, tile_y, TileMapArea::Low);
+
+        // Now convert the index to an actual tile
+        let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
+        // Get the pixel coordinates within the tile
+        tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)
+
+        // TODO the scroll registers should only be changeable on each tile
+        // fetch (or at the beginning of the scanline), not on each pixel. The
+        // entire rendering pipeline needs a rewrite to model the FIFO.
+        // TODO how do we return WHITE if disabled in LCDC? it may not be in the
+        // palette
+    }
+
+    /// Look up a color from the active color palette
+    ///
+    /// https://gbdev.io/pandocs/Palettes.html
+    fn get_color(&self, index: ColorIndex) -> Color {
+        // TODO look this up in the BGP register
+        match index {
+            ColorIndex::Zero => Color::BLACK,
+            ColorIndex::One => Color::DARK_GRAY,
+            ColorIndex::Two => Color::LIGHT_GRAY,
+            ColorIndex::Three => Color::WHITE,
+        }
+    }
+
+    /// Get the unpacked value of the `LCDC` register
+    fn lcdc(&self) -> LcdControl {
+        // It may be slow to repeatedly unpack this all the time. Maybe we could
+        // cache it? Or provide some way to decode a single bit a time?
+        self.registers.lcdc.unpack()
     }
 }
 
-#[cfg(test)]
-impl Gpu {
-    /// Tick until the next frame is done
-    fn draw_frame(&mut self, clock: &mut Clock, frame: &mut FrameBuffer) {
-        loop {
-            // Clock has to tick first
-            clock.tick();
-            if self.tick(clock, frame) {
-                break;
-            }
+impl Default for Vram {
+    fn default() -> Self {
+        Self {
+            registers: Registers::default(),
+            oam: [ObjectAttributes::default(); 40],
+            tile_data: TileData::default(),
+            tile_maps: TileMaps::default(),
         }
     }
 }
@@ -300,157 +457,6 @@ impl_bit_pack! {
     Bit(3).mask() => mode_0_interrupt,
     Bit(2).mask() => lyc_equal_ly,
     Mask::M10 => ppu_mode,
-}
-
-/// Graphics-related memory
-#[derive(Debug)]
-pub struct Vram {
-    /// 1-byte control registers related to graphics processing
-    registers: Registers,
-    /// Object Attribute Memory
-    ///
-    /// This is a list of up to 40 moveable objects.
-    ///
-    /// https://gbdev.io/pandocs/OAM.html
-    oam: [ObjectAttributes; 40],
-    /// Pixel data for tiles
-    ///
-    /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: TileData,
-    /// Two 32x32 tile maps (lower and upper)
-    ///
-    /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: TileMaps,
-}
-
-impl Vram {
-    /// Get a list of **up to 10** visible objects for the current scanline
-    ///
-    /// When there are more than 10 objects intersecting with the current
-    /// scanline, the objects earlier in memory (with lower addresses) get
-    /// priority.
-    ///
-    /// Returned objects will always be sorted by x coordinate (ascending).
-    ///
-    /// https://gbdev.io/pandocs/OAM.html#selection-priority
-    fn get_objects(&self) -> Vec<Object> {
-        let line = self.registers.ly;
-        // TODO the height should be changeable between objects? maybe we need
-        // to delay between each object fetch
-        let height = self.lcdc().object_size.height();
-        // Take the first 10 objects intersecting the current line
-        let mut objects = self
-            .oam
-            .iter()
-            .copied()
-            .map(|attributes| Object { attributes, height })
-            .filter(|object| object.intersects_line(line))
-            .take(10)
-            .collect::<Vec<_>>();
-        // Sort by x because that's what we need for render order
-        objects.sort_by_key(|object| object.attributes.x);
-        objects
-    }
-
-    /// Calculate the color index for a specific pixel
-    ///
-    /// This is the main rendering logic that walks through
-    /// objects/window/background.
-    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
-        // https://gbdev.io/pandocs/OAM.html#drawing-priority
-
-        self.get_object_pixel(objects, x, y)
-            // TODO check window
-            .unwrap_or_else(|| self.get_background_pixel(x, y))
-    }
-
-    /// Calculate a pixel from visible objects
-    ///
-    /// Return `None` if no objects intersect the pixel.
-    fn get_object_pixel(
-        &self,
-        objects: &[Object],
-        x: u8,
-        y: u8,
-    ) -> Option<ColorIndex> {
-        let lcdc = self.lcdc();
-        if lcdc.object_enable {
-            // These are pre-sorted by x
-            if let Some((tile_index, x, y)) = objects
-                .iter()
-                .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
-            {
-                let tile = self.tile_data.get(tile_index, TileDataArea::Low);
-                return Some(tile.pixel(x, y));
-            }
-        }
-        None
-    }
-
-    /// Calculate a pixel from the background map
-    ///
-    /// The background covers the entire screen and wraps at the edge, so every
-    /// pixel will have a background color.
-    fn get_background_pixel(&self, x: u8, y: u8) -> ColorIndex {
-        // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
-        // Map the x/y coordinate within the tile map. This will scroll and
-        // intentionally wraps at the end of the map boundary. The map is 32x32
-        // tiles and each tile is 8x8, so it's 256x256 pixels.
-        let x = self.registers.scx.wrapping_add(x);
-        let y = self.registers.scy.wrapping_add(y);
-
-        // First we need to find the tile INDEX in the tile MAP, then use THAT
-        // index to find the underlying TILE
-        // TODO use a const for tile map width. Maybe TileMap should be a
-        // struct?
-        let tile_x = x / Tile::WIDTH;
-        let tile_y = y / Tile::HEIGHT;
-        // TODO select tile map correctly
-        // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
-        let tile_index = self.tile_maps.get(tile_x, tile_y, TileMapArea::Low);
-
-        // Now convert the index to an actual tile
-        let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
-        // Get the pixel coordinates within the tile
-        tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)
-
-        // TODO the scroll registers should only be changeable on each tile
-        // fetch (or at the beginning of the scanline), not on each pixel. The
-        // entire rendering pipeline needs a rewrite to model the FIFO.
-        // TODO how do we return WHITE if disabled in LCDC? it may not be in the
-        // palette
-    }
-
-    /// Look up a color from the active color palette
-    ///
-    /// https://gbdev.io/pandocs/Palettes.html
-    fn get_color(&self, index: ColorIndex) -> Color {
-        // TODO look this up in the BGP register
-        match index {
-            ColorIndex::Zero => Color::BLACK,
-            ColorIndex::One => Color::DARK_GRAY,
-            ColorIndex::Two => Color::LIGHT_GRAY,
-            ColorIndex::Three => Color::WHITE,
-        }
-    }
-
-    /// Get the unpacked value of the `LCDC` register
-    fn lcdc(&self) -> LcdControl {
-        // It may be slow to repeatedly unpack this all the time. Maybe we could
-        // cache it? Or provide some way to decode a single bit a time?
-        self.registers.lcdc.unpack()
-    }
-}
-
-impl Default for Vram {
-    fn default() -> Self {
-        Self {
-            registers: Registers::default(),
-            oam: [ObjectAttributes::default(); 40],
-            tile_data: TileData::default(),
-            tile_maps: TileMaps::default(),
-        }
-    }
 }
 
 /// Draw state of a single scanline

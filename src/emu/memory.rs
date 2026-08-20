@@ -4,7 +4,7 @@ pub use memory_view::MemoryView;
 
 use crate::{
     emu::{
-        gpu::Gpu,
+        gpu::Vram,
         instruction::Instruction,
         rom::{self, Rom},
     },
@@ -124,7 +124,7 @@ pub struct MemoryBus<'a> {
     /// Read-only memory from the cartridge
     rom: &'a Rom,
     /// VRAM and graphics-related IO registers
-    gpu: &'a mut Gpu,
+    vram: &'a mut Vram,
 }
 
 impl<'a> MemoryBus<'a> {
@@ -132,12 +132,12 @@ impl<'a> MemoryBus<'a> {
     pub fn new(
         memory: &'a mut RandomAccessMemory,
         rom: &'a Rom,
-        gpu: &'a mut Gpu,
+        vram: &'a mut Vram,
     ) -> Self {
         Self {
             ram: memory,
             rom,
-            gpu,
+            vram,
         }
     }
 
@@ -193,10 +193,10 @@ impl<'a> MemoryBus<'a> {
                 0
             }
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data().get(address)
+                self.vram.tile_data().get(address)
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps().get(address)
+                self.vram.tile_maps().get(address)
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
                 self.ram.cartridge_ram().get(address)
@@ -210,17 +210,17 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.get8(address)
             }
-            OAM_START..=OAM_LAST => self.gpu.oam().get(address),
+            OAM_START..=OAM_LAST => self.vram.oam().get(address),
             0xFEA0..=0xFEFF => 0, // Null mem
 
             // Hardware registers
-            LCDC => self.gpu.registers().lcdc.into(),
-            STAT => self.gpu.registers().stat.into(),
-            SCY => self.gpu.registers().scy,
-            SCX => self.gpu.registers().scx,
-            LY => self.gpu.registers().ly.into(),
-            LYC => self.gpu.registers().lyc.into(),
-            DMA => self.gpu.registers().dma,
+            LCDC => self.vram.registers().lcdc.into(),
+            STAT => self.vram.registers().stat.into(),
+            SCY => self.vram.registers().scy,
+            SCX => self.vram.registers().scx,
+            LY => self.vram.registers().ly.into(),
+            LYC => self.vram.registers().lyc.into(),
+            DMA => self.vram.registers().dma,
             BANK => self.ram.bank,
             0xFF00..=0xFF7F => {
                 error!("TODO: unmapped I/O register {address}");
@@ -245,10 +245,10 @@ impl<'a> MemoryBus<'a> {
             // mapped or not)
             CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data().set(address, value);
+                self.vram.tile_data().set(address, value);
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps().set(address, value);
+                self.vram.tile_maps().set(address, value);
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
                 self.ram.cartridge_ram().set(address, value);
@@ -261,17 +261,17 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            OAM_START..=OAM_LAST => self.gpu.oam().set(address, value),
+            OAM_START..=OAM_LAST => self.vram.oam().set(address, value),
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
-            LCDC => self.gpu.registers_mut().lcdc = value.into(),
-            STAT => self.gpu.registers_mut().stat = value.into(),
-            SCY => self.gpu.registers_mut().scy = value,
-            SCX => self.gpu.registers_mut().scx = value,
-            LY => self.gpu.registers_mut().ly = value.into(),
-            LYC => self.gpu.registers_mut().lyc = value.into(),
-            DMA => self.gpu.registers_mut().dma = value,
+            LCDC => self.vram.registers_mut().lcdc = value.into(),
+            STAT => self.vram.registers_mut().stat = value.into(),
+            SCY => self.vram.registers_mut().scy = value,
+            SCX => self.vram.registers_mut().scx = value,
+            LY => self.vram.registers_mut().ly = value.into(),
+            LYC => self.vram.registers_mut().lyc = value.into(),
+            DMA => self.vram.registers_mut().dma = value,
             BANK => self.ram.bank = value,
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 

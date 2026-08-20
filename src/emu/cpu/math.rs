@@ -338,7 +338,7 @@ mod tests {
     use super::*;
     use crate::emu::{
         cpu::Cpu,
-        gpu::Gpu,
+        gpu::Vram,
         instruction::Instruction,
         memory::{Address, MemoryBus, RandomAccessMemory},
         rom::Rom,
@@ -393,8 +393,8 @@ mod tests {
         let mut cpu = Cpu::new();
         let mut memory = RandomAccessMemory::default();
         let rom = Rom::empty();
-        let mut gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
+        let mut vram = Vram::default();
+        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
         cpu.registers.a = lhs;
         let mut exe = cpu.exe(&mut memory);
         exe.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
@@ -431,8 +431,8 @@ mod tests {
         let mut cpu = Cpu::new();
         let mut memory = RandomAccessMemory::default();
         let rom = Rom::empty();
-        let mut gpu = Gpu::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
+        let mut vram = Vram::default();
+        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
         cpu.registers.sp = Address(lhs);
         let mut exe = cpu.exe(&mut memory);
         exe.execute(Instruction::Add(Add::Sp(rhs)));
