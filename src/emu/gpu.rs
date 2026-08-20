@@ -9,7 +9,9 @@ use crate::{
     backend::{Color, FrameBuffer},
     emu::{
         clock::{Clock, Cycles},
-        gpu::tile::{Tile, TileData, TileDataArea, TileIndex, TileMapArea},
+        gpu::tile::{
+            Tile, TileData, TileDataArea, TileIndex, TileMapArea, TileMaps,
+        },
         memory::{self, MemoryView},
     },
     util::{Bit, Mask, PackedBits, impl_bit_pack},
@@ -126,7 +128,7 @@ impl Gpu {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
             | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(self.vram.tile_data.tiles(), range)
+                MemoryView::from_slice(self.vram.tile_data.as_slice(), range)
             }
             PpuMode::Drawing => MemoryView::null(range),
         }
@@ -143,7 +145,7 @@ impl Gpu {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
             | PpuMode::VerticalBlank => {
-                MemoryView::from_slice(&self.vram.tile_maps, range)
+                MemoryView::from_slice(self.vram.tile_maps.as_slice(), range)
             }
             PpuMode::Drawing => MemoryView::null(range),
         }
@@ -315,13 +317,10 @@ pub struct Vram {
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
     tile_data: TileData,
-    /// Two 32x32 tile maps
-    ///
-    /// The first half of the block is the lower tile map; second half is the
-    /// upper tile map.
+    /// Two 32x32 tile maps (lower and upper)
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: [TileIndex; 2048],
+    tile_maps: TileMaps,
 }
 
 impl Vram {
@@ -404,12 +403,11 @@ impl Vram {
         // index to find the underlying TILE
         // TODO use a const for tile map width. Maybe TileMap should be a
         // struct?
-        let tile_x: usize = (x / Tile::WIDTH).into();
-        let tile_y: usize = (y / Tile::HEIGHT).into();
-        let map_index = tile_y * 32 + tile_x;
+        let tile_x = x / Tile::WIDTH;
+        let tile_y = y / Tile::HEIGHT;
         // TODO select tile map correctly
         // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
-        let tile_index = self.tile_maps[map_index];
+        let tile_index = self.tile_maps.get(tile_x, tile_y, TileMapArea::Low);
 
         // Now convert the index to an actual tile
         let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
@@ -450,7 +448,7 @@ impl Default for Vram {
             registers: Registers::default(),
             oam: [ObjectAttributes::default(); 40],
             tile_data: TileData::default(),
-            tile_maps: [TileIndex::default(); 2048],
+            tile_maps: TileMaps::default(),
         }
     }
 }

@@ -175,7 +175,7 @@ pub struct TileData {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: [Tile; Self::BLOCK_LENGTH * 3],
+    data: [Tile; Self::BLOCK_LENGTH * 3],
 }
 
 impl TileData {
@@ -183,8 +183,10 @@ impl TileData {
     const BLOCK_LENGTH: usize = 128;
 
     /// Get a slice of **all** tiles (not just the active blocks)
-    pub fn tiles(&self) -> &[Tile] {
-        &self.tile_data
+    ///
+    /// Use this for the memory bus.
+    pub fn as_slice(&self) -> &[Tile] {
+        &self.data
     }
 
     /// Get a tile by index
@@ -196,8 +198,8 @@ impl TileData {
         // Select tile slice based on the area
         let slice = match area {
             // Tile memory is 3 blocks of 128 tiles
-            TileDataArea::Low => &self.tile_data[..(Self::BLOCK_LENGTH * 2)],
-            TileDataArea::High => &self.tile_data[Self::BLOCK_LENGTH..],
+            TileDataArea::Low => &self.data[..(Self::BLOCK_LENGTH * 2)],
+            TileDataArea::High => &self.data[Self::BLOCK_LENGTH..],
         };
         debug_assert_eq!(slice.len(), 256, "Tile data should be 256 tiles");
 
@@ -213,14 +215,67 @@ impl TileData {
     pub fn set(&mut self, index: u8, tile: Tile) {
         // Right now only the lower 2 blocks are accessible because of the
         // bounds of u8. I'll expand that if there's a need for it.
-        self.tile_data[index as usize] = tile;
+        self.data[index as usize] = tile;
     }
 }
 
 impl Default for TileData {
     fn default() -> Self {
         Self {
-            tile_data: [Tile::default(); Self::BLOCK_LENGTH * 3],
+            data: [Tile::default(); Self::BLOCK_LENGTH * 3],
+        }
+    }
+}
+
+/// Container for two tile maps (low and high)
+///
+/// A tile map is a collection of tile *indexes*. Those indexes point to
+/// [TileData], where the pixel values are actually stored. [TileMapArea]
+/// selects between the two maps.
+///
+/// https://gbdev.io/pandocs/Tile_Maps.html
+#[derive(Debug)]
+pub struct TileMaps {
+    /// `[lower, upper]` tile maps
+    maps: [[TileIndex; Self::LENGTH]; 2],
+}
+
+impl TileMaps {
+    /// Width of a single map, in tiles
+    const WIDTH: usize = 32;
+    /// Height of a single map, in tiles
+    const HEIGHT: usize = 32;
+    /// Number of total tiles in a single map
+    const LENGTH: usize = Self::WIDTH * Self::HEIGHT;
+
+    /// Get a slice of both tile maps
+    ///
+    /// Use this for the memory bus.
+    pub fn as_slice(&self) -> &[TileIndex] {
+        self.maps.as_flattened()
+    }
+
+    /// Get a tile by its coordinate
+    ///
+    /// `(0,0)` is the first tile, `(1,0)` is the second, etc. `area` is
+    /// determined from the `LCDC` register; the exact bit to use depends on
+    /// the context.
+    ///
+    /// https://gbdev.io/pandocs/pixel_fifo.html#get-tile
+    pub fn get(&self, x: u8, y: u8, area: TileMapArea) -> TileIndex {
+        let map = match area {
+            TileMapArea::Low => &self.maps[0],
+            TileMapArea::High => &self.maps[1],
+        };
+        let index = usize::from(y) * 32 + usize::from(x);
+        map[index]
+    }
+}
+
+impl Default for TileMaps {
+    fn default() -> Self {
+        Self {
+            maps: [[TileIndex(0); Self::LENGTH]; 2],
         }
     }
 }
