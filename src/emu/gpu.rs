@@ -10,7 +10,7 @@ use crate::{
     emu::{
         clock::{Clock, Cycles},
         gpu::tile::{Tile, TileData, TileDataArea, TileIndex, TileMapArea},
-        memory::{self, MemoryBlock, MemoryRead, MemoryWrite},
+        memory::{self, MemoryView},
     },
     util::{Bit, Mask, PackedBits, impl_bit_pack},
 };
@@ -104,27 +104,14 @@ impl Gpu {
     ///
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
     /// return 0 and writes will do nothing.
-    pub fn oam(&self) -> impl MemoryRead {
+    pub fn oam(&self) -> MemoryView<'_> {
         // OAM is only accessible to the CPU in blank modes
+        let range = memory::OAM;
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                Some(&self.vram.oam)
+                MemoryView::from_slice(&self.vram.oam, range)
             }
-            PpuMode::OamScan | PpuMode::Drawing => None,
-        }
-    }
-
-    /// Access the Object Attribute Memory
-    ///
-    /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, reads will
-    /// return 0 and writes will do nothing.
-    pub fn oam_mut(&mut self) -> impl MemoryWrite {
-        // OAM is only accessible to the CPU in blank modes
-        match self.mode() {
-            PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
-                Some(&mut self.vram.oam)
-            }
-            PpuMode::OamScan | PpuMode::Drawing => None,
+            PpuMode::OamScan | PpuMode::Drawing => MemoryView::null(range),
         }
     }
 
@@ -132,27 +119,16 @@ impl Gpu {
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
     /// writes will do nothing.
-    pub fn tile_data(&self) -> impl MemoryRead {
+    pub fn tile_data(&self) -> MemoryView<'_> {
         // VRAM is not accessible in mode 3
+        let range = memory::TILE_DATA;
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.vram.tile_data.memory()),
-            PpuMode::Drawing => None,
-        }
-    }
-
-    /// Mutable access tile data memory
-    ///
-    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_data_mut(&mut self) -> impl MemoryWrite {
-        // VRAM is not accessible in mode 3
-        match self.mode() {
-            PpuMode::OamScan
-            | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.vram.tile_data.memory_mut()),
-            PpuMode::Drawing => None,
+            | PpuMode::VerticalBlank => {
+                MemoryView::from_slice(self.vram.tile_data.tiles(), range)
+            }
+            PpuMode::Drawing => MemoryView::null(range),
         }
     }
 
@@ -160,27 +136,16 @@ impl Gpu {
     ///
     /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
     /// writes will do nothing.
-    pub fn tile_maps(&self) -> impl MemoryRead {
+    pub fn tile_maps(&self) -> MemoryView<'_> {
         // VRAM is not accessible in mode 3
+        let range = memory::TILE_MAPS;
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(&self.vram.tile_maps),
-            PpuMode::Drawing => None,
-        }
-    }
-
-    /// Access tile map memory
-    ///
-    /// VRAM is only accessible in modes 0-2. In mode 3, reads will return 0 and
-    /// writes will do nothing.
-    pub fn tile_maps_mut(&mut self) -> impl MemoryWrite {
-        // VRAM is not accessible in mode 3
-        match self.mode() {
-            PpuMode::OamScan
-            | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(&mut self.vram.tile_maps),
-            PpuMode::Drawing => None,
+            | PpuMode::VerticalBlank => {
+                MemoryView::from_slice(&self.vram.tile_maps, range)
+            }
+            PpuMode::Drawing => MemoryView::null(range),
         }
     }
 
@@ -345,7 +310,7 @@ pub struct Vram {
     /// This is a list of up to 40 moveable objects.
     ///
     /// https://gbdev.io/pandocs/OAM.html
-    oam: MemoryBlock<ObjectAttributes>,
+    oam: [ObjectAttributes; 40],
     /// Pixel data for tiles
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
@@ -356,7 +321,7 @@ pub struct Vram {
     /// upper tile map.
     ///
     /// https://gbdev.io/pandocs/Tile_Maps.html
-    tile_maps: MemoryBlock<TileIndex>,
+    tile_maps: [TileIndex; 2048],
 }
 
 impl Vram {
@@ -377,7 +342,6 @@ impl Vram {
         // Take the first 10 objects intersecting the current line
         let mut objects = self
             .oam
-            .as_values()
             .iter()
             .copied()
             .map(|attributes| Object { attributes, height })
@@ -445,7 +409,7 @@ impl Vram {
         let map_index = tile_y * 32 + tile_x;
         // TODO select tile map correctly
         // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
-        let tile_index = self.tile_maps.as_values()[map_index];
+        let tile_index = self.tile_maps[map_index];
 
         // Now convert the index to an actual tile
         let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
@@ -484,9 +448,9 @@ impl Default for Vram {
     fn default() -> Self {
         Self {
             registers: Registers::default(),
-            oam: MemoryBlock::new(memory::OAM),
+            oam: [ObjectAttributes::default(); 40],
             tile_data: TileData::default(),
-            tile_maps: MemoryBlock::new(memory::TILE_MAPS),
+            tile_maps: [TileIndex::default(); 2048],
         }
     }
 }
@@ -944,7 +908,7 @@ mod tests {
             .set(0, Tile::from_pixels([[ColorIndex::Two; 8]; 8]));
 
         // Put an object in the top-left with that tile
-        vram.oam.as_values_mut()[0] = ObjectAttributes {
+        vram.oam[0] = ObjectAttributes {
             y: Shifted::shift(0),
             x: Shifted::shift(0),
             tile_index: TileIndex::default(),

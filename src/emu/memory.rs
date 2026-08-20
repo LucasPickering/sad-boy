@@ -1,3 +1,7 @@
+mod memory_view;
+
+pub use memory_view::MemoryView;
+
 use crate::{
     emu::{
         gpu::Gpu,
@@ -7,12 +11,8 @@ use crate::{
     util::IntDisplay,
 };
 use std::{
-    any,
-    cell::RefCell,
     fmt::{self, Debug, Display},
-    mem,
     ops::{Add, AddAssign},
-    ptr,
     range::RangeInclusive,
     str::FromStr,
 };
@@ -120,7 +120,7 @@ bounds!(
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
     /// RAM and registers
-    memory: &'a mut Memory,
+    ram: &'a mut RandomAccessMemory,
     /// Read-only memory from the cartridge
     rom: &'a Rom,
     /// VRAM and graphics-related IO registers
@@ -129,8 +129,16 @@ pub struct MemoryBus<'a> {
 
 impl<'a> MemoryBus<'a> {
     /// Construct a memory bus from references to each addressable component
-    pub fn new(memory: &'a mut Memory, rom: &'a Rom, gpu: &'a mut Gpu) -> Self {
-        Self { memory, rom, gpu }
+    pub fn new(
+        memory: &'a mut RandomAccessMemory,
+        rom: &'a Rom,
+        gpu: &'a mut Gpu,
+    ) -> Self {
+        Self {
+            ram: memory,
+            rom,
+            gpu,
+        }
     }
 
     /// Load the CPU instruction at the given address
@@ -185,15 +193,15 @@ impl<'a> MemoryBus<'a> {
                 0
             }
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data().byte(address)
+                self.gpu.tile_data().get(address)
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps().byte(address)
+                self.gpu.tile_maps().get(address)
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.memory.cartridge_ram.byte(address)
+                self.ram.cartridge_ram().get(address)
             }
-            RAM_START..=RAM_LAST => self.memory.ram.byte(address),
+            RAM_START..=RAM_LAST => self.ram.ram().get(address),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // TODO dedupe with set8
                 // Make sure mirrored references can't go out of bounds
@@ -202,7 +210,7 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.get8(address)
             }
-            OAM_START..=OAM_LAST => self.gpu.oam().byte(address),
+            OAM_START..=OAM_LAST => self.gpu.oam().get(address),
             0xFEA0..=0xFEFF => 0, // Null mem
 
             // Hardware registers
@@ -213,15 +221,13 @@ impl<'a> MemoryBus<'a> {
             LY => self.gpu.registers().ly.into(),
             LYC => self.gpu.registers().lyc.into(),
             DMA => self.gpu.registers().dma,
-            BANK => self.memory.bank,
+            BANK => self.ram.bank,
             0xFF00..=0xFF7F => {
                 error!("TODO: unmapped I/O register {address}");
                 0
             }
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => {
-                self.memory.high_ram.byte(address)
-            }
+            HIGH_RAM_START..=HIGH_RAM_LAST => self.ram.high_ram().get(address),
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
                 0
@@ -239,15 +245,15 @@ impl<'a> MemoryBus<'a> {
             // mapped or not)
             CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
             TILE_DATA_START..=TILE_DATA_LAST => {
-                self.gpu.tile_data_mut().set_byte(address, value);
+                self.gpu.tile_data().set(address, value);
             }
             TILE_MAPS_START..=TILE_MAPS_LAST => {
-                self.gpu.tile_maps_mut().set_byte(address, value);
+                self.gpu.tile_maps().set(address, value);
             }
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                self.memory.cartridge_ram.set_byte(address, value);
+                self.ram.cartridge_ram().set(address, value);
             }
-            RAM_START..=RAM_LAST => self.memory.ram.set_byte(address, value),
+            RAM_START..=RAM_LAST => self.ram.ram().set(address, value),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
@@ -255,7 +261,7 @@ impl<'a> MemoryBus<'a> {
                 let address = Address(address.0 - ECHO_RAM_START + RAM_START);
                 self.set8(address, value);
             }
-            OAM_START..=OAM_LAST => self.gpu.oam_mut().set_byte(address, value),
+            OAM_START..=OAM_LAST => self.gpu.oam().set(address, value),
             0xFEA0..=0xFEFF => {} // Null mem
 
             // Hardware registers
@@ -266,11 +272,11 @@ impl<'a> MemoryBus<'a> {
             LY => self.gpu.registers_mut().ly = value.into(),
             LYC => self.gpu.registers_mut().lyc = value.into(),
             DMA => self.gpu.registers_mut().dma = value,
-            BANK => self.memory.bank = value,
+            BANK => self.ram.bank = value,
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
-                self.memory.high_ram.set_byte(address, value);
+                self.ram.high_ram().set(address, value);
             }
 
             0xFFFF => error!("TODO: Interrupt Enabled Register write"),
@@ -300,7 +306,7 @@ impl<'a> MemoryBus<'a> {
     /// This is `true` only during initial boot. The bootstrap unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
     pub fn is_bootstrapping(&self) -> bool {
-        self.memory.bank == 0
+        self.ram.bank == 0
     }
 }
 
@@ -401,6 +407,19 @@ impl AddressRange {
         self.range.last
     }
 
+    /// Get the offset between the given address and the start of this range
+    ///
+    /// Panics if the address is not in this range. Use this for pointer math on
+    /// addressed memory.
+    pub fn offset(&self, address: Address) -> usize {
+        assert!(
+            self.contains(address),
+            "Address {address} out of bounds {self}",
+        );
+        (address.0 - self.start().0).into()
+    }
+
+    /// Is the address within this range?
     pub fn contains(&self, address: Address) -> bool {
         self.range.contains(&address)
     }
@@ -413,179 +432,24 @@ impl Display for AddressRange {
     }
 }
 
-/// A fixed-length block of memory
-///
-/// This can hold any type `T`, and can be treated as either a slice of `T`
-/// **or** a slice of bytes. `T` must have a stable byte representation! Don't
-/// forget `#[repr(C)]`.
-///
-/// Use this for data that is accessible via the memory bus. If memory doesn't
-/// have any semantic meaning (e.g. general-purpose RAM), just use `Memory<u8>`.
-#[derive(Debug)]
-pub struct MemoryBlock<T> {
-    /// Range of memory addresses covered by this block
-    range: AddressRange,
-    /// Fixed-length binary data
-    ///
-    /// The length could be known and fixed at compile time, but plumbing that
-    /// around is tedious with Rust's limited const generics. This slice will
-    /// only be allocated once, when the memory is initialized.
-    ///
-    /// Invariant: length is always equal to `self.range.len()`
-    memory: Box<[T]>,
-}
-
-impl<T> MemoryBlock<T> {
-    /// Initialize a new fixed-length block of memory with all zeroes
-    pub fn new(range: AddressRange) -> Self
-    where
-        T: Clone + Default,
-    {
-        let len_bytes = range.len();
-        let size = mem::size_of::<T>();
-        debug_assert_eq!(
-            len_bytes % size,
-            0,
-            "Memory length must be divisible by item size: \
-            T={t}, len_bytes={len_bytes}, size={size}",
-            t = any::type_name::<T>(),
-        );
-        let len_t = len_bytes / size;
-        Self {
-            range,
-            memory: vec![T::default(); len_t].into_boxed_slice(),
-        }
-    }
-
-    /// Get the inner slice of `T` values
-    pub fn as_values(&self) -> &[T] {
-        &self.memory
-    }
-
-    /// Get a mutable reference to the inner slice of `T` values
-    #[cfg(test)]
-    pub fn as_values_mut(&mut self) -> &mut [T] {
-        &mut self.memory
-    }
-
-    /// Translate a global memory address into an offset for a single byte in
-    /// `self.memory`
-    ///
-    /// This panics if the address is out of range. The returned offset is
-    /// guaranteed to be less than the **byte-length** of `self.memory`.
-    fn byte_offset(&self, address: Address) -> usize {
-        assert!(
-            self.range.contains(address),
-            "Address {address} out of bounds {range}",
-            range = self.range
-        );
-        let offset = (address.0 - self.range.start().0) as usize;
-        // Double extra sanity check
-        let len_bytes = mem::size_of_val(&*self.memory);
-        debug_assert!(
-            offset < len_bytes,
-            "Offset {offset} >= byte length {len_bytes}"
-        );
-        offset
-    }
-}
-
-impl<T> MemoryRead for &MemoryBlock<T> {
-    fn byte(self, address: Address) -> u8 {
-        let offset = self.byte_offset(address);
-        let ptr = ptr::from_ref(&*self.memory).cast::<u8>();
-        // SAFETY:
-        // - byte_offset() ensures the offset is in range for self.memory
-        // - u8 is the smallest type so we don't have to worry about alignment
-        // - TODO how guarantee no padding?
-        unsafe { *ptr.add(offset) }
-    }
-}
-
-impl<T> MemoryWrite for &mut MemoryBlock<T> {
-    fn set_byte(self, address: Address, value: u8) {
-        let offset = self.byte_offset(address);
-        let ptr = ptr::from_mut(&mut *self.memory).cast::<u8>();
-        // SAFETY:
-        // - byte_offset() ensures the offset is in range for self.memory
-        // - u8 is the smallest type so we don't have to worry about alignment
-        //   or corrupted bytes
-        unsafe { *ptr.add(offset) = value }
-    }
-}
-
-/// If `Some`, read from the memory; if `None`, return `0`
-///
-/// The GPU uses modal memory that is dynamically inaccessible.
-impl<T> MemoryRead for Option<&MemoryBlock<T>> {
-    fn byte(self, address: Address) -> u8 {
-        if let Some(memory) = self {
-            memory.byte(address)
-        } else {
-            0
-        }
-    }
-}
-
-/// If `Some`, write to the memory; if `None`, do nothing
-///
-/// The GPU uses modal memory that is dynamically inaccessible.
-impl<T> MemoryWrite for Option<&mut MemoryBlock<T>> {
-    fn set_byte(self, address: Address, value: u8) {
-        if let Some(memory) = self {
-            memory.set_byte(address, value);
-        }
-    }
-}
-
-/// A container that provides read access to some chunk of addressable memory
-///
-/// This is separate from [MemoryWrite] because it's not always implemented on
-/// just `&T`/`&mut T`.
-pub trait MemoryRead {
-    /// Get the byte at the given memory address
-    fn byte(self, address: Address) -> u8;
-}
-
-/// A container that provides write access to some chunk of addressable memory
-///
-/// This is separate from [MemoryRead] because it's not always implemented on
-/// just `&T`/`&mut T`.
-pub trait MemoryWrite {
-    /// Set the value of the byte at the given memory address
-    fn set_byte(self, address: Address, value: u8);
-}
-
-impl<T> MemoryRead for &RefCell<MemoryBlock<T>> {
-    fn byte(self, address: Address) -> u8 {
-        self.borrow().byte(address)
-    }
-}
-
-impl<T> MemoryWrite for &RefCell<MemoryBlock<T>> {
-    fn set_byte(self, address: Address, value: u8) {
-        self.borrow_mut().set_byte(address, value);
-    }
-}
-
 /// Container for RAM and memory-related registers
 #[derive(Debug)]
-pub struct Memory {
+pub struct RandomAccessMemory {
     // ===== RAM =====
     /// General-purpose writable memory
     ///
     /// This is boxed because 8KiB is too big to reasonably put on the stack.
-    ram: MemoryBlock<u8>,
+    ram: [u8; RAM.len()],
     /// Additional general-purpose writable memory
     ///
     /// This is most commonly used when accessed by the `LD HL, SP+imm8`
     /// instruction.
-    high_ram: MemoryBlock<u8>,
+    high_ram: [u8; HIGH_RAM.len()],
     /// Additional RAM provided by the cartridge
     ///
     /// This is similar to the other two RAM blocks, except some cartridges can
     /// provide multiple banks and switch between them.
-    cartridge_ram: MemoryBlock<u8>,
+    cartridge_ram: [u8; CARTRIDGE_RAM.len()],
     // ===== Registers =====
     /// `BANK`: Boot ROM mapping control
     ///
@@ -594,21 +458,33 @@ pub struct Memory {
     bank: u8,
 }
 
-#[cfg(test)]
-impl Memory {
+impl RandomAccessMemory {
+    fn ram(&self) -> MemoryView<'_> {
+        MemoryView::from_slice(&self.ram, RAM)
+    }
+
+    fn high_ram(&self) -> MemoryView<'_> {
+        MemoryView::from_slice(&self.high_ram, HIGH_RAM)
+    }
+
+    fn cartridge_ram(&self) -> MemoryView<'_> {
+        MemoryView::from_slice(&self.cartridge_ram, CARTRIDGE_RAM)
+    }
+
     /// Get the value of the `BANK` register
+    #[cfg(test)]
     pub fn bank(&self) -> u8 {
         self.bank
     }
 }
 
-impl Default for Memory {
+impl Default for RandomAccessMemory {
     fn default() -> Self {
         Self {
             bank: 0,
-            ram: MemoryBlock::new(RAM),
-            high_ram: MemoryBlock::new(HIGH_RAM),
-            cartridge_ram: MemoryBlock::new(CARTRIDGE_RAM),
+            ram: [0; RAM.len()],
+            high_ram: [0; HIGH_RAM.len()],
+            cartridge_ram: [0; CARTRIDGE_RAM.len()],
         }
     }
 }

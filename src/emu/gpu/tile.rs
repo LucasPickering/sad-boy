@@ -4,10 +4,7 @@
 //! containing [TileIndex]es. These indexes map to actual tiles.
 
 use crate::{
-    emu::{
-        gpu::ColorIndex,
-        memory::{self, MemoryBlock},
-    },
+    emu::gpu::ColorIndex,
     util::{Bit, impl_bit_pack},
 };
 use std::mem;
@@ -178,12 +175,17 @@ pub struct TileData {
     /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: MemoryBlock<Tile>,
+    tile_data: [Tile; Self::BLOCK_LENGTH * 3],
 }
 
 impl TileData {
     /// Number of tiles in each block
     const BLOCK_LENGTH: usize = 128;
+
+    /// Get a slice of **all** tiles (not just the active blocks)
+    pub fn tiles(&self) -> &[Tile] {
+        &self.tile_data
+    }
 
     /// Get a tile by index
     ///
@@ -192,16 +194,15 @@ impl TileData {
     /// register, but objects always use [TileDataArea::Low].
     pub fn get(&self, index: TileIndex, area: TileDataArea) -> Tile {
         // Select tile slice based on the area
-        let tiles = self.tile_data.as_values();
         let slice = match area {
             // Tile memory is 3 blocks of 128 tiles
-            TileDataArea::Low => &tiles[..(Self::BLOCK_LENGTH * 2)],
-            TileDataArea::High => &tiles[Self::BLOCK_LENGTH..],
+            TileDataArea::Low => &self.tile_data[..(Self::BLOCK_LENGTH * 2)],
+            TileDataArea::High => &self.tile_data[Self::BLOCK_LENGTH..],
         };
         debug_assert_eq!(slice.len(), 256, "Tile data should be 256 tiles");
 
         // SAFETY: Length is always 256, covered by assertion
-        tiles[index.0 as usize]
+        slice[index.0 as usize]
     }
 
     /// Set a tile by index
@@ -212,24 +213,14 @@ impl TileData {
     pub fn set(&mut self, index: u8, tile: Tile) {
         // Right now only the lower 2 blocks are accessible because of the
         // bounds of u8. I'll expand that if there's a need for it.
-        self.tile_data.as_values_mut()[index as usize] = tile;
-    }
-
-    /// Get a view into the underlying tile memory
-    pub fn memory(&self) -> &MemoryBlock<Tile> {
-        &self.tile_data
-    }
-
-    /// Get a mutable view into the underlying tile memory
-    pub fn memory_mut(&mut self) -> &mut MemoryBlock<Tile> {
-        &mut self.tile_data
+        self.tile_data[index as usize] = tile;
     }
 }
 
 impl Default for TileData {
     fn default() -> Self {
         Self {
-            tile_data: MemoryBlock::new(memory::TILE_DATA),
+            tile_data: [Tile::default(); Self::BLOCK_LENGTH * 3],
         }
     }
 }

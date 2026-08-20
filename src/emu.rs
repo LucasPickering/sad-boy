@@ -17,7 +17,7 @@ use crate::{
     backend::{Backend, FrameBuffer},
     emu::{
         gpu::Gpu,
-        memory::{Memory, MemoryBus},
+        memory::{MemoryBus, RandomAccessMemory},
         rom::Rom,
     },
 };
@@ -32,7 +32,7 @@ pub struct GameBoy {
     gpu: Gpu,
     /// Read-only memory from the cartridge
     rom: Rom,
-    memory: Memory,
+    ram: RandomAccessMemory,
     /// Next frame to be drawn to the screen
     ///
     /// This is incrementally updated by the GPU during a frame, then pushed
@@ -59,7 +59,7 @@ impl GameBoy {
             cpu: Cpu::new(),
             gpu: Gpu::default(),
             rom,
-            memory: Memory::default(),
+            ram: RandomAccessMemory::default(),
             frame: FrameBuffer::new(),
         }
     }
@@ -92,7 +92,7 @@ impl GameBoy {
 
         // Progress the CPU
         let mut memory_bus =
-            MemoryBus::new(&mut self.memory, &self.rom, &mut self.gpu);
+            MemoryBus::new(&mut self.ram, &self.rom, &mut self.gpu);
         self.cpu.tick(&self.clock, &mut memory_bus);
 
         // Progress the GPU
@@ -147,7 +147,7 @@ mod tests {
             emulator.tick(&mut backend);
         }
 
-        assert_eq!(emulator.memory.bank(), 1);
+        assert_eq!(emulator.ram.bank(), 1);
         assert_eq!(emulator.clock.cycles(), Cycles(23_580_484));
         // TODO check CPU state
 

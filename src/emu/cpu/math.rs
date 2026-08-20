@@ -340,7 +340,7 @@ mod tests {
         cpu::Cpu,
         gpu::Gpu,
         instruction::Instruction,
-        memory::{Address, Memory, MemoryBus},
+        memory::{Address, MemoryBus, RandomAccessMemory},
         rom::Rom,
     };
     use proptest::{prelude::Strategy, property_test};
@@ -391,7 +391,7 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::new();
-        let mut memory = Memory::default();
+        let mut memory = RandomAccessMemory::default();
         let rom = Rom::empty();
         let mut gpu = Gpu::default();
         let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
@@ -429,7 +429,7 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::new();
-        let mut memory = Memory::default();
+        let mut memory = RandomAccessMemory::default();
         let rom = Rom::empty();
         let mut gpu = Gpu::default();
         let mut memory = MemoryBus::new(&mut memory, &rom, &mut gpu);
