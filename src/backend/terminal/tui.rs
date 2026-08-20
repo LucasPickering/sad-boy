@@ -8,19 +8,19 @@ use crate::{
     },
     debugger::Debugger,
     emu::{
-        Clock, Cpu, Cycles, GameBoy, InstructionInfo, instruction::Instruction,
+        Address, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
+        instruction::Instruction,
     },
     util::IntDisplay,
 };
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::Buffer,
-    style::{Modifier, Styled},
+    style::{Color, Modifier, Style, Styled},
     symbols::merge::MergeStrategy,
-    text::Text,
+    text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Widget},
 };
-use std::fmt::{self, Display};
 
 /// Terminal UI surrounding the emulator
 ///
@@ -131,28 +131,48 @@ struct CpuInfo<'a> {
 impl Widget for CpuInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         /// Register display helper
-        struct Reg<T>(T);
+        struct Reg<T>(&'static str, T);
 
-        impl Display for Reg<u8> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "{v} ({hex}, {bin})",
-                    v = self.0,
-                    hex = IntDisplay::hex(self.0),
-                    bin = IntDisplay::binary(self.0),
-                )
+        impl From<Reg<u8>> for Line<'static> {
+            fn from(reg: Reg<u8>) -> Self {
+                let Reg(name, value) = reg;
+                Line::from_iter([
+                    format!("{name}: ").into(),
+                    Span::styled(
+                        format!(
+                            "{value} ({hex}, {bin})",
+                            hex = IntDisplay::hex(value),
+                            bin = IntDisplay::binary(value),
+                        ),
+                        u8_style(value),
+                    ),
+                ])
             }
         }
 
-        impl Display for Reg<u16> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "{v} ({hex})",
-                    v = self.0,
-                    hex = IntDisplay::hex(self.0),
-                )
+        impl From<Reg<u16>> for Line<'static> {
+            fn from(reg: Reg<u16>) -> Self {
+                let Reg(name, value) = reg;
+                Line::from_iter([
+                    format!("{name}: ").into(),
+                    Span::styled(
+                        format!(
+                            "{value} ({hex})",
+                            hex = IntDisplay::hex(value)
+                        ),
+                        u16_style(value),
+                    ),
+                ])
+            }
+        }
+
+        impl From<Reg<Address>> for Line<'static> {
+            fn from(reg: Reg<Address>) -> Self {
+                let Reg(name, value) = reg;
+                Line::from_iter([
+                    format!("{name}: ").into(),
+                    Span::styled(value.to_string(), u16_style(value.0)),
+                ])
             }
         }
 
@@ -167,39 +187,42 @@ impl Widget for CpuInfo<'_> {
             });
         let next = self.cpu.current_instruction();
         let registers = self.cpu.registers();
-        let lines = [
-            format!("CLOCK: {}", self.clock.cycles()),
+        let lines: [Line; _] = [
+            format!("CLOCK: {}", self.clock.cycles()).into(),
             format!(
                 "PREV: {instr} ({dur}cy/{size}B)",
                 instr = previous.instruction,
                 dur = previous.duration,
                 size = previous.size,
-            ),
+            )
+            .into(),
             format!(
                 "NEXT: {instr} ({dur}cy/{size}B)",
                 instr = next.instruction,
                 dur = next.duration,
                 size = next.size,
-            ),
+            )
+            .into(),
             // Registers
-            format!("pc: {}", registers.pc()),
-            format!("sp: {}", registers.sp()),
-            format!("a: {}", Reg(registers.a())),
+            Reg("pc", registers.pc()).into(),
+            Reg("sp", registers.sp()).into(),
+            Reg("a", registers.a()).into(),
             format!(
                 "f: {} {}",
                 IntDisplay::hex(registers.f().as_u8()),
                 registers.f().unpack()
-            ),
-            format!("af: {}", Reg(registers.af())),
-            format!("b: {}", Reg(registers.b())),
-            format!("c: {}", Reg(registers.c())),
-            format!("bc: {}", Reg(registers.bc())),
-            format!("d: {}", Reg(registers.d())),
-            format!("e: {}", Reg(registers.e())),
-            format!("de: {}", Reg(registers.de())),
-            format!("h: {}", Reg(registers.h())),
-            format!("l: {}", Reg(registers.l())),
-            format!("hl: {}", Reg(registers.hl())),
+            )
+            .into(),
+            Reg("af", registers.af()).into(),
+            Reg("b", registers.b()).into(),
+            Reg("c", registers.c()).into(),
+            Reg("bc", registers.bc()).into(),
+            Reg("d", registers.d()).into(),
+            Reg("e", registers.e()).into(),
+            Reg("de", registers.de()).into(),
+            Reg("h", registers.h()).into(),
+            Reg("l", registers.l()).into(),
+            Reg("hl", registers.hl()).into(),
             format!(
                 "INT: {}",
                 if self.cpu.interrupts_enabled() {
@@ -207,7 +230,8 @@ impl Widget for CpuInfo<'_> {
                 } else {
                     "DISABLE"
                 }
-            ),
+            )
+            .into(),
         ];
         Text::from_iter(lines).render(area, buf);
     }
@@ -222,4 +246,41 @@ fn panel(title: &'_ str, area: Rect, buf: &mut Buffer) -> Rect {
         .merge_borders(MergeStrategy::Fuzzy);
     (&block).render(area, buf);
     block.inner(area)
+}
+
+/// Get text styling for an 8-bit value
+///
+/// This provides some visual guidance when reading bytes.
+/// https://simonomi.dev/blog/color-code-your-bytes/
+fn u8_style(value: u8) -> Style {
+    // https://github.com/simonomi/hexapoda/blob/bf8bd6297d649b3fb1f100bdc99272705fa558b3/src/buffer/widget/hex.rs#L210
+    let color = match value {
+        0x00 => Color::Rgb(0x80, 0x80, 0x80), // grey
+        0x01..0x10 => Color::Rgb(0xFF, 0x71, 0xA9), // red
+        0x10..0x20 => Color::Rgb(0xFF, 0x7A, 0x78), // salmon
+        0x20..0x30 => Color::Rgb(0xFF, 0x81, 0x23), // red-orange
+        0x30..0x40 => Color::Rgb(0xF7, 0x93, 0x00), // yellow-orange
+        0x40..0x50 => Color::Rgb(0xE6, 0x9F, 0x00), // yellow
+        0x50..0x60 => Color::Rgb(0xC1, 0xB2, 0x00), // green-yellow
+        0x60..0x70 => Color::Rgb(0x82, 0xC6, 0x00), // lime
+        0x70..0x80 => Color::Rgb(0x00, 0xD5, 0x00), // green
+        0x80..0x90 => Color::Rgb(0x00, 0xD4, 0x59), // clover
+        0x90..0xA0 => Color::Rgb(0x00, 0xD0, 0x91), // teal
+        0xA0..0xB0 => Color::Rgb(0x00, 0xCC, 0xBB), // cyan
+        0xB0..0xC0 => Color::Rgb(0x00, 0xC7, 0xDE), // light blue
+        0xC0..0xD0 => Color::Rgb(0x00, 0xBE, 0xFF), // blue
+        0xD0..0xE0 => Color::Rgb(0x6C, 0xAF, 0xFF), // blurple
+        0xE0..0xF0 => Color::Rgb(0xB2, 0x98, 0xFF), // purple
+        0xF0..0xFF => Color::Rgb(0xFF, 0x4D, 0xFF), // pink
+        0xFF => Color::White,
+    };
+    Style::new().fg(color)
+}
+
+/// Get text styling for a 16-bit value
+///
+/// This provides some visual guidance when reading bytes.
+/// https://simonomi.dev/blog/color-code-your-bytes/
+fn u16_style(value: u16) -> Style {
+    u8_style(value.to_be_bytes()[0])
 }
