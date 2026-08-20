@@ -216,9 +216,9 @@ pub struct Registers {
     pub lcdc: PackedBits<LcdControl>,
     /// LCD status
     pub stat: PackedBits<LcdStatus>,
-    /// Viewport scroll X
+    /// Background scroll X
     pub scx: u8,
-    /// Viewport scroll Y
+    /// Background scroll Y
     pub scy: u8,
     /// Current horizontal line being drawn on the LCD (**read-only**)
     ///
@@ -239,7 +239,7 @@ pub struct LcdControl {
     lcd_enable: bool,
     /// Tile map in use for the window
     window_tile_map: TileMapArea,
-    ///
+    /// Enable/disable the window
     ///
     /// It's complicated - see the Pandocs
     window_enable: bool,
@@ -253,7 +253,7 @@ pub struct LcdControl {
     object_size: ObjectSize,
     /// Enable/disable object display
     object_enable: bool,
-    /// Disable the background AND window
+    /// Enable/disable the background AND window
     ///
     /// If zero, the `window_enable` flag is ignored. On CGB, this is actually
     /// the `priority` flag.
@@ -418,7 +418,7 @@ impl Vram {
         let line = self.registers.ly;
         // TODO the height should be changeable between objects? maybe we need
         // to delay between each object fetch
-        let height = self.registers.lcdc.unpack().object_size.height();
+        let height = self.lcdc().object_size.height();
         // Take the first 10 objects intersecting the current line
         let mut objects = self
             .oam
@@ -434,11 +434,13 @@ impl Vram {
         objects
     }
 
-    /// Look up a tile by index
-    fn get_tile(&self, index: TileIndex) -> Tile {
+    /// Look up a tile by index for the given addressing mode
+    ///
+    /// Background and window us the `bg_window_area` flag in the `LCDC`
+    /// register, but objects always use the low area.
+    fn get_tile(&self, index: TileIndex, area: TileDataArea) -> Tile {
         // Select active tiles based on the LCDC flag
-        let tiles =
-            self.get_tiles(self.registers.lcdc.unpack().bg_window_tiles);
+        let tiles = self.get_tiles(area);
         // SAFETY: tiles is an array of 256, so the index must be valid
         tiles[index.0 as usize]
     }
@@ -462,24 +464,73 @@ impl Vram {
     }
 
     /// Calculate the color index for a specific pixel
+    ///
+    /// This is the main rendering logic that walks through
+    /// objects/window/background.
     fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
-        let lcdc = self.registers.lcdc.unpack();
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
-        // First, check for objects
+
+        self.get_object_pixel(objects, x, y)
+            // TODO check window
+            .unwrap_or_else(|| self.get_background_pixel(x, y))
+    }
+
+    /// Calculate a pixel from visible objects
+    ///
+    /// Return `None` if no objects intersect the pixel.
+    fn get_object_pixel(
+        &self,
+        objects: &[Object],
+        x: u8,
+        y: u8,
+    ) -> Option<ColorIndex> {
+        let lcdc = self.lcdc();
         if lcdc.object_enable {
             // These are pre-sorted by x
             if let Some((tile_index, x, y)) = objects
                 .iter()
                 .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
             {
-                let tile = self.get_tile(tile_index);
-                return tile.color_index(x, y);
+                let tile = self.get_tile(tile_index, TileDataArea::Low);
+                return Some(tile.color_index(x, y));
             }
         }
+        None
+    }
 
-        // TODO check window
-        // TODO check background
-        ColorIndex::Zero
+    /// Calculate a pixel from the background map
+    ///
+    /// The background covers the entire screen and wraps at the edge, so every
+    /// pixel will have a background color.
+    fn get_background_pixel(&self, x: u8, y: u8) -> ColorIndex {
+        // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
+        // Map the x/y coordinate within the tile map. This will scroll and
+        // intentionally wraps at the end of the map boundary. The map is 32x32
+        // tiles and each tile is 8x8, so it's 256x256 pixels.
+        let x = self.registers.scx.wrapping_add(x);
+        let y = self.registers.scy.wrapping_add(y);
+
+        // First we need to find the tile INDEX in the tile MAP, then use THAT
+        // index to find the underlying TILE
+        // TODO use a const for tile map width. Maybe TileMap should be a
+        // struct?
+        let tile_x: usize = (x / Tile::WIDTH).into();
+        let tile_y: usize = (y / Tile::HEIGHT).into();
+        let map_index = tile_y * 32 + tile_x;
+        // TODO select tile map correctly
+        // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
+        let tile_index = self.tile_maps.as_values()[map_index];
+
+        // Now convert the index to an actual tile
+        let tile = self.get_tile(tile_index, self.lcdc().bg_window_tiles);
+        // Get the pixel coordinates within the tile
+        tile.color_index(x % Tile::WIDTH, y % Tile::HEIGHT)
+
+        // TODO the scroll registers should only be changeable on each tile
+        // fetch (or at the beginning of the scanline), not on each pixel. The
+        // entire rendering pipeline needs a rewrite to model the FIFO.
+        // TODO how do we return WHITE if disabled in LCDC? it may not be in the
+        // palette
     }
 
     /// Look up a color from the active color palette
@@ -493,6 +544,13 @@ impl Vram {
             ColorIndex::Two => Color::LIGHT_GRAY,
             ColorIndex::Three => Color::WHITE,
         }
+    }
+
+    /// Get the unpacked value of the `LCDC` register
+    fn lcdc(&self) -> LcdControl {
+        // It may be slow to repeatedly unpack this all the time. Maybe we could
+        // cache it? Or provide some way to decode a single bit a time?
+        self.registers.lcdc.unpack()
     }
 }
 
@@ -1063,8 +1121,7 @@ mod tests {
             object_enable: true,
             ..lcdc
         });
-        // TODO don't hard-code 128
-        vram.tile_data.as_values_mut()[128] =
+        vram.tile_data.as_values_mut()[0] =
             Tile::from_color_indexes([[ColorIndex::Two; 8]; 8]);
 
         // Put an object in the top-left with that tile
