@@ -1,9 +1,6 @@
 //! Terminal input handling
 
-use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
-use std::time::Duration;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// A processed input event
 ///
@@ -36,23 +33,8 @@ pub enum TuiEvent {
     DebugStepInstruction,
 }
 
-/// Load the next input event from the terminal
-///
-/// Return `None` if there was an error or no event occurred within the
-/// given timeout.
-pub fn next_event(timeout: Duration) -> Option<InputEvent> {
-    // It's possible that polling the terminal directly in the main loop
-    // will be too slow. In that case, we can punt this to another thread.
-    if event::poll(timeout).unwrap() {
-        let event = event::read().unwrap();
-        map_event(event)
-    } else {
-        None
-    }
-}
-
 /// Map a crossterm event to an [InputEvent]
-fn map_event(event: Event) -> Option<InputEvent> {
+pub fn map_event(event: Event) -> Option<InputEvent> {
     let Event::Key(KeyEvent {
         kind: KeyEventKind::Press,
         code,

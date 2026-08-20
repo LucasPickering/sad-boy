@@ -15,7 +15,7 @@ use crate::{
     emu::GameBoy,
 };
 use crossterm::{
-    cursor,
+    cursor, event,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
@@ -27,7 +27,9 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
+    thread,
     time::Duration,
 };
 use tracing::{debug, error, info};
@@ -51,19 +53,21 @@ type RatatuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 /// This uses the [Kitty Terminal Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 /// to draw to stdout. It reads input from stdin.
 pub struct TerminalBackend {
+    /// Receiver channel for input events
+    input: mpsc::Receiver<InputEvent>,
+    /// Flag set by the signal handler when a termination signal is received
+    quit: Arc<AtomicBool>,
     /// Channel to write output to (stdout)
     terminal: RatatuiTerminal,
     /// Interactive portions around the emulator screen
     tui: Tui,
-    /// Flag set by the signal handler when a termination signal is received
-    quit: Arc<AtomicBool>,
 }
 
 impl TerminalBackend {
     /// Initialize a new terminal adapter with the given pixel dimensions
     ///
     /// This will register listeners to listen for quit signals from the
-    /// OS.
+    /// OS and spawn a background thread for the input queue.
     pub fn new() -> io::Result<Self> {
         initialize_panic_handler();
         initialize_terminal()?;
@@ -77,10 +81,17 @@ impl TerminalBackend {
             signal_hook::flag::register(signal, quit.clone()).unwrap();
         }
 
+        // Input listens in a background thread because it's much faster
+        let (input_tx, input_rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("input".to_owned())
+            .spawn(move || Self::input_thread(input_tx))?;
+
         Ok(Self {
+            input: input_rx,
+            quit,
             terminal,
             tui: Tui::default(),
-            quit,
         })
     }
 
@@ -145,7 +156,7 @@ impl TerminalBackend {
 
         // Drain the input queue
         let mut handled = false;
-        while let Some(event) = input::next_event(input_timeout) {
+        while let Some(event) = self.next_event(input_timeout) {
             handled = true;
             debug!(?event, "Input event");
             match event {
@@ -157,6 +168,36 @@ impl TerminalBackend {
             }
         }
         ControlFlow::Continue(handled)
+    }
+
+    /// Load the next input event from the queue
+    ///
+    /// Return `None` if there was an error or no event occurred within the
+    /// given timeout.
+    fn next_event(&self, timeout: Duration) -> Option<InputEvent> {
+        match self.input.recv_timeout(timeout) {
+            Ok(event) => Some(event),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            // Input thread is never supposed to exit
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("Input channel closed")
+            }
+        }
+    }
+
+    /// Background thread monitoring input
+    ///
+    /// Polling the input in the main thread is too slow, so it's pushed into a
+    /// background thread. The main thread just has to check an mpsc channel,
+    /// which is much faster.
+    fn input_thread(tx: mpsc::Sender<InputEvent>) {
+        loop {
+            // I'm using unwrap() because an error indicates a bug
+            let event = event::read().unwrap();
+            if let Some(event) = input::map_event(event) {
+                tx.send(event).unwrap();
+            }
+        }
     }
 }
 
