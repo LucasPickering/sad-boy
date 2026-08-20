@@ -93,7 +93,7 @@ impl Debug for Rom {
 
 /// Parse the CPU instruction at the given address
 ///
-/// The input should be the **full** byte slice (either ROM or bootloader). The
+/// The input should be the **full** byte slice (either ROM or bootstrap). The
 /// address defines the offset within that slice to start parsing.
 ///
 /// Return the instruction as well as the number of bytes it consumed. This is

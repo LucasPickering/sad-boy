@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn step_frame() {
         let mut backend = HeadlessBackend::new();
-        // Instructions come from the bootloader so we don't need a ROM
+        // Instructions come from the bootstrap so we don't need a ROM
         let mut emulator = GameBoy::test(vec![0; 1024]);
         let mut debugger = Debugger::new();
 
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn step_instruction() {
         let mut backend = HeadlessBackend::new();
-        // Instructions come from the bootloader so we don't need a ROM
+        // Instructions come from the bootstrap so we don't need a ROM
         let mut emulator = GameBoy::test(vec![]);
         let mut debugger = Debugger::new();
 

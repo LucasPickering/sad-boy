@@ -130,11 +130,11 @@ mod tests {
         0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C,
     ];
 
-    /// Run the emulator until the bootloader exits, then verify it matches the
+    /// Run the emulator until the bootstrap exits, then verify it matches the
     /// known state
     #[test]
-    fn bootloader() {
-        // Create an empty ROM that just holds the Nintendo logo. The bootloader
+    fn bootstrap() {
+        // Create an empty ROM that just holds the Nintendo logo. The bootstrap
         // will load and display the logo from here
         let mut rom_data = vec![0; memory::CARTRIDGE_ROM_0.len()];
         rom_data[0x104..(0x104 + NINTENDO_LOGO.len())]
@@ -142,8 +142,8 @@ mod tests {
 
         let mut backend = HeadlessBackend::new();
         let mut emulator = GameBoy::test(rom_data);
-        // Run until the program counter hits the end of the bootloader
-        while emulator.cpu.registers().pc() <= memory::BOOTLOADER.last() {
+        // Run until the program counter hits the end of the bootstrap
+        while emulator.cpu.registers().pc() <= memory::BOOTSTRAP.last() {
             emulator.tick(&mut backend);
         }
 

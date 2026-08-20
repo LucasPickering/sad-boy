@@ -48,7 +48,7 @@ pub struct Cpu {
 impl Cpu {
     /// Initialize the CPU
     pub fn new() -> Self {
-        // The first instruction is right from the bootloader. Hard-coding this
+        // The first instruction is right from the bootstrap. Hard-coding this
         // feels kinda icky but boy it is a lot easier than plumbing everything.
         let first_instruction = Instruction::Ld(Load::R16Const {
             dest: Register16::Sp,
@@ -999,18 +999,18 @@ impl Instruction {
 #[derive(Debug)]
 struct InstructionCache {
     cache: HashMap<Address, (Instruction, u16)>,
-    /// `true` while running the bootloader, `false` once it's been unmapped
+    /// `true` while running the bootstrap, `false` once it's been unmapped
     ///
-    /// This is used to track when the bootloader is unmapped so the cache can
+    /// This is used to track when the bootstrap is unmapped so the cache can
     /// be cleared.
-    is_bootloading: bool,
+    is_bootstrapping: bool,
 }
 
 impl InstructionCache {
     fn new() -> Self {
         Self {
             cache: HashMap::new(),
-            is_bootloading: true,
+            is_bootstrapping: true,
         }
     }
 
@@ -1020,10 +1020,10 @@ impl InstructionCache {
         memory_bus: &MemoryBus<'_>,
         address: Address,
     ) -> (Instruction, u16) {
-        // When exiting the bootloader, clear the cache because all the
+        // When exiting the bootstrap, clear the cache because all the
         // instructions in that range are going to change
-        if memory_bus.is_bootloading() != self.is_bootloading {
-            self.is_bootloading = memory_bus.is_bootloading();
+        if memory_bus.is_bootstrapping() != self.is_bootstrapping {
+            self.is_bootstrapping = memory_bus.is_bootstrapping();
             self.cache.clear();
         }
 

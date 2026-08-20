@@ -21,21 +21,21 @@ use winnow::{Parser, error::ContextError};
 
 /// Code executed at boot, before entering the ROM
 ///
-/// The last instruction executed by the bootloader will unmap itself by writing
+/// The last instruction executed by the bootstrap will unmap itself by writing
 /// to the `BANK` register (`0xFF50`).
 ///
 /// https://gbdev.io/pandocs/Power_Up_Sequence.html
 ///
 /// Downloaded from https://gbdev.gg8.se/files/roms/bootroms/
-const BOOTLOADER_CODE: &[u8] = include_bytes!("../../bootloader/dmg_boot.bin");
+const BOOTSTRAP_CODE: &[u8] = include_bytes!("../../bootstrap/dmg_boot.bin");
 // ===== Memory Blocks =====
 // https://gbdev.io/pandocs/Memory_Map.html
-/// Range containing the bootloader code
+/// Range containing the bootstrap code
 ///
-/// This range is mapped *on top of* the ROM code while the bootloader is
+/// This range is mapped *on top of* the ROM code while the bootstrap is
 /// running.
-pub const BOOTLOADER: AddressRange =
-    AddressRange::new("Bootloader", 0x0000, 0x0100);
+pub const BOOTSTRAP: AddressRange =
+    AddressRange::new("Bootstrap", 0x0000, 0x0100);
 /// Static portion of the cartridge ROM
 ///
 /// This is the first bank of the ROM, which **cannot** be switched.
@@ -95,7 +95,7 @@ macro_rules! bounds {
 
 // Generate extra consts for pattern matching
 bounds!(
-    BOOTLOADER,
+    BOOTSTRAP,
     CARTRIDGE_ROM_0,
     CARTRIDGE_ROM_N,
     CARTRIDGE_ROM,
@@ -138,7 +138,7 @@ impl<'a> MemoryBus<'a> {
     /// Return the instruction as well as the number of bytes it consumed. This
     /// is the number of bytes that the PC should advance.
     pub fn get_instruction(&self, address: Address) -> (Instruction, u16) {
-        // Instruction parsing is set up to read from either the bootloader or
+        // Instruction parsing is set up to read from either the bootstrap or
         // the ROM. Reading from anywhere else is a bug.
         //
         // Since parsing requires a slice instead of accessing bytes one at a
@@ -150,12 +150,12 @@ impl<'a> MemoryBus<'a> {
         );
 
         // Cache instructions because parsing is expensive
-        let source = if self.is_bootloading() {
-            // If the bootloader is enabled, then we should only be running
-            // bootloader code. Out-of-bounds here implies the bootloader exited
+        let source = if self.is_bootstrapping() {
+            // If the bootstrap is enabled, then we should only be running
+            // bootstrap code. Out-of-bounds here implies the bootstrap exited
             // without unmapping itself, or something else re-mapped the
-            // bootloader.
-            BOOTLOADER_CODE
+            // bootstrap.
+            BOOTSTRAP_CODE
         } else {
             self.rom.bytes()
         };
@@ -170,9 +170,9 @@ impl<'a> MemoryBus<'a> {
     pub fn get8(&self, address: Address) -> u8 {
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
-            BOOTLOADER_START..=BOOTLOADER_LAST if self.is_bootloading() => {
+            BOOTSTRAP_START..=BOOTSTRAP_LAST if self.is_bootstrapping() => {
                 let index: usize = address.0.into();
-                BOOTLOADER_CODE[index]
+                BOOTSTRAP_CODE[index]
             }
             // Cartridge ROM
             CARTRIDGE_ROM_0_START..=CARTRIDGE_ROM_0_LAST => {
@@ -235,7 +235,7 @@ impl<'a> MemoryBus<'a> {
     pub fn set8(&mut self, address: Address, value: u8) {
         // https://gbdev.io/pandocs/Memory_Map.html
         match address.0 {
-            // ROM is immutable (bootloader too, so it doesn't matter if it's
+            // ROM is immutable (bootstrapp too, so it doesn't matter if it's
             // mapped or not)
             CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
             TILE_DATA_START..=TILE_DATA_LAST => {
@@ -295,11 +295,11 @@ impl<'a> MemoryBus<'a> {
         self.set8(address + 1, high);
     }
 
-    /// Is the bootloader currently mapped?
+    /// Is the bootstrapp currently mapped?
     ///
-    /// This is `true` only during initial boot. The bootloader unmaps itself
+    /// This is `true` only during initial boot. The bootstrap unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
-    pub fn is_bootloading(&self) -> bool {
+    pub fn is_bootstrapping(&self) -> bool {
         self.memory.bank == 0
     }
 }
