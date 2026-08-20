@@ -9,7 +9,7 @@ use crate::{
     backend::{Color, FrameBuffer},
     emu::{
         clock::{Clock, Cycles},
-        gpu::tile::{Tile, TileIndex},
+        gpu::tile::{Tile, TileData, TileDataArea, TileIndex, TileMapArea},
         memory::{self, MemoryBlock, MemoryRead, MemoryWrite},
     },
     util::{Bit, Mask, PackedBits, impl_bit_pack},
@@ -137,7 +137,7 @@ impl Gpu {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(&self.vram.tile_data),
+            | PpuMode::VerticalBlank => Some(self.vram.tile_data.memory()),
             PpuMode::Drawing => None,
         }
     }
@@ -151,7 +151,7 @@ impl Gpu {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(&mut self.vram.tile_data),
+            | PpuMode::VerticalBlank => Some(self.vram.tile_data.memory_mut()),
             PpuMode::Drawing => None,
         }
     }
@@ -277,50 +277,6 @@ impl_bit_pack! {
     Bit(0).mask() => bg_window_enable,
 }
 
-/// Selector for a block of tile map memory
-///
-/// Used for multiple flags in [LcdControl].
-#[derive(Clone, Copy, Debug)]
-enum TileMapArea {
-    /// `0x9800–0x9BFF`
-    Low,
-    /// `0x9C00–0x9FFF`
-    High,
-}
-
-impl_bit_pack! {
-    enum TileMapArea;
-    0b0 => Low,
-    0b1 => High,
-}
-
-/// Selector for which blocks of tile data are in use.
-///
-/// There are 3 blocks:
-/// - Block 0: `0x8000-0x87FF`
-/// - Block 1: `0x8800-0x8FFF`
-/// - Block 2: `0x9000-0x97FF`
-///
-/// At any given time two blocks are accessible: 0-1 or 1-2.
-#[derive(Clone, Copy, Debug)]
-enum TileDataArea {
-    /// `0x8000-0x8FFF` (blocks 0 and 1)
-    ///
-    /// This is called "`$8000` addressing mode" in Pandocs
-    Low,
-    /// `0x8800-0x97FF` (blocks 1 and 2)
-    ///
-    /// This is called "`$8800` addressing mode" in Pandocs
-    High,
-}
-
-impl_bit_pack! {
-    enum TileDataArea;
-    // Backwards!
-    0b0 => High,
-    0b1 => Low,
-}
-
 /// Size of the next object to draw (flag in [LcdControl])
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ObjectSize {
@@ -392,12 +348,8 @@ pub struct Vram {
     oam: MemoryBlock<ObjectAttributes>,
     /// Pixel data for tiles
     ///
-    /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
-    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
-    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
-    ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    tile_data: MemoryBlock<Tile>,
+    tile_data: TileData,
     /// Two 32x32 tile maps
     ///
     /// The first half of the block is the lower tile map; second half is the
@@ -437,35 +389,6 @@ impl Vram {
         objects
     }
 
-    /// Look up a tile by index for the given addressing mode
-    ///
-    /// Background and window us the `bg_window_area` flag in the `LCDC`
-    /// register, but objects always use the low area.
-    fn get_tile(&self, index: TileIndex, area: TileDataArea) -> Tile {
-        // Select active tiles based on the LCDC flag
-        let tiles = self.get_tiles(area);
-        // SAFETY: tiles is an array of 256, so the index must be valid
-        tiles[index.0 as usize]
-    }
-
-    /// Get the block of accessible tiles for the given addressing mode
-    ///
-    /// Each addressing mode can access exactly 256 tiles, so that's encoded in
-    /// the return type.
-    fn get_tiles(&self, area: TileDataArea) -> [Tile; 256] {
-        let tiles = self.tile_data.as_values();
-        debug_assert_eq!(
-            tiles.len(),
-            128 * 3,
-            "Tile data should be 3 blocks of 128 tiles"
-        );
-        let slice = match area {
-            TileDataArea::Low => &tiles[..256],
-            TileDataArea::High => &tiles[128..],
-        };
-        slice.try_into().expect("256 tiles accessible at a time")
-    }
-
     /// Calculate the color index for a specific pixel
     ///
     /// This is the main rendering logic that walks through
@@ -494,7 +417,7 @@ impl Vram {
                 .iter()
                 .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
             {
-                let tile = self.get_tile(tile_index, TileDataArea::Low);
+                let tile = self.tile_data.get(tile_index, TileDataArea::Low);
                 return Some(tile.pixel(x, y));
             }
         }
@@ -525,7 +448,7 @@ impl Vram {
         let tile_index = self.tile_maps.as_values()[map_index];
 
         // Now convert the index to an actual tile
-        let tile = self.get_tile(tile_index, self.lcdc().bg_window_tiles);
+        let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
         // Get the pixel coordinates within the tile
         tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)
 
@@ -562,7 +485,7 @@ impl Default for Vram {
         Self {
             registers: Registers::default(),
             oam: MemoryBlock::new(memory::OAM),
-            tile_data: MemoryBlock::new(memory::TILE_DATA),
+            tile_data: TileData::default(),
             tile_maps: MemoryBlock::new(memory::TILE_MAPS),
         }
     }
@@ -1017,8 +940,8 @@ mod tests {
             object_enable: true,
             ..lcdc
         });
-        vram.tile_data.as_values_mut()[0] =
-            Tile::from_pixels([[ColorIndex::Two; 8]; 8]);
+        vram.tile_data
+            .set(0, Tile::from_pixels([[ColorIndex::Two; 8]; 8]));
 
         // Put an object in the top-left with that tile
         vram.oam.as_values_mut()[0] = ObjectAttributes {

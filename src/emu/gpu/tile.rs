@@ -3,7 +3,13 @@
 //! A [Tile] is an 8x8 array of pixels. A [TileMap] is a layer of indirection,
 //! containing [TileIndex]es. These indexes map to actual tiles.
 
-use crate::{emu::gpu::ColorIndex, util::Bit};
+use crate::{
+    emu::{
+        gpu::ColorIndex,
+        memory::{self, MemoryBlock},
+    },
+    util::{Bit, impl_bit_pack},
+};
 use std::mem;
 
 /// An 8x8 collection of pixels
@@ -99,7 +105,7 @@ impl TileLine {
 /// https://gbdev.io/pandocs/Tile_Maps.html#tile-indexes
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
-pub struct TileIndex(pub u8); // TODO make field private
+pub struct TileIndex(u8);
 const _: () = assert!(mem::size_of::<TileIndex>() == 1);
 
 impl TileIndex {
@@ -110,5 +116,120 @@ impl TileIndex {
     pub fn next(self) -> Self {
         debug_assert!(self.0 < 255, "Cannot get next tile for tile index 255");
         Self(self.0 + 1)
+    }
+}
+
+/// Selector for a block of tile *map* memory
+///
+/// Used for multiple flags in [LcdControl].
+#[derive(Clone, Copy, Debug)]
+pub enum TileMapArea {
+    /// `0x9800–0x9BFF`
+    Low,
+    /// `0x9C00–0x9FFF`
+    High,
+}
+
+impl_bit_pack! {
+    enum TileMapArea;
+    0b0 => Low,
+    0b1 => High,
+}
+
+/// Selector for which blocks of tile data are in use.
+///
+/// There are 3 blocks:
+/// - Block 0: `0x8000-0x87FF`
+/// - Block 1: `0x8800-0x8FFF`
+/// - Block 2: `0x9000-0x97FF`
+///
+/// At any given time two blocks are accessible: 0-1 or 1-2.
+#[derive(Clone, Copy, Debug)]
+pub enum TileDataArea {
+    /// `0x8000-0x8FFF` (blocks 0 and 1)
+    ///
+    /// This is called "`$8000` addressing mode" in Pandocs
+    Low,
+    /// `0x8800-0x97FF` (blocks 1 and 2)
+    ///
+    /// This is called "`$8800` addressing mode" in Pandocs
+    High,
+}
+
+impl_bit_pack! {
+    enum TileDataArea;
+    // Backwards!
+    0b0 => High,
+    0b1 => Low,
+}
+
+/// An array of tile *definitions*
+///
+/// This is where the tile pixel data is defined. Objects reference this
+/// directly, but the window and background go through [TileMap].
+///
+/// https://gbdev.io/pandocs/Tile_Data.html
+#[derive(Debug)]
+pub struct TileData {
+    /// Tile pixel data
+    ///
+    /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
+    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
+    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
+    ///
+    /// https://gbdev.io/pandocs/Tile_Data.html
+    tile_data: MemoryBlock<Tile>,
+}
+
+impl TileData {
+    /// Number of tiles in each block
+    const BLOCK_LENGTH: usize = 128;
+
+    /// Get a tile by index
+    ///
+    /// `area` defines which tile blocks are active: low+middle or middle+high.
+    /// Background and window use the `bg_window_area` flag in the `LCDC`
+    /// register, but objects always use [TileDataArea::Low].
+    pub fn get(&self, index: TileIndex, area: TileDataArea) -> Tile {
+        // Select tile slice based on the area
+        let tiles = self.tile_data.as_values();
+        let slice = match area {
+            // Tile memory is 3 blocks of 128 tiles
+            TileDataArea::Low => &tiles[..(Self::BLOCK_LENGTH * 2)],
+            TileDataArea::High => &tiles[Self::BLOCK_LENGTH..],
+        };
+        debug_assert_eq!(slice.len(), 256, "Tile data should be 256 tiles");
+
+        // SAFETY: Length is always 256, covered by assertion
+        tiles[index.0 as usize]
+    }
+
+    /// Set a tile by index
+    ///
+    /// This is for generating test data only. The Game Boy never needs to do
+    /// this; mutations are made via the memory view.
+    #[cfg(test)]
+    pub fn set(&mut self, index: u8, tile: Tile) {
+        // Right now only the lower 2 blocks are accessible because of the
+        // bounds of u8. I'll expand that if there's a need for it.
+        self.tile_data.as_values_mut()[index as usize] = tile;
+    }
+
+    /// Get a view into the underlying tile memory
+    pub fn memory(&self) -> &MemoryBlock<Tile> {
+        &self.tile_data
+    }
+
+    /// Get a mutable view into the underlying tile memory
+    pub fn memory_mut(&mut self) -> &mut MemoryBlock<Tile> {
+        &mut self.tile_data
+    }
+}
+
+impl Default for TileData {
+    fn default() -> Self {
+        Self {
+            tile_data: MemoryBlock::new(memory::TILE_DATA),
+        }
     }
 }
