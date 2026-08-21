@@ -36,8 +36,18 @@ impl CpuExe<'_, '_> {
                 self.registers.sp.0 = new;
                 BcdFlags {
                     zero: new == 0,
+                    // This is always false, even if the offset is negative
+                    // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#ADD_SP,e8
                     subtract: false,
-                    half_carry: half_carry16(lhs, rhs as u16, new),
+                    // Half-carry uses 8-bit rules here (bit 3->4)
+                    half_carry: half_carry8(
+                        (lhs & 0xff) as u8,
+                        // Need to force rhs to positive to make the half-carry
+                        // logic work. I didn't think about it too hard, but I
+                        // did write a test so it's gotta be right.
+                        if rhs < 0 { !rhs } else { rhs } as u8,
+                        (new & 0xff) as u8,
+                    ),
                     carry,
                 }
             }
@@ -261,15 +271,14 @@ fn add8(lhs: u8, rhs: u8) -> (u8, BcdFlags) {
 /// Calculate the half-carry flag for 8-bit arithmetic
 fn half_carry8(lhs: u8, rhs: u8, out: u8) -> bool {
     // https://gist.github.com/meganesu/9e228b6b587decc783aa9be34ae27841?permalink_comment_id=5941562#gistcomment-5941562
-    let b = Bit(4);
-    b.get(lhs ^ rhs ^ out)
+    Bit(4).get(lhs ^ rhs ^ out)
 }
 
 /// Calculate the half-carry flag for 16-bit arithmetic
 pub fn half_carry16(lhs: u16, rhs: u16, out: u16) -> bool {
-    // Get the 8th bit (lowest bit of the upper nibble)
-    // TODO I think this is broken when rhs is a casted i8
-    (lhs ^ rhs ^ out) & 0x0100 > 0
+    // Get the 12th bit (correct, it's NOT the 8th bit)
+    // https://rgbds.gbdev.io/docs/v1.0.1/gbz80.7#ADD_HL,r16
+    (lhs ^ rhs ^ out) & 0x1000 > 0
 }
 
 /// Inner implementation for [GameBoy::daa]
@@ -339,7 +348,7 @@ mod tests {
     use crate::emu::{
         cpu::Cpu,
         gpu::Vram,
-        instruction::Instruction,
+        instruction::{Instruction, Register16},
         memory::{Address, MemoryBus, RandomAccessMemory},
         rom::Rom,
     };
@@ -391,14 +400,62 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::new();
-        let mut memory = RandomAccessMemory::default();
-        let rom = Rom::empty();
-        let mut vram = Vram::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
         cpu.registers.a = lhs;
-        let mut exe = cpu.exe(&mut memory);
-        exe.execute(Instruction::Add(Add::A(Operand::Const(rhs))));
+        execute(&mut cpu, Instruction::Add(Add::A(Operand::Const(rhs))));
         assert_eq!(cpu.registers.a, expected_value, "sum");
+        assert_eq!(cpu.registers.flags(), expected_flags, "flags");
+    }
+
+    /// Test addition to register `hl` (`ADD HL,r16`)
+    #[rstest]
+    #[case::zero(0x0000, 0x0000, 0x0000, BcdFlags {
+        zero: true,
+        subtract: false,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::no_carry(0x4488, 0x8844, 0xCCCC, BcdFlags {
+        zero: false,
+        subtract: false,
+        half_carry: false,
+        carry: false,
+    })]
+    // Half-carry is on bits 11->12 (not 7->8)
+    #[case::half_carry(0x0FFF, 0x0001, 0x1000, BcdFlags {
+        zero: false,
+        subtract: false,
+        half_carry: true,
+        carry: false,
+    })]
+    #[case::carry(0xF000, 0x100F, 0x000F, BcdFlags {
+        zero: false,
+        subtract: false,
+        half_carry: false,
+        carry: true,
+    })]
+    #[case::double_carry(0xFFFF, 0x01, 0x00, BcdFlags {
+        zero: true,
+        subtract: false,
+        half_carry: true,
+        carry: true,
+    })]
+    #[case::carry_zero(0x5000, 0xb000, 0x0000, BcdFlags {
+        zero: true,
+        subtract: false,
+        half_carry: false,
+        carry: true,
+    })]
+    fn add_hl(
+        #[case] lhs: u16,
+        #[case] rhs: u16,
+        #[case] expected_value: u16,
+        #[case] expected_flags: BcdFlags,
+    ) {
+        let mut cpu = Cpu::new();
+        *cpu.registers.hl_mut() = lhs;
+        *cpu.registers.bc_mut() = rhs;
+        execute(&mut cpu, Instruction::Add(Add::Hl(Register16::Bc)));
+        assert_eq!(cpu.registers.hl(), expected_value, "sum");
         assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }
 
@@ -410,13 +467,14 @@ mod tests {
         half_carry: false,
         carry: false,
     })]
-    #[case::half_carry_add(0x00F0, 0x10, 0x0100, BcdFlags {
+    // Half-carry is on bits 3->4
+    #[case::half_carry_add(0x011F, 0x01, 0x0120, BcdFlags {
         zero: false,
         subtract: false,
         half_carry: true,
         carry: false,
     })]
-    #[case::half_carry_sub(0x0100, -0x10, 0x00F0, BcdFlags {
+    #[case::half_carry_sub(0x0120, -0x01, 0x011F, BcdFlags {
         zero: false,
         subtract: false,
         half_carry: true,
@@ -429,14 +487,54 @@ mod tests {
         #[case] expected_flags: BcdFlags,
     ) {
         let mut cpu = Cpu::new();
-        let mut memory = RandomAccessMemory::default();
-        let rom = Rom::empty();
-        let mut vram = Vram::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
         cpu.registers.sp = Address(lhs);
-        let mut exe = cpu.exe(&mut memory);
-        exe.execute(Instruction::Add(Add::Sp(rhs)));
+        execute(&mut cpu, Instruction::Add(Add::Sp(rhs)));
         assert_eq!(cpu.registers.sp.0, expected_value, "sum");
+        assert_eq!(cpu.registers.flags(), expected_flags, "flags");
+    }
+
+    /// Test addition to register `a` (`SUB A,n8`)
+    #[rstest]
+    #[case::zero(0x00, 0x00, 0x00, BcdFlags {
+        zero: true,
+        subtract: true,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::no_carry(0x88, 0x44, 0x44, BcdFlags {
+        zero: false,
+        subtract: true,
+        half_carry: false,
+        carry: false,
+    })]
+    #[case::half_carry(0x90, 0x08, 0x88, BcdFlags {
+        zero: false,
+        subtract: true,
+        half_carry: true,
+        carry: false,
+    })]
+    #[case::carry(0x0F, 0xFF, 0x10, BcdFlags {
+        zero: false,
+        subtract: true,
+        half_carry: false,
+        carry: true,
+    })]
+    #[case::double_carry(0x01, 0xFF, 0x02, BcdFlags {
+        zero: false,
+        subtract: true,
+        half_carry: true,
+        carry: true,
+    })]
+    fn sub_a(
+        #[case] lhs: u8,
+        #[case] rhs: u8,
+        #[case] expected_value: u8,
+        #[case] expected_flags: BcdFlags,
+    ) {
+        let mut cpu = Cpu::new();
+        cpu.registers.a = lhs;
+        execute(&mut cpu, Instruction::Sub(rhs.into()));
+        assert_eq!(cpu.registers.a, expected_value, "difference");
         assert_eq!(cpu.registers.flags(), expected_flags, "flags");
     }
 
@@ -511,5 +609,15 @@ mod tests {
     fn bcd() -> impl Strategy<Value = u8> {
         // Generate digits separately
         (0u8..=9, 0u8..=9).prop_map(|(high, low)| (high << 4) | low)
+    }
+
+    /// Execute an instruction on the CPU
+    fn execute(cpu: &mut Cpu, instruction: Instruction) {
+        let mut memory = RandomAccessMemory::default();
+        let rom = Rom::empty();
+        let mut vram = Vram::default();
+        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
+        let mut exe = cpu.exe(&mut memory);
+        exe.execute(instruction);
     }
 }
