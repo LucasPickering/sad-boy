@@ -8,7 +8,8 @@ mod style;
 
 use crate::{
     backend::terminal::{
-        RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH, input::TuiEvent,
+        RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH,
+        input::{InputAction, InputEvent, TuiEvent},
         tui::style::STYLES,
     },
     debugger::{Debugger, RunState},
@@ -66,13 +67,20 @@ impl Tui {
     }
 
     /// Update UI state according to an input event
+    ///
+    /// Return `true` if the event was consumed, `false` if it can be
+    /// propagated.
     pub fn update(
         &mut self,
         emulator: &GameBoy,
         debugger: &mut Debugger,
-        event: TuiEvent,
-    ) {
-        match event {
+        event: InputEvent,
+    ) -> bool {
+        let Some(InputAction::Tui(action)) = event.action else {
+            // We don't care about this action
+            return false;
+        };
+        match action {
             TuiEvent::Up => self.memory_scroll.prev(),
             TuiEvent::Down => self.memory_scroll.next(),
             TuiEvent::Left => {}
@@ -84,6 +92,7 @@ impl Tui {
                 debugger.step_instruction(emulator);
             }
         }
+        true
     }
 }
 

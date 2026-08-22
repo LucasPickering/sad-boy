@@ -10,7 +10,10 @@ use crate::{
     Debugger,
     backend::{
         Backend, FrameBuffer,
-        terminal::{input::InputEvent, tui::Tui},
+        terminal::{
+            input::{InputAction, InputEvent},
+            tui::Tui,
+        },
     },
     emu::GameBoy,
 };
@@ -157,14 +160,14 @@ impl TerminalBackend {
         // Drain the input queue
         if let Some(event) = self.next_event(input_timeout) {
             debug!(?event, "Input event");
-            match event {
-                // Primary events
-                InputEvent::Quit => return ControlFlow::Break(()),
-                InputEvent::Tui(event) => {
-                    self.tui.update(emulator, debugger, event);
+            match event.action {
+                Some(InputAction::ForceQuit) => ControlFlow::Break(()),
+                _ if self.tui.update(emulator, debugger, event) => {
+                    ControlFlow::Continue(true)
                 }
+                // Event was unhandled
+                _ => ControlFlow::Continue(false),
             }
-            ControlFlow::Continue(true)
         } else {
             ControlFlow::Continue(false)
         }
@@ -194,7 +197,7 @@ impl TerminalBackend {
         loop {
             // I'm using unwrap() because an error indicates a bug
             let event = event::read().unwrap();
-            if let Some(event) = input::map_event(event) {
+            if let Some(event) = InputEvent::from_event(event) {
                 tx.send(event).unwrap();
             }
         }
