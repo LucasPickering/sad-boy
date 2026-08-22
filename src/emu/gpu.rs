@@ -92,6 +92,10 @@ impl Gpu {
         clock.is_frame_end()
     }
 
+    pub fn vram(&self) -> &Vram {
+        &self.vram
+    }
+
     pub fn vram_mut(&mut self) -> &mut Vram {
         &mut self.vram
     }

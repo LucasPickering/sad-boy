@@ -33,7 +33,7 @@ const BOOTSTRAP_CODE: &[u8] = include_bytes!("../../bootstrap/dmg_boot.bin");
 /// This range is mapped *on top of* the ROM code while the bootstrap is
 /// running.
 pub const BOOTSTRAP: AddressRange =
-    AddressRange::new("Bootstrap", 0x0000, 0x0100);
+    AddressRange::new("Bootstrap", 0x0000, 0x00FF);
 /// Static portion of the cartridge ROM
 ///
 /// This is the first bank of the ROM, which **cannot** be switched.
@@ -175,66 +175,12 @@ impl<'a> MemoryBus<'a> {
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        // https://gbdev.io/pandocs/Memory_Map.html
-        match address.0 {
-            BOOTSTRAP_START..=BOOTSTRAP_LAST if self.is_bootstrapping() => {
-                let index: usize = address.0.into();
-                BOOTSTRAP_CODE[index]
-            }
-            // Cartridge ROM
-            CARTRIDGE_ROM_0_START..=CARTRIDGE_ROM_0_LAST => {
-                // SAFETY: Cartridge ROM asserts its own length
-                let index: usize = address.0.into();
-                self.rom.bytes()[index]
-            }
-            CARTRIDGE_ROM_N_START..=CARTRIDGE_ROM_N_LAST => {
-                error!("TODO: Game ROM bank N");
-                0
-            }
-            TILE_DATA_START..=TILE_DATA_LAST => {
-                get_slice_byte_opt(self.vram.tile_data(), TILE_DATA, address)
-            }
-            TILE_MAPS_START..=TILE_MAPS_LAST => {
-                get_slice_byte_opt(self.vram.tile_maps(), TILE_MAPS, address)
-            }
-            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                get_slice_byte(&self.ram.cartridge_ram, CARTRIDGE_RAM, address)
-            }
-            RAM_START..=RAM_LAST => get_slice_byte(&self.ram.ram, RAM, address),
-            ECHO_RAM_START..=ECHO_RAM_LAST => {
-                // Make sure mirrored references can't go out of bounds
-                debug_assert!(ECHO_RAM.len() <= RAM.len());
-                // Shift to the main RAM section
-                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
-                self.get8(address)
-            }
-            OAM_START..=OAM_LAST => {
-                get_slice_byte_opt(self.vram.oam(), OAM, address)
-            }
-            0xFEA0..=0xFEFF => 0, // Null mem
-
-            // Hardware registers
-            LCDC => self.vram.registers().lcdc.into(),
-            STAT => self.vram.registers().stat.into(),
-            SCY => self.vram.registers().scy,
-            SCX => self.vram.registers().scx,
-            LY => self.vram.registers().ly.into(),
-            LYC => self.vram.registers().lyc.into(),
-            DMA => self.vram.registers().dma,
-            BANK => self.ram.bank,
-            0xFF00..=0xFF7F => {
-                error!("TODO: unmapped I/O register {address}");
-                0
-            }
-
-            HIGH_RAM_START..=HIGH_RAM_LAST => {
-                get_slice_byte(&self.ram.high_ram, HIGH_RAM, address)
-            }
-            0xFFFF => {
-                error!("TODO: Interrupt Enabled Register read");
-                0
-            }
+        MemoryBusReadOnly {
+            ram: self.ram,
+            rom: self.rom,
+            vram: self.vram,
         }
+        .get8(address)
     }
 
     /// Set a 1-byte value in memory
@@ -330,6 +276,93 @@ impl<'a> MemoryBus<'a> {
     }
 }
 
+/// TODO
+#[derive(Debug)]
+pub struct MemoryBusReadOnly<'a> {
+    /// RAM and registers
+    pub(super) ram: &'a RandomAccessMemory,
+    /// Read-only memory from the cartridge
+    pub(super) rom: &'a Rom,
+    /// VRAM and graphics-related IO registers
+    pub(super) vram: &'a Vram,
+}
+
+impl MemoryBusReadOnly<'_> {
+    /// Get a 1-byte value from memory
+    ///
+    /// All 16-bit addresses are valid, so this is infallible.
+    pub fn get8(&self, address: Address) -> u8 {
+        // https://gbdev.io/pandocs/Memory_Map.html
+        match address.0 {
+            BOOTSTRAP_START..=BOOTSTRAP_LAST if self.is_bootstrapping() => {
+                let index: usize = address.0.into();
+                BOOTSTRAP_CODE[index]
+            }
+            // Cartridge ROM
+            CARTRIDGE_ROM_0_START..=CARTRIDGE_ROM_0_LAST => {
+                // SAFETY: Cartridge ROM asserts its own length
+                let index: usize = address.0.into();
+                self.rom.bytes()[index]
+            }
+            CARTRIDGE_ROM_N_START..=CARTRIDGE_ROM_N_LAST => {
+                error!("TODO: Game ROM bank N");
+                0
+            }
+            TILE_DATA_START..=TILE_DATA_LAST => {
+                get_slice_byte_opt(self.vram.tile_data(), TILE_DATA, address)
+            }
+            TILE_MAPS_START..=TILE_MAPS_LAST => {
+                get_slice_byte_opt(self.vram.tile_maps(), TILE_MAPS, address)
+            }
+            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
+                get_slice_byte(&self.ram.cartridge_ram, CARTRIDGE_RAM, address)
+            }
+            RAM_START..=RAM_LAST => get_slice_byte(&self.ram.ram, RAM, address),
+            ECHO_RAM_START..=ECHO_RAM_LAST => {
+                // Make sure mirrored references can't go out of bounds
+                debug_assert!(ECHO_RAM.len() <= RAM.len());
+                // Shift to the main RAM section
+                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
+                self.get8(address)
+            }
+            OAM_START..=OAM_LAST => {
+                get_slice_byte_opt(self.vram.oam(), OAM, address)
+            }
+            0xFEA0..=0xFEFF => 0, // Null mem
+
+            // Hardware registers
+            LCDC => self.vram.registers().lcdc.into(),
+            STAT => self.vram.registers().stat.into(),
+            SCY => self.vram.registers().scy,
+            SCX => self.vram.registers().scx,
+            LY => self.vram.registers().ly.into(),
+            LYC => self.vram.registers().lyc.into(),
+            DMA => self.vram.registers().dma,
+            BANK => self.ram.bank,
+            0xFF00..=0xFF7F => {
+                error!("TODO: unmapped I/O register {address}");
+                0
+            }
+
+            HIGH_RAM_START..=HIGH_RAM_LAST => {
+                get_slice_byte(&self.ram.high_ram, HIGH_RAM, address)
+            }
+            0xFFFF => {
+                error!("TODO: Interrupt Enabled Register read");
+                0
+            }
+        }
+    }
+
+    /// Is the bootstrapp currently mapped?
+    ///
+    /// This is `true` only during initial boot. The bootstrap unmaps itself
+    /// with its last instruction, at which point it should never be re-mapped.
+    fn is_bootstrapping(&self) -> bool {
+        self.ram.bank == 0
+    }
+}
+
 /// Address of a byte of memory
 ///
 /// The Game Boy memory range covers the entire `u16` range, so all addresses
@@ -338,6 +371,13 @@ impl<'a> MemoryBus<'a> {
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
+
+impl Address {
+    /// Add `rhs` to `self`, capping at [u16::MAX] without overflowing
+    pub fn saturating_add(self, rhs: u16) -> Self {
+        Self(self.0.saturating_add(rhs))
+    }
+}
 
 impl Add<u16> for Address {
     type Output = Self;

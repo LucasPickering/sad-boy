@@ -9,10 +9,11 @@ use crate::{
     debugger::Debugger,
     emu::{
         Address, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
-        instruction::Instruction,
+        MemoryBusReadOnly, instruction::Instruction,
     },
     util::IntDisplay,
 };
+use itertools::Itertools;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::Buffer,
@@ -98,9 +99,12 @@ impl Widget for TuiWidget<'_> {
                 cpu: self.emulator.cpu(),
             }
             .render(cpu_area, buf);
-
-            // Memory
-            panel("Memory", memory_area, buf);
+            MemoryInfo {
+                // TODO round down to nearest 8
+                offset: self.emulator.cpu().registers().pc(),
+                memory_bus: self.emulator.memory(),
+            }
+            .render(memory_area, buf);
         }
     }
 }
@@ -130,6 +134,7 @@ struct CpuInfo<'a> {
 
 impl Widget for CpuInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        // TODO replace Reg with just functions
         /// Register display helper
         struct Reg<T>(&'static str, T);
 
@@ -234,6 +239,53 @@ impl Widget for CpuInfo<'_> {
             .into(),
         ];
         Text::from_iter(lines).render(area, buf);
+    }
+}
+
+/// Widget to inspect memory
+struct MemoryInfo<'a> {
+    /// First visible address
+    offset: Address,
+    memory_bus: MemoryBusReadOnly<'a>,
+}
+
+impl Widget for MemoryInfo<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        const BYTES_PER_LINE: u16 = 8;
+
+        fn fmt_address(address: Address) -> Span<'static> {
+            Span::styled(
+                IntDisplay::hex(address.0).without_prefix().to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )
+        }
+
+        fn fmt_byte(value: u8) -> Span<'static> {
+            Span::styled(
+                IntDisplay::hex(value).without_prefix().to_string(),
+                u8_style(value),
+            )
+        }
+
+        let area = panel("Memory", area, buf);
+        // TODO cap at 0xffff - don't overflow
+        let text: Text = (0..area.height)
+            .map(|line| {
+                let address = self.offset + line * BYTES_PER_LINE;
+                let bytes = (0..BYTES_PER_LINE).map(|offset| {
+                    let address = address + offset;
+                    let value = self.memory_bus.get8(address);
+                    fmt_byte(value)
+                });
+
+                [fmt_address(address)]
+                    .into_iter()
+                    .chain(bytes)
+                    .intersperse(" ".into())
+                    .collect::<Line>()
+            })
+            .collect();
+        text.render(area, buf);
     }
 }
 

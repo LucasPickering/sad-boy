@@ -11,7 +11,7 @@ mod rom;
 
 pub use clock::{Clock, Cycles};
 pub use cpu::{Cpu, InstructionInfo};
-pub use memory::Address;
+pub use memory::{Address, MemoryBusReadOnly};
 
 use crate::{
     backend::{Backend, FrameBuffer},
@@ -72,6 +72,15 @@ impl GameBoy {
     /// Get the CPU state
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
+    }
+
+    /// Get a read-only memory view
+    pub fn memory(&self) -> MemoryBusReadOnly<'_> {
+        MemoryBusReadOnly {
+            ram: &self.ram,
+            rom: &self.rom,
+            vram: self.gpu.vram(),
+        }
     }
 
     /// Get the in-memory frame buffer

@@ -306,6 +306,8 @@ impl<T: BitPack> From<PackedBits<T>> for u8 {
 pub struct IntDisplay<T> {
     value: T,
     mode: DisplayMode,
+    /// Should the `0x`/`0b` prefix be shown?
+    prefix: bool,
 }
 
 impl<T> IntDisplay<T> {
@@ -314,6 +316,7 @@ impl<T> IntDisplay<T> {
         Self {
             value,
             mode: DisplayMode::Binary,
+            prefix: true,
         }
     }
 
@@ -322,24 +325,44 @@ impl<T> IntDisplay<T> {
         Self {
             value,
             mode: DisplayMode::Hex,
+            prefix: true,
+        }
+    }
+
+    /// Disable the base prefix (e.g. `0x`)
+    pub fn without_prefix(mut self) -> Self {
+        self.prefix = false;
+        self
+    }
+
+    fn prefix(&self) -> &'static str {
+        if self.prefix {
+            match self.mode {
+                DisplayMode::Binary => "0b",
+                DisplayMode::Hex => "0x",
+            }
+        } else {
+            ""
         }
     }
 }
 
 impl Display for IntDisplay<u8> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.prefix())?;
         match self.mode {
-            DisplayMode::Binary => write!(f, "0b{:0>8b}", self.value),
-            DisplayMode::Hex => write!(f, "0x{:0>2X}", self.value),
+            DisplayMode::Binary => write!(f, "{:0>8b}", self.value),
+            DisplayMode::Hex => write!(f, "{:0>2X}", self.value),
         }
     }
 }
 
 impl Display for IntDisplay<u16> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.prefix())?;
         match self.mode {
-            DisplayMode::Binary => write!(f, "0b{:0>16b}", self.value),
-            DisplayMode::Hex => write!(f, "0x{:0>4X}", self.value),
+            DisplayMode::Binary => write!(f, "{:0>16b}", self.value),
+            DisplayMode::Hex => write!(f, "{:0>4X}", self.value),
         }
     }
 }
