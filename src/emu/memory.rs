@@ -276,7 +276,10 @@ impl<'a> MemoryBus<'a> {
     }
 }
 
-/// TODO
+/// A read-only version of [MemoryBus] for the debugger
+///
+/// This has to be a separate type because the bus holds references, which can't
+/// be generic over mutability.
 #[derive(Debug)]
 pub struct MemoryBusReadOnly<'a> {
     /// RAM and registers

@@ -109,7 +109,7 @@ impl TerminalBackend {
         // - End-of-frame sleep in the emulator (while unpaused)
         // - Input read timeout (while paused)
         while !self.quit.load(Ordering::Relaxed) {
-            if !debugger.paused() {
+            if debugger.run_state().should_tick() {
                 // After the tick, check breakpoints for pauses. Breakpoints
                 // only depend on emulator state, so we only need to check
                 // them after the state has changed.
@@ -148,10 +148,10 @@ impl TerminalBackend {
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
         // still periodically check the `quit` flag.
-        let input_timeout = if debugger.paused() {
-            Duration::from_millis(100)
-        } else {
+        let input_timeout = if debugger.run_state().should_tick() {
             Duration::ZERO
+        } else {
+            Duration::from_millis(100)
         };
 
         // Drain the input queue
@@ -163,7 +163,15 @@ impl TerminalBackend {
                 // Primary events
                 InputEvent::Quit => return ControlFlow::Break(()),
                 InputEvent::Tui(event) => {
+                    let run_state = debugger.run_state();
                     self.tui.update(emulator, debugger, event);
+                    // If the event changed the debugger run state, stop eating
+                    // events. This enables hold-to-step behavior, because we
+                    // don't eat the next step event until the previous step
+                    // is initiated.
+                    if run_state != debugger.run_state() {
+                        break;
+                    }
                 }
             }
         }

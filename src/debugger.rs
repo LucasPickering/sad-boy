@@ -14,6 +14,14 @@ use tracing::debug;
 pub struct Debugger {
     /// When paused, the emulator doesn't advance at all
     paused: bool,
+    /// Target clock cycle for stepping
+    ///
+    /// When this is set and `self.paused` is `false`, then the run state will
+    /// be [RunState::Stepping]. That means the emulator is ticking, but with
+    /// the intention of stopping soon™. See [Self::state].
+    ///
+    /// This is cleared by [Self::check_breakpoints] once triggered.
+    step_until: Option<Cycles>,
     /// Triggers for when the debugger should be paused automatically
     ///
     /// This uses a `HashSet` to prevent duplicate breakpoints and make each
@@ -25,6 +33,7 @@ impl Debugger {
     pub fn new() -> Self {
         Self {
             paused: true, // Start paused
+            step_until: None,
             breakpoints: HashSet::new(),
         }
     }
@@ -32,6 +41,22 @@ impl Debugger {
     /// Is the debugger currently paused?
     pub fn paused(&self) -> bool {
         self.paused
+    }
+
+    /// Get the current [RunState]
+    ///
+    /// The ternary state determines whether the emulator should tick and the
+    /// debugger should be shown.
+    pub fn run_state(&self) -> RunState {
+        if self.paused {
+            if self.step_until.is_some() {
+                RunState::Stepping
+            } else {
+                RunState::Paused
+            }
+        } else {
+            RunState::Running
+        }
     }
 
     /// Get a list of currently set breakpoints
@@ -45,7 +70,7 @@ impl Debugger {
     /// debugger will pause.
     pub fn set_breakpoint(&mut self, address: Address) {
         debug!("Setting breakpoint at {address}");
-        self.breakpoints.insert(Breakpoint::Address(address));
+        self.breakpoints.insert(Breakpoint::new(address));
     }
 
     /// Toggle pause state
@@ -55,50 +80,46 @@ impl Debugger {
 
     /// Step forward one clock cycle
     pub fn step_cycle(&mut self, emulator: &GameBoy) {
-        self.unpause_until(emulator.clock().cycles() + 1);
+        self.step_until(emulator.clock().cycles() + 1);
     }
 
     /// Step forward to the end of the current frame
     pub fn step_frame(&mut self, emulator: &GameBoy) {
-        self.unpause_until(emulator.clock().next_frame_end());
+        self.step_until(emulator.clock().next_frame_end());
     }
 
     /// Step forward to the end of the current CPU isntruction
     pub fn step_instruction(&mut self, emulator: &GameBoy) {
         tracing::debug!("{:?}", emulator.cpu().current_instruction());
-        self.unpause_until(emulator.cpu().current_instruction().end);
+        self.step_until(emulator.cpu().current_instruction().end);
     }
 
-    /// Unpause and set a breakpoint for the given cycle count
-    fn unpause_until(&mut self, cycle: Cycles) {
-        debug!("Unpausing debugger until cycle {cycle}");
-        self.paused = false;
-        self.breakpoints.insert(Breakpoint::Cycle(cycle));
+    /// Set the `step_until` field, which will step forward **without
+    /// unpausing** until the target clock cycle is reached.
+    fn step_until(&mut self, target: Cycles) {
+        debug!("Stepping debugger until cycle {target}");
+        self.step_until = Some(target);
     }
 
     /// Check all registered breakpoints and pause the debugger if any have
     /// been triggered
     ///
-    /// This uses the given emulator state to check breakpoint statuses.
+    /// This should be called on each cycle. It the given emulator state to
+    /// check breakpoint statuses.
     pub fn check_breakpoints(&mut self, emulator: &GameBoy) {
-        let mut check = |bp: Breakpoint| {
-            // Remove temporary breakpoints, leave permanent ones
-            let hit = if bp.temporary() {
-                self.breakpoints.remove(&bp)
-            } else {
-                self.breakpoints.contains(&bp)
-            };
-            if hit {
-                debug!(breakpoint = ?bp, "Hit breakpoint");
-                self.paused = true;
-            }
-        };
+        // Clear step_until once we hit it
+        if self
+            .step_until
+            .is_some_and(|cy| emulator.clock().cycles() >= cy)
+        {
+            self.step_until = None;
+        }
 
-        // Check each potential breakpoint type. Iterating over them would be
-        // a bit more foolproof, but this is O(1) and also makes it easy to
-        // remove temporary BPs
-        check(Breakpoint::Cycle(emulator.clock().cycles()));
-        check(Breakpoint::Address(emulator.cpu().registers().pc()));
+        let pc = Breakpoint::new(emulator.cpu().registers().pc());
+        if self.breakpoints.contains(&pc) {
+            debug!(breakpoint = ?pc, "Hit breakpoint");
+            self.paused = true;
+        }
     }
 
     /// Run the emulator until the debugger pauses
@@ -123,35 +144,67 @@ impl Default for Debugger {
     }
 }
 
-/// An indicator of when the debugger should pause
+/// A ternary state denoting if the emulator is running and whether the
+/// debugger is visible
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum RunState {
+    /// Emulator is fully paused
+    Paused,
+    /// Emulator is running to a target clock cycle
+    ///
+    /// Debugger should be shown because the run period is short.
+    Stepping,
+    /// Emulator is running full bore
+    ///
+    /// Debugger is effectively disabled.
+    Running,
+}
+
+impl RunState {
+    /// Should the emulator be advanced?
+    ///
+    /// `true` for [Self::Stepping] and [Self::Running]
+    pub fn should_tick(self) -> bool {
+        match self {
+            Self::Paused => false,
+            Self::Stepping | Self::Running => true,
+        }
+    }
+
+    /// Should the debugger be visible?
+    ///
+    /// `true` for [Self::Paused] and [Self::Stepping]
+    pub fn should_show_debugger(self) -> bool {
+        match self {
+            RunState::Paused | RunState::Stepping => true,
+            RunState::Running => false,
+        }
+    }
+}
+
+/// An indicator that the debugger should pause at a particular memory
+/// instruction
 ///
 /// The debugger can have multiple breakpoints registered at a time, and any one
-/// of them can trigger a pause. This is used for user-provided breakpoints as
-/// well as internal ones (e.g. when stepping by cycle/instruction).
+/// of them can trigger a pause.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Breakpoint {
-    /// Pause when the clock hits a certain cycle count
-    Cycle(Cycles),
-    /// Pause when the program counter hits a certain address
-    Address(Address),
+pub struct Breakpoint {
+    /// Address to pause at
+    ///
+    /// This will only trigger if the PC **equals** that address. If the
+    /// active instruction overlaps this
+    address: Address,
 }
 
 impl Breakpoint {
-    /// Should this breakpoint be removed the first time it's hit?
-    fn temporary(self) -> bool {
-        match self {
-            Self::Cycle(_) => true,
-            Self::Address(_) => false,
-        }
+    fn new(address: Address) -> Self {
+        Self { address }
     }
 }
 
 impl Display for Breakpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cycle(cycles) => write!(f, "Cycle {cycles}"),
-            Self::Address(address) => write!(f, "{address}"),
-        }
+        write!(f, "{}", self.address)
     }
 }
 

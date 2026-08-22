@@ -6,7 +6,7 @@ use crate::{
     backend::terminal::{
         RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH, input::TuiEvent,
     },
-    debugger::Debugger,
+    debugger::{Debugger, RunState},
     emu::{
         Address, AddressRange, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
         MemoryBusReadOnly, instruction::Instruction,
@@ -93,7 +93,7 @@ impl Widget for TuiWidget<'_> {
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
-        if self.debugger.paused() {
+        if self.debugger.run_state().should_show_debugger() {
             let cpu = self.emulator.cpu();
             CpuInfo {
                 clock: self.emulator.clock(),
@@ -122,7 +122,12 @@ impl Widget for DebuggerInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = panel("Debugger", area, buf);
         let mut text = Text::from_iter([
-            if self.0.paused() { "PAUSED" } else { "RUNNING" }.into(),
+            match self.0.run_state() {
+                RunState::Paused => "PAUSED",
+                RunState::Stepping => "STEPPING",
+                RunState::Running => "RUNNING",
+            }
+            .into(),
             "Breakpoints".set_style(Modifier::UNDERLINED),
         ]);
         for breakpoint in self.0.breakpoints() {
