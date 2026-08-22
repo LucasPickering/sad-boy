@@ -30,6 +30,7 @@ use ratatui::{
         ScrollbarState, StatefulWidget, Widget,
     },
 };
+use std::cell::RefCell;
 
 /// Terminal UI surrounding the emulator
 ///
@@ -105,24 +106,9 @@ struct TuiWidget<'a> {
 impl Widget for TuiWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Show breakpoints always so we can set them while running
-        let [left_area, memory_area, _] = Layout::horizontal([
-            TERM_WIDTH.into(),
-            31.into(),
-            Constraint::Min(0),
-        ])
-        .areas(area);
-        // Leave space for the screen in the top-left
-        let [_, mut bottom_left_area] =
-            Layout::vertical([TERM_HEIGHT.into(), Constraint::Min(0)])
-                .areas(left_area);
-        bottom_left_area.width += 1; // Combine borders into the Memory panel
-        // Move down below the screen area
-        let [debugger_area, cpu_area] =
-            Layout::horizontal([Constraint::Min(0), 36.into()])
-                .spacing(-1)
-                .areas(bottom_left_area);
+        let areas = TuiAreas::get(area);
 
-        DebuggerInfo(self.debugger).render(debugger_area, buf);
+        DebuggerInfo(self.debugger).render(areas.debug, buf);
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
@@ -132,7 +118,7 @@ impl Widget for TuiWidget<'_> {
                 clock: self.emulator.clock(),
                 cpu,
             }
-            .render(cpu_area, buf);
+            .render(areas.cpu, buf);
             let pc = cpu.registers().pc().0;
             MemoryInfo {
                 pc: AddressRange::new(
@@ -143,8 +129,61 @@ impl Widget for TuiWidget<'_> {
                 scroll: self.memory_scroll,
                 memory_bus: self.emulator.memory(),
             }
-            .render(memory_area, buf);
+            .render(areas.memory, buf);
         }
+    }
+}
+
+/// Split areas for the main TUI layout
+#[derive(Clone, Copy)]
+struct TuiAreas {
+    debug: Rect,
+    cpu: Rect,
+    memory: Rect,
+}
+
+impl TuiAreas {
+    /// Split the given area for the TUI layout
+    fn get(area: Rect) -> Self {
+        // The area splitting is expensive (~40% of the frame time) but it
+        // only changes if the terminal is resized. Caching it speeds up rapid
+        // stepping by a lot.
+        thread_local! {
+            static CACHE: RefCell<Option<(Rect, TuiAreas)>> =
+                const { RefCell::new(None) };
+        }
+
+        // Check the cache
+        if let Some(cached) = CACHE.with(|cache| {
+            cache
+                .borrow()
+                .filter(|(key, _)| *key == area)
+                .map(|(_, value)| value)
+        }) {
+            return cached;
+        }
+
+        // Show breakpoints always so we can set them while running
+        let [left, memory, _] = Layout::horizontal([
+            TERM_WIDTH.into(),
+            31.into(),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        // Leave space for the screen in the top-left
+        let [_, mut bottom_left] =
+            Layout::vertical([TERM_HEIGHT.into(), Constraint::Min(0)])
+                .areas(left);
+        bottom_left.width += 1; // Combine borders into the Memory panel
+        // Move down below the screen area
+        let [debug, cpu] = Layout::horizontal([Constraint::Min(0), 36.into()])
+            .spacing(-1)
+            .areas(bottom_left);
+        let areas = Self { debug, cpu, memory };
+
+        // Cache this layout
+        CACHE.with(|cache| *cache.borrow_mut() = Some((area, areas)));
+        areas
     }
 }
 
