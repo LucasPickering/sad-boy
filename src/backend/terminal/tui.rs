@@ -15,12 +15,15 @@ use crate::{
 };
 use itertools::Itertools;
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     prelude::Buffer,
     style::{Color, Modifier, Style, Styled},
     symbols::merge::MergeStrategy,
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Widget},
+    widgets::{
+        Block, BorderType, Borders, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, StatefulWidget, Widget,
+    },
 };
 
 /// Terminal UI surrounding the emulator
@@ -29,16 +32,15 @@ use ratatui::{
 /// screen. It also handles input events.
 ///
 /// This struct stores the TUI state that's retained between frames.
-#[derive(Default)]
 pub struct Tui {
-    /// Vertical scroll in the memory panel
-    memory_scroll: u16,
+    /// Vertical scroll state for the Memory panel
+    memory_scroll: ScrollbarState,
 }
 
 impl Tui {
     /// Draw the TUI to the terminal
     pub fn draw(
-        &self,
+        &mut self,
         terminal: &mut RatatuiTerminal,
         emulator: &GameBoy,
         debugger: &Debugger,
@@ -49,7 +51,7 @@ impl Tui {
                     TuiWidget {
                         emulator,
                         debugger,
-                        memory_scroll: self.memory_scroll,
+                        memory_scroll: &mut self.memory_scroll,
                     },
                     frame.area(),
                 );
@@ -65,12 +67,8 @@ impl Tui {
         event: TuiEvent,
     ) {
         match event {
-            TuiEvent::Up => {
-                self.memory_scroll = self.memory_scroll.saturating_sub(1);
-            }
-            TuiEvent::Down => {
-                self.memory_scroll = self.memory_scroll.saturating_add(1);
-            }
+            TuiEvent::Up => self.memory_scroll.prev(),
+            TuiEvent::Down => self.memory_scroll.next(),
             TuiEvent::Left => {}
             TuiEvent::Right => {}
             TuiEvent::DebugPauseToggle => debugger.toggle_pause(),
@@ -83,20 +81,31 @@ impl Tui {
     }
 }
 
+impl Default for Tui {
+    fn default() -> Self {
+        Self {
+            memory_scroll: ScrollbarState::new(AddressRange::ALL.len()),
+        }
+    }
+}
+
 /// Widget for all interactive elements
 struct TuiWidget<'a> {
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
-    /// Y offset for the memory view
-    memory_scroll: u16,
+    /// Vertical scroll state for the Memory panel
+    memory_scroll: &'a mut ScrollbarState,
 }
 
 impl Widget for TuiWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Show breakpoints always so we can set them while running
-        let [left_area, memory_area] =
-            Layout::horizontal([TERM_WIDTH.into(), Constraint::Min(0)])
-                .areas(area);
+        let [left_area, memory_area, _] = Layout::horizontal([
+            TERM_WIDTH.into(),
+            31.into(),
+            Constraint::Min(0),
+        ])
+        .areas(area);
         // Leave space for the screen in the top-left
         let [_, mut bottom_left_area] =
             Layout::vertical([TERM_HEIGHT.into(), Constraint::Min(0)])
@@ -257,8 +266,8 @@ impl Widget for CpuInfo<'_> {
 struct MemoryInfo<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
-    /// Vertical scroll offset
-    scroll: u16,
+    /// Vertical scroll state offset
+    scroll: &'a mut ScrollbarState,
     memory_bus: MemoryBusReadOnly<'a>,
 }
 
@@ -325,7 +334,8 @@ impl Widget for MemoryInfo<'_> {
         // than an iterator because the number of lines is dynamic based on
         // what labels are visible
         let mut text = Text::default();
-        let mut next_address = Address(self.scroll * BYTES_PER_LINE);
+        let mut next_address =
+            Address(self.scroll.get_position() as u16 * BYTES_PER_LINE);
         while text.height() < area.height.into() {
             // Add a label at the start of each region
             if let Some(labelled_range) = self
@@ -362,7 +372,12 @@ impl Widget for MemoryInfo<'_> {
         }
         text.render(area, buf);
 
-        // TODO scrollbar
+        // Draw scrollbar
+        Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
+            area.outer(Margin::new(1, 0)), // Overlay the panel border
+            buf,
+            self.scroll,
+        );
     }
 }
 

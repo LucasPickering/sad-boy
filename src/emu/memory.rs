@@ -428,6 +428,9 @@ pub struct AddressRange {
 }
 
 impl AddressRange {
+    /// The full address range
+    pub const ALL: Self = Self::named("All", 0, u16::MAX);
+
     /// Define a range of memory
     ///
     /// The given bounds are **inclusive**: `[start, last]`.
@@ -475,7 +478,7 @@ impl AddressRange {
     /// Get the number of bytes in the range
     pub const fn len(&self) -> usize {
         // The end is inclusive, so we need +1 to count it
-        (self.range.last.0 - self.range.start.0 + 1) as usize
+        (self.range.last.0 as usize) - (self.range.start.0 as usize) + 1
     }
 
     /// First address included in the range
