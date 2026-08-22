@@ -6,7 +6,7 @@ mod clock;
 mod cpu;
 mod gpu;
 pub mod instruction;
-mod memory;
+pub mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};

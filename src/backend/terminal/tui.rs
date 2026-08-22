@@ -9,7 +9,7 @@ use crate::{
     debugger::{Debugger, RunState},
     emu::{
         Address, AddressRange, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
-        MemoryBusReadOnly, instruction::Instruction,
+        MemoryBusReadOnly, instruction::Instruction, memory,
     },
     util::IntDisplay,
 };
@@ -87,7 +87,7 @@ impl Tui {
 struct TuiWidget<'a> {
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
-    /// TODO
+    /// Y offset for the memory view
     memory_scroll: u16,
 }
 
@@ -121,7 +121,6 @@ impl Widget for TuiWidget<'_> {
             .render(cpu_area, buf);
             let pc = cpu.registers().pc().0;
             MemoryInfo {
-                offset: Address(0x0000),
                 pc: AddressRange::new(
                     pc,
                     // Bound is INCLUSIVE
@@ -256,13 +255,42 @@ impl Widget for CpuInfo<'_> {
 
 /// Widget to inspect memory
 struct MemoryInfo<'a> {
-    /// First visible address
-    offset: Address,
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
     /// Vertical scroll offset
     scroll: u16,
     memory_bus: MemoryBusReadOnly<'a>,
+}
+
+impl MemoryInfo<'_> {
+    /// Get all memory ranges that should be labelled
+    fn labelled_ranges(&self) -> impl Iterator<Item = AddressRange> {
+        const PRELUDE_BOOTSTRAP: &[AddressRange] = &[
+            memory::BOOTSTRAP,
+            AddressRange::named(
+                "Cartridge ROM",
+                memory::BOOTSTRAP.last().0 + 1,
+                memory::CARTRIDGE_ROM.last().0,
+            ),
+        ];
+        const PRELUDE_NORMAL: &[AddressRange] = &[memory::CARTRIDGE_ROM];
+        const REST: &[AddressRange] = &[
+            memory::TILE_DATA,
+            memory::TILE_MAPS,
+            memory::CARTRIDGE_RAM,
+            memory::RAM,
+            memory::ECHO_RAM,
+            memory::OAM,
+            memory::HIGH_RAM,
+        ];
+        // While the bootstrap ROM is mounted, it overlays the cartridge ROM
+        let prelude = if self.memory_bus.is_bootstrapping() {
+            PRELUDE_BOOTSTRAP
+        } else {
+            PRELUDE_NORMAL
+        };
+        prelude.iter().chain(REST.iter()).copied()
+    }
 }
 
 impl Widget for MemoryInfo<'_> {
@@ -271,12 +299,12 @@ impl Widget for MemoryInfo<'_> {
         const BYTES_PER_LINE: u16 = 8;
 
         // Format a memory address in the gutter
-        let fmt_address = |address: Address| -> Span {
+        fn fmt_address(address: Address) -> Span<'static> {
             Span::styled(
                 IntDisplay::hex(address.0).without_prefix().to_string(),
                 Style::default().add_modifier(Modifier::BOLD),
             )
-        };
+        }
 
         // Format a single byte to text
         let fmt_byte = |address: Address, value: u8| -> Span {
@@ -292,27 +320,49 @@ impl Widget for MemoryInfo<'_> {
         };
 
         let area = panel("Memory", area, buf);
-        let y_range = self.scroll..(self.scroll.saturating_add(area.height));
-        let text: Text = y_range
-            // Map to addresses - cap at 0xffff
-            .filter_map(|y| self.offset.checked_add(y * BYTES_PER_LINE))
-            .map(|address| {
-                // Address range size is divisible by BYTES_PER_LINE, so if
-                // the start of the line is valid, the entire line will be
-                let bytes = (0..BYTES_PER_LINE).map(|offset| {
-                    let address = address + offset;
-                    let value = self.memory_bus.get8(address);
-                    fmt_byte(address, value)
-                });
 
-                [fmt_address(address)]
-                    .into_iter()
-                    .chain(bytes)
-                    .intersperse(" ".into())
-                    .collect::<Line>()
-            })
-            .collect();
+        // Build up the text until we fill the area. The while loop is easier
+        // than an iterator because the number of lines is dynamic based on
+        // what labels are visible
+        let mut text = Text::default();
+        let mut next_address = Address(self.scroll * BYTES_PER_LINE);
+        while text.height() < area.height.into() {
+            // Add a label at the start of each region
+            if let Some(labelled_range) = self
+                .labelled_ranges()
+                .find(|range| range.start() == next_address)
+            {
+                text.push_line(Span::styled(
+                    labelled_range.name().unwrap(),
+                    Color::Gray,
+                ));
+            }
+
+            // Address range size is divisible by BYTES_PER_LINE, so if
+            // the start of the line is valid, the entire line will be
+            let bytes = (0..BYTES_PER_LINE).map(|offset| {
+                let address = next_address + offset;
+                let value = self.memory_bus.get8(address);
+                fmt_byte(address, value)
+            });
+
+            let line = [fmt_address(next_address)]
+                .into_iter()
+                .chain(bytes)
+                .intersperse(" ".into())
+                .collect::<Line>();
+            text.push_line(line);
+
+            if let Some(next) = next_address.checked_add(BYTES_PER_LINE) {
+                next_address = next;
+            } else {
+                // Hit the end of the address range
+                break;
+            }
+        }
         text.render(area, buf);
+
+        // TODO scrollbar
     }
 }
 

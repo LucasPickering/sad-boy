@@ -361,7 +361,7 @@ impl MemoryBusReadOnly<'_> {
     ///
     /// This is `true` only during initial boot. The bootstrap unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
-    fn is_bootstrapping(&self) -> bool {
+    pub fn is_bootstrapping(&self) -> bool {
         self.ram.bank == 0
     }
 }
@@ -452,6 +452,11 @@ impl AddressRange {
                 last: Address(last),
             },
         }
+    }
+
+    /// Get the range's label, if created with [Self::named]
+    pub fn name(&self) -> Option<&'static str> {
+        self.name
     }
 
     /// Join two contiguous ranges
