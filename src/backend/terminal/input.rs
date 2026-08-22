@@ -51,23 +51,19 @@ pub fn map_event(event: Event) -> Option<InputEvent> {
     else {
         return None;
     };
-    let modi = |modifier| modifiers.contains(modifier);
-    // TODO use a better dynamic mapping (steal from slumber)
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
     let event = match code {
         KeyCode::Char('h') => TuiEvent::Left.into(),
         KeyCode::Char('j') => TuiEvent::Down.into(),
         KeyCode::Char('k') => TuiEvent::Up.into(),
         KeyCode::Char('l') => TuiEvent::Right.into(),
         KeyCode::Char(' ') => TuiEvent::DebugPauseToggle.into(),
-        KeyCode::Right if modi(KeyModifiers::CONTROL) => {
-            TuiEvent::DebugStepCycle.into()
-        }
-        KeyCode::Right if modi(KeyModifiers::SHIFT) => {
-            TuiEvent::DebugStepFrame.into()
-        }
+        KeyCode::Right if ctrl => TuiEvent::DebugStepCycle.into(),
+        KeyCode::Right if shift => TuiEvent::DebugStepFrame.into(),
         KeyCode::Right => TuiEvent::DebugStepInstruction.into(),
         KeyCode::Char('q') => InputEvent::Quit,
-        KeyCode::Char('c') if modi(KeyModifiers::CONTROL) => InputEvent::Quit,
+        KeyCode::Char('c') if ctrl => InputEvent::Quit,
         _ => return None,
     };
     Some(event)

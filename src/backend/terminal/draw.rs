@@ -46,8 +46,6 @@ macro_rules! write_message {
         }
 
         // Payload is encoded as base64
-        // TODO if this is the only methodology long-term, pre-encode it and
-        // remove the base64 dep
         let mut b64_writer = EncoderWriter::new(&mut $out, &STANDARD);
         b64_writer.write_all($payload)?;
         drop(b64_writer);
