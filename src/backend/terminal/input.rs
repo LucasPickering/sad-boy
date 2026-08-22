@@ -21,8 +21,15 @@ impl From<TuiEvent> for InputEvent {
 
 /// An input event intended for the TUI
 #[derive(Debug)]
-#[expect(clippy::enum_variant_names)]
 pub enum TuiEvent {
+    /// Navigate up
+    Up,
+    /// Navigate down
+    Down,
+    /// Navigate right, wait no I mean left, wait, yeah fuck uhhh it's left
+    Left,
+    /// Navigate right
+    Right,
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,
     /// Advance the debugger one clock cycle
@@ -47,6 +54,10 @@ pub fn map_event(event: Event) -> Option<InputEvent> {
     let modi = |modifier| modifiers.contains(modifier);
     // TODO use a better dynamic mapping (steal from slumber)
     let event = match code {
+        KeyCode::Char('h') => TuiEvent::Left.into(),
+        KeyCode::Char('j') => TuiEvent::Down.into(),
+        KeyCode::Char('k') => TuiEvent::Up.into(),
+        KeyCode::Char('l') => TuiEvent::Right.into(),
         KeyCode::Char(' ') => TuiEvent::DebugPauseToggle.into(),
         KeyCode::Right if modi(KeyModifiers::CONTROL) => {
             TuiEvent::DebugStepCycle.into()

@@ -27,8 +27,13 @@ use ratatui::{
 ///
 /// This handles everything drawn to the terminal *except for* the emulator
 /// screen. It also handles input events.
+///
+/// This struct stores the TUI state that's retained between frames.
 #[derive(Default)]
-pub struct Tui {}
+pub struct Tui {
+    /// Vertical scroll in the memory panel
+    memory_scroll: u16,
+}
 
 impl Tui {
     /// Draw the TUI to the terminal
@@ -41,7 +46,11 @@ impl Tui {
         terminal
             .draw(|frame| {
                 frame.render_widget(
-                    TuiWidget { emulator, debugger },
+                    TuiWidget {
+                        emulator,
+                        debugger,
+                        memory_scroll: self.memory_scroll,
+                    },
                     frame.area(),
                 );
             })
@@ -56,6 +65,14 @@ impl Tui {
         event: TuiEvent,
     ) {
         match event {
+            TuiEvent::Up => {
+                self.memory_scroll = self.memory_scroll.saturating_sub(1);
+            }
+            TuiEvent::Down => {
+                self.memory_scroll = self.memory_scroll.saturating_add(1);
+            }
+            TuiEvent::Left => {}
+            TuiEvent::Right => {}
             TuiEvent::DebugPauseToggle => debugger.toggle_pause(),
             TuiEvent::DebugStepCycle => debugger.step_cycle(emulator),
             TuiEvent::DebugStepFrame => debugger.step_frame(emulator),
@@ -70,6 +87,8 @@ impl Tui {
 struct TuiWidget<'a> {
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
+    /// TODO
+    memory_scroll: u16,
 }
 
 impl Widget for TuiWidget<'_> {
@@ -108,6 +127,7 @@ impl Widget for TuiWidget<'_> {
                     // Bound is INCLUSIVE
                     pc + cpu.current_instruction().size - 1,
                 ),
+                scroll: self.memory_scroll,
                 memory_bus: self.emulator.memory(),
             }
             .render(memory_area, buf);
@@ -240,6 +260,8 @@ struct MemoryInfo<'a> {
     offset: Address,
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
+    /// Vertical scroll offset
+    scroll: u16,
     memory_bus: MemoryBusReadOnly<'a>,
 }
 
@@ -270,8 +292,9 @@ impl Widget for MemoryInfo<'_> {
         };
 
         let area = panel("Memory", area, buf);
-        let text: Text = (0..area.height)
-            // Cap at 0xffff
+        let y_range = self.scroll..(self.scroll.saturating_add(area.height));
+        let text: Text = y_range
+            // Map to addresses - cap at 0xffff
             .filter_map(|y| self.offset.checked_add(y * BYTES_PER_LINE))
             .map(|address| {
                 // Address range size is divisible by BYTES_PER_LINE, so if

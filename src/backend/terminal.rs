@@ -118,11 +118,11 @@ impl TerminalBackend {
             }
 
             // Check for input
-            let handled_event = match self.drain_input(emulator, &mut debugger)
-            {
-                ControlFlow::Break(()) => break,
-                ControlFlow::Continue(handled) => handled,
-            };
+            let handled_event =
+                match self.handle_next_event(emulator, &mut debugger) {
+                    ControlFlow::Break(()) => break,
+                    ControlFlow::Continue(handled) => handled,
+                };
             // Only redraw the TUI if there was at least one input event.
             // Without input, the screen can't change. Drawing on every tick is
             // extraordinarily expensive.
@@ -132,14 +132,14 @@ impl TerminalBackend {
         }
     }
 
-    /// Drain all events from the input queue
+    /// Pop the next event off the input queue and handle it
     ///
     /// ## Return
     ///
     /// - `ControlFlow::Continue(true)` if at least one event was handled
     /// - `ControlFlow::Continue(false)` if the queue was empty
     /// - `ControlFlow::Break` if the loop should exit (quit event)
-    fn drain_input(
+    fn handle_next_event(
         &mut self,
         emulator: &GameBoy,
         debugger: &mut Debugger,
@@ -147,7 +147,7 @@ impl TerminalBackend {
         // While the debugger is paused, we have nothing to do but wait for
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
-        // still periodically check the `quit` flag.
+        // periodically check the `quit` flag.
         let input_timeout = if debugger.run_state().should_tick() {
             Duration::ZERO
         } else {
@@ -155,27 +155,19 @@ impl TerminalBackend {
         };
 
         // Drain the input queue
-        let mut handled = false;
-        while let Some(event) = self.next_event(input_timeout) {
-            handled = true;
+        if let Some(event) = self.next_event(input_timeout) {
             debug!(?event, "Input event");
             match event {
                 // Primary events
                 InputEvent::Quit => return ControlFlow::Break(()),
                 InputEvent::Tui(event) => {
-                    let run_state = debugger.run_state();
                     self.tui.update(emulator, debugger, event);
-                    // If the event changed the debugger run state, stop eating
-                    // events. This enables hold-to-step behavior, because we
-                    // don't eat the next step event until the previous step
-                    // is initiated.
-                    if run_state != debugger.run_state() {
-                        break;
-                    }
                 }
             }
+            ControlFlow::Continue(true)
+        } else {
+            ControlFlow::Continue(false)
         }
-        ControlFlow::Continue(handled)
     }
 
     /// Load the next input event from the queue
