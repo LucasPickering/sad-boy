@@ -10,7 +10,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 #[derive(Debug)]
 pub struct InputEvent {
     /// Raw input event
-    #[expect(unused)]
     pub event: KeyEvent,
     /// Bound action
     pub action: Option<InputAction>,
@@ -48,7 +47,7 @@ pub enum InputAction {
     /// Exit the app; this cannot be consumed by anyone else
     ForceQuit,
     /// An event that should be routed to the TUI
-    Tui(TuiEvent),
+    Tui(TuiAction),
     /// Game Boy button that should be routed to the emulator
     #[expect(unused)]
     Button(Button),
@@ -65,15 +64,18 @@ impl InputAction {
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         let shift = modifiers.contains(KeyModifiers::SHIFT);
         let event = match code {
-            KeyCode::Char('h') => TuiEvent::Left.into(),
-            KeyCode::Char('j') => TuiEvent::Down.into(),
-            KeyCode::Char('k') => TuiEvent::Up.into(),
-            KeyCode::Char('l') => TuiEvent::Right.into(),
-            KeyCode::Char(' ') => TuiEvent::DebugPauseToggle.into(),
+            KeyCode::Char('h') => TuiAction::Left.into(),
+            KeyCode::Char('j') => TuiAction::Down.into(),
+            KeyCode::Char('k') => TuiAction::Up.into(),
+            KeyCode::Char('l') => TuiAction::Right.into(),
+            KeyCode::Esc => TuiAction::Cancel.into(),
+            KeyCode::Enter => TuiAction::Submit.into(),
+            KeyCode::Char('g') => TuiAction::DebugGoToAddress.into(),
+            KeyCode::Char(' ') => TuiAction::DebugPauseToggle.into(),
             KeyCode::Char('c') if ctrl => InputAction::ForceQuit,
-            KeyCode::Right if ctrl => TuiEvent::DebugStepCycle.into(),
-            KeyCode::Right if shift => TuiEvent::DebugStepFrame.into(),
-            KeyCode::Right => TuiEvent::DebugStepInstruction.into(),
+            KeyCode::Right if ctrl => TuiAction::DebugStepCycle.into(),
+            KeyCode::Right if shift => TuiAction::DebugStepFrame.into(),
+            KeyCode::Right => TuiAction::DebugStepInstruction.into(),
             _ => return None,
         };
         Some(event)
@@ -86,15 +88,15 @@ impl From<Button> for InputAction {
     }
 }
 
-impl From<TuiEvent> for InputAction {
-    fn from(v: TuiEvent) -> Self {
+impl From<TuiAction> for InputAction {
+    fn from(v: TuiAction) -> Self {
         Self::Tui(v)
     }
 }
 
-/// An input event intended for the TUI
+/// A mapped input action intended for the TUI
 #[derive(Debug)]
-pub enum TuiEvent {
+pub enum TuiAction {
     /// Navigate up
     Up,
     /// Navigate down
@@ -103,6 +105,12 @@ pub enum TuiEvent {
     Left,
     /// Navigate right
     Right,
+    /// Cancel the current action
+    Cancel,
+    /// Submit an entry (e.g. from a text box)
+    Submit,
+    /// Go to a memory address in the memory panel
+    DebugGoToAddress,
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,
     /// Advance the debugger one clock cycle

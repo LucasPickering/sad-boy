@@ -409,6 +409,7 @@ impl Display for Address {
     }
 }
 
+/// Parse from a hex number (*without* the preceding `0x`)
 impl FromStr for Address {
     type Err = String;
 

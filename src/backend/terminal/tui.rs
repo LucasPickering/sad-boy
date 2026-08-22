@@ -9,7 +9,7 @@ mod style;
 use crate::{
     backend::terminal::{
         RatatuiTerminal,
-        input::{InputAction, InputEvent, TuiEvent},
+        input::{InputAction, InputEvent, TuiAction},
         tui::style::STYLES,
     },
     debugger::{Debugger, RunState},
@@ -31,6 +31,7 @@ use ratatui::{
         ScrollbarState, StatefulWidget, Widget,
     },
 };
+use ratatui_textarea::TextArea;
 
 /// Terminal UI surrounding the emulator
 ///
@@ -38,10 +39,13 @@ use ratatui::{
 /// screen. It also handles input events.
 ///
 /// This struct stores the TUI state that's retained between frames.
+#[derive(Default)]
 pub struct Tui {
-    /// Vertical scroll state for the Memory panel
-    memory_scroll: ScrollbarState,
     areas: Option<TuiAreas>,
+    /// Active element in focus, or `None` for the "default" view
+    focus: Option<Focus>,
+    /// State for the Memory panel
+    memory: MemoryInfoState,
 }
 
 impl Tui {
@@ -65,14 +69,15 @@ impl Tui {
                 let areas = *self
                     .areas
                     .get_or_insert_with(|| TuiAreas::split(frame.area()));
-                frame.render_widget(
+                frame.render_stateful_widget(
                     TuiWidget {
+                        focus: self.focus.as_ref(),
                         areas,
                         emulator,
                         debugger,
-                        memory_scroll: &mut self.memory_scroll,
                     },
                     frame.area(),
+                    &mut self.memory,
                 );
             })
             .unwrap();
@@ -88,41 +93,91 @@ impl Tui {
         debugger: &mut Debugger,
         event: InputEvent,
     ) -> bool {
-        let Some(InputAction::Tui(action)) = event.action else {
-            // We don't care about this action
-            return false;
+        // Extract the TUI-bound action - it may be useful later
+        let action = if let Some(InputAction::Tui(action)) = event.action {
+            Some(action)
+        } else {
+            None
         };
-        match action {
-            TuiEvent::Up => self.memory_scroll.prev(),
-            TuiEvent::Down => self.memory_scroll.next(),
-            TuiEvent::Left => {}
-            TuiEvent::Right => {}
-            TuiEvent::DebugPauseToggle => debugger.toggle_pause(),
-            TuiEvent::DebugStepCycle => debugger.step_cycle(emulator),
-            TuiEvent::DebugStepFrame => debugger.step_frame(emulator),
-            TuiEvent::DebugStepInstruction => {
-                debugger.step_instruction(emulator);
+        match &mut self.focus {
+            Some(Focus::GoToAddress { text_area }) => match action {
+                // Esc/Enter get out of the dialog
+                Some(TuiAction::Cancel) => {
+                    self.unfocus();
+                    true
+                }
+                Some(TuiAction::Submit) => {
+                    if let Ok(address) = text_area.lines()[0].parse::<Address>()
+                    {
+                        self.memory.scroll_to(address);
+                        self.unfocus();
+                        true
+                    } else {
+                        false
+                    }
+                }
+                // Pass everything else to the text box
+                _ => text_area.input(event.event),
+            },
+
+            None => {
+                let Some(action) = action else {
+                    return false; // We don't care about this action
+                };
+                // If it has a bound TUI action, consume it
+                match action {
+                    TuiAction::Up => self.memory.scroll.prev(),
+                    TuiAction::Down => self.memory.scroll.next(),
+                    TuiAction::DebugGoToAddress => {
+                        self.focus(Focus::go_to_address());
+                    }
+                    TuiAction::DebugPauseToggle => debugger.toggle_pause(),
+                    TuiAction::DebugStepCycle => debugger.step_cycle(emulator),
+                    TuiAction::DebugStepFrame => debugger.step_frame(emulator),
+                    TuiAction::DebugStepInstruction => {
+                        debugger.step_instruction(emulator);
+                    }
+                    TuiAction::Left
+                    | TuiAction::Right
+                    | TuiAction::Cancel
+                    | TuiAction::Submit => {}
+                }
+                true
             }
         }
-        true
+    }
+
+    /// Enter a specific focus mode
+    fn focus(&mut self, focus: Focus) {
+        self.focus = Some(focus);
+    }
+
+    /// Return to unfocused mode
+    fn unfocus(&mut self) {
+        self.focus = None;
     }
 }
 
-impl Default for Tui {
-    fn default() -> Self {
-        Self {
-            memory_scroll: ScrollbarState::new(AddressRange::ALL.len()),
-            areas: None,
+/// Active element in focus
+enum Focus {
+    /// Go To Address text box is focused
+    GoToAddress { text_area: TextArea<'static> },
+}
+
+impl Focus {
+    /// Enter [Self::GoToAddress]
+    fn go_to_address() -> Self {
+        Self::GoToAddress {
+            text_area: TextArea::default(),
         }
     }
 }
 
 /// Widget for all interactive elements
 struct TuiWidget<'a> {
+    focus: Option<&'a Focus>,
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
-    /// Vertical scroll state for the Memory panel
-    memory_scroll: &'a mut ScrollbarState,
     /// Pre-computed layout
     ///
     /// This is calculated and stored in the parent because it's expensive to
@@ -130,8 +185,12 @@ struct TuiWidget<'a> {
     areas: TuiAreas,
 }
 
-impl Widget for TuiWidget<'_> {
-    fn render(self, _area: Rect, buf: &mut Buffer) {
+impl StatefulWidget for TuiWidget<'_> {
+    // For now this is the only part of the state so I'm taking a shortcut.
+    // Eventually this will need its own TuiWidgetState
+    type State = MemoryInfoState;
+
+    fn render(self, _area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         DebuggerInfo(self.debugger).render(self.areas.debug, buf);
 
         // Only show emulator state info if the debugger is paused. The state
@@ -150,10 +209,16 @@ impl Widget for TuiWidget<'_> {
                     // Bound is INCLUSIVE
                     pc + cpu.current_instruction().size - 1,
                 ),
-                scroll: self.memory_scroll,
                 memory_bus: self.emulator.memory(),
+                go_to_address: if let Some(Focus::GoToAddress { text_area }) =
+                    &self.focus
+                {
+                    Some(text_area)
+                } else {
+                    None
+                },
             }
-            .render(self.areas.memory, buf);
+            .render(self.areas.memory, buf, state);
         }
     }
 }
@@ -341,12 +406,15 @@ impl Widget for CpuInfo<'_> {
 struct MemoryInfo<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
-    /// Vertical scroll state offset
-    scroll: &'a mut ScrollbarState,
     memory_bus: MemoryBusReadOnly<'a>,
+    /// Text box for jumping to an address
+    go_to_address: Option<&'a TextArea<'static>>,
 }
 
 impl MemoryInfo<'_> {
+    /// Bytes shown on each line of the view
+    const BYTES_PER_LINE: u16 = 8;
+
     /// Get all memory ranges that should be labelled
     fn labelled_ranges(&self) -> impl Iterator<Item = AddressRange> {
         const PRELUDE_BOOTSTRAP: &[AddressRange] = &[
@@ -377,10 +445,10 @@ impl MemoryInfo<'_> {
     }
 }
 
-impl Widget for MemoryInfo<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        const BYTES_PER_LINE: u16 = 8;
+impl StatefulWidget for MemoryInfo<'_> {
+    type State = MemoryInfoState;
 
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         // Format a memory address in the gutter
         fn fmt_address(address: Address) -> Span<'static> {
             Span::styled(
@@ -408,7 +476,7 @@ impl Widget for MemoryInfo<'_> {
         // what labels are visible
         let mut text = Text::default();
         let mut next_address =
-            Address(self.scroll.get_position() as u16 * BYTES_PER_LINE);
+            Address(state.scroll.get_position() as u16 * Self::BYTES_PER_LINE);
         while text.height() < area.height.into() {
             // Add a label at the start of each region
             if let Some(labelled_range) = self
@@ -423,7 +491,7 @@ impl Widget for MemoryInfo<'_> {
 
             // Address range size is divisible by BYTES_PER_LINE, so if
             // the start of the line is valid, the entire line will be
-            let bytes = (0..BYTES_PER_LINE).map(|offset| {
+            let bytes = (0..Self::BYTES_PER_LINE).map(|offset| {
                 let address = next_address + offset;
                 let value = self.memory_bus.get8(address);
                 fmt_byte(address, value)
@@ -436,7 +504,7 @@ impl Widget for MemoryInfo<'_> {
                 .collect::<Line>();
             text.push_line(line);
 
-            if let Some(next) = next_address.checked_add(BYTES_PER_LINE) {
+            if let Some(next) = next_address.checked_add(Self::BYTES_PER_LINE) {
                 next_address = next;
             } else {
                 // Hit the end of the address range
@@ -449,8 +517,50 @@ impl Widget for MemoryInfo<'_> {
         Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
             area.outer(Margin::new(1, 0)), // Overlay the panel border
             buf,
-            self.scroll,
+            &mut state.scroll,
         );
+
+        // Go To textbox overlays on the bottom line
+        let bottom_area = Rect {
+            x: area.x,
+            y: area.bottom(),
+            width: area.width,
+            height: 1,
+        };
+        // Render the Go To box at the bottom
+        if let Some(go_to_address) = self.go_to_address {
+            go_to_address.render(bottom_area, buf);
+        } else {
+            "[g] Go To Address".render(bottom_area, buf);
+        }
+    }
+}
+
+/// Widget state for [MemoryInfo]
+///
+/// This is the state that's retained across calls.
+pub struct MemoryInfoState {
+    /// Vertical scroll
+    scroll: ScrollbarState,
+}
+
+impl MemoryInfoState {
+    /// Update the scroll state to jump to a specific memory address
+    fn scroll_to(&mut self, address: Address) {
+        // This will automatically truncate to whatever address begins the line
+        let line = address.0 / MemoryInfo::BYTES_PER_LINE;
+        self.scroll = self.scroll.position(line.into());
+    }
+}
+
+impl Default for MemoryInfoState {
+    fn default() -> Self {
+        Self {
+            scroll: ScrollbarState::new(
+                AddressRange::ALL.len()
+                    / usize::from(MemoryInfo::BYTES_PER_LINE),
+            ),
+        }
     }
 }
 
