@@ -10,7 +10,7 @@ pub mod memory;
 mod rom;
 
 pub use clock::{Clock, Cycles};
-pub use cpu::{Cpu, InstructionInfo};
+pub use cpu::{BcdFlags, Cpu, InstructionInfo};
 pub use memory::{Address, AddressRange, MemoryBusReadOnly};
 
 use crate::{

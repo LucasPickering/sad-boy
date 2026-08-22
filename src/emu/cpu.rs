@@ -17,7 +17,7 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    fmt::{self, Debug, Display},
+    fmt::{self, Debug},
     ops::{BitAnd, BitOr, BitXor},
 };
 use tracing::{error, info_span, trace};
@@ -823,13 +823,13 @@ impl Registers {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BcdFlags {
     /// Was the result of the operation zero?
-    zero: bool,
+    pub zero: bool,
     /// Was the operation a subtraction?
-    subtract: bool,
+    pub subtract: bool,
     /// Did the result overflow from bit 3 (bit 7 for 16-bit ops)?
-    half_carry: bool,
+    pub half_carry: bool,
     /// Did the result overflow the value and wrap?
-    carry: bool,
+    pub carry: bool,
 }
 
 impl BcdFlags {
@@ -841,22 +841,6 @@ impl BcdFlags {
             ConditionCode::C => self.carry,
             ConditionCode::Nc => !self.carry,
         }
-    }
-}
-
-impl Display for BcdFlags {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn b(b: bool) -> &'static str {
-            if b { "1" } else { "0" }
-        }
-        write!(
-            f,
-            "z={},n={},h={},c={}",
-            b(self.zero),
-            b(self.subtract),
-            b(self.half_carry),
-            b(self.carry)
-        )
     }
 }
 

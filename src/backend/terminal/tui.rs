@@ -2,22 +2,27 @@
 //!
 //! This is the Ratatui implementation of the interactive TUI.
 
+#![expect(unstable_name_collisions)] // From Itertools::intersperse
+
+mod style;
+
 use crate::{
     backend::terminal::{
         RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH, input::TuiEvent,
+        tui::style::STYLES,
     },
     debugger::{Debugger, RunState},
     emu::{
-        Address, AddressRange, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
-        MemoryBusReadOnly, instruction::Instruction, memory,
+        Address, AddressRange, BcdFlags, Clock, Cpu, Cycles, GameBoy,
+        InstructionInfo, MemoryBusReadOnly, instruction::Instruction, memory,
     },
-    util::IntDisplay,
+    util::{IntDisplay, PackedBits},
 };
 use itertools::Itertools;
 use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     prelude::Buffer,
-    style::{Color, Modifier, Style, Styled},
+    style::Styled,
     symbols::merge::MergeStrategy,
     text::{Line, Span, Text},
     widgets::{
@@ -156,7 +161,7 @@ impl Widget for DebuggerInfo<'_> {
                 RunState::Running => "RUNNING",
             }
             .into(),
-            "Breakpoints".set_style(Modifier::UNDERLINED),
+            "Breakpoints".set_style(STYLES.subheader),
         ]);
         for breakpoint in self.0.breakpoints() {
             text.push_line(breakpoint.to_string());
@@ -182,7 +187,7 @@ impl Widget for CpuInfo<'_> {
                         hex = IntDisplay::hex(value),
                         bin = IntDisplay::binary(value),
                     ),
-                    u8_style(value),
+                    STYLES.u8(value),
                 ),
             ])
         }
@@ -192,13 +197,41 @@ impl Widget for CpuInfo<'_> {
                 format!("{name}: ").into(),
                 Span::styled(
                     format!("{value} ({hex})", hex = IntDisplay::hex(value)),
-                    u16_style(value),
+                    STYLES.u16(value),
                 ),
             ])
         }
 
-        fn fmt_address(name: &'static str, value: Address) -> Line<'static> {
+        fn fmt_reg_addr(name: &'static str, value: Address) -> Line<'static> {
             format!("{name}: {value}").into()
+        }
+
+        fn fmt_reg_flags(
+            name: &'static str,
+            value: PackedBits<BcdFlags>,
+        ) -> Line<'static> {
+            fn flag(name: char, value: bool) -> Span<'static> {
+                Span::styled(
+                    format!(
+                        "{name}={value}",
+                        value = if value { '1' } else { '0' }
+                    ),
+                    STYLES.bool(value),
+                )
+            }
+
+            let flags = value.unpack();
+            [
+                format!("{name}:").into(),
+                IntDisplay::hex(value.as_u8()).to_string().into(),
+                flag('z', flags.zero),
+                flag('n', flags.subtract),
+                flag('h', flags.half_carry),
+                flag('c', flags.carry),
+            ]
+            .into_iter()
+            .intersperse(" ".into())
+            .collect()
         }
 
         let area = panel("CPU", area, buf);
@@ -229,15 +262,10 @@ impl Widget for CpuInfo<'_> {
             )
             .into(),
             // Registers
-            fmt_address("pc", registers.pc()),
-            fmt_address("sp", registers.sp()),
+            fmt_reg_addr("pc", registers.pc()),
+            fmt_reg_addr("sp", registers.sp()),
             fmt_reg8("a", registers.a()),
-            format!(
-                "f: {} {}",
-                IntDisplay::hex(registers.f().as_u8()),
-                registers.f().unpack()
-            )
-            .into(),
+            fmt_reg_flags("f", registers.f()),
             fmt_reg16("af", registers.af()),
             fmt_reg8("b", registers.b()),
             fmt_reg8("c", registers.c()),
@@ -303,7 +331,6 @@ impl MemoryInfo<'_> {
 }
 
 impl Widget for MemoryInfo<'_> {
-    #[expect(unstable_name_collisions)] // From Itertools::intersperse
     fn render(self, area: Rect, buf: &mut Buffer) {
         const BYTES_PER_LINE: u16 = 8;
 
@@ -311,20 +338,19 @@ impl Widget for MemoryInfo<'_> {
         fn fmt_address(address: Address) -> Span<'static> {
             Span::styled(
                 IntDisplay::hex(address.0).without_prefix().to_string(),
-                Style::default().add_modifier(Modifier::BOLD),
+                STYLES.memory_gutter,
             )
         }
 
         // Format a single byte to text
         let fmt_byte = |address: Address, value: u8| -> Span {
-            let modifier = if self.pc.contains(address) {
-                Modifier::UNDERLINED
-            } else {
-                Modifier::empty()
-            };
+            let mut style = STYLES.u8(value);
+            if self.pc.contains(address) {
+                style = style.patch(STYLES.memory_pc);
+            }
             Span::styled(
                 IntDisplay::hex(value).without_prefix().to_string(),
-                u8_style(value).add_modifier(modifier),
+                style,
             )
         };
 
@@ -344,7 +370,7 @@ impl Widget for MemoryInfo<'_> {
             {
                 text.push_line(Span::styled(
                     labelled_range.name().unwrap(),
-                    Color::Gray,
+                    STYLES.memory_range_label,
                 ));
             }
 
@@ -390,41 +416,4 @@ fn panel(title: &'_ str, area: Rect, buf: &mut Buffer) -> Rect {
         .merge_borders(MergeStrategy::Fuzzy);
     (&block).render(area, buf);
     block.inner(area)
-}
-
-/// Get text styling for an 8-bit value
-///
-/// This provides some visual guidance when reading bytes.
-/// https://simonomi.dev/blog/color-code-your-bytes/
-fn u8_style(value: u8) -> Style {
-    // https://github.com/simonomi/hexapoda/blob/bf8bd6297d649b3fb1f100bdc99272705fa558b3/src/buffer/widget/hex.rs#L210
-    let color = match value {
-        0x00 => Color::Rgb(0x80, 0x80, 0x80), // grey
-        0x01..0x10 => Color::Rgb(0xFF, 0x71, 0xA9), // red
-        0x10..0x20 => Color::Rgb(0xFF, 0x7A, 0x78), // salmon
-        0x20..0x30 => Color::Rgb(0xFF, 0x81, 0x23), // red-orange
-        0x30..0x40 => Color::Rgb(0xF7, 0x93, 0x00), // yellow-orange
-        0x40..0x50 => Color::Rgb(0xE6, 0x9F, 0x00), // yellow
-        0x50..0x60 => Color::Rgb(0xC1, 0xB2, 0x00), // green-yellow
-        0x60..0x70 => Color::Rgb(0x82, 0xC6, 0x00), // lime
-        0x70..0x80 => Color::Rgb(0x00, 0xD5, 0x00), // green
-        0x80..0x90 => Color::Rgb(0x00, 0xD4, 0x59), // clover
-        0x90..0xA0 => Color::Rgb(0x00, 0xD0, 0x91), // teal
-        0xA0..0xB0 => Color::Rgb(0x00, 0xCC, 0xBB), // cyan
-        0xB0..0xC0 => Color::Rgb(0x00, 0xC7, 0xDE), // light blue
-        0xC0..0xD0 => Color::Rgb(0x00, 0xBE, 0xFF), // blue
-        0xD0..0xE0 => Color::Rgb(0x6C, 0xAF, 0xFF), // blurple
-        0xE0..0xF0 => Color::Rgb(0xB2, 0x98, 0xFF), // purple
-        0xF0..0xFF => Color::Rgb(0xFF, 0x4D, 0xFF), // pink
-        0xFF => Color::White,
-    };
-    Style::new().fg(color)
-}
-
-/// Get text styling for a 16-bit value
-///
-/// This provides some visual guidance when reading bytes.
-/// https://simonomi.dev/blog/color-code-your-bytes/
-fn u16_style(value: u16) -> Style {
-    u8_style(value.to_be_bytes()[0])
 }
