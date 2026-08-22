@@ -11,7 +11,7 @@ mod rom;
 
 pub use clock::{Clock, Cycles};
 pub use cpu::{Cpu, InstructionInfo};
-pub use memory::{Address, MemoryBusReadOnly};
+pub use memory::{Address, AddressRange, MemoryBusReadOnly};
 
 use crate::{
     backend::{Backend, FrameBuffer},

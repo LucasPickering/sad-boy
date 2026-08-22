@@ -33,39 +33,39 @@ const BOOTSTRAP_CODE: &[u8] = include_bytes!("../../bootstrap/dmg_boot.bin");
 /// This range is mapped *on top of* the ROM code while the bootstrap is
 /// running.
 pub const BOOTSTRAP: AddressRange =
-    AddressRange::new("Bootstrap", 0x0000, 0x00FF);
+    AddressRange::named("Bootstrap", 0x0000, 0x00FF);
 /// Static portion of the cartridge ROM
 ///
 /// This is the first bank of the ROM, which **cannot** be switched.
 pub const CARTRIDGE_ROM_0: AddressRange =
-    AddressRange::new("Cartridge ROM Bank 0", 0x0000, 0x3FFF);
+    AddressRange::named("Cartridge ROM Bank 0", 0x0000, 0x3FFF);
 /// Switchable bank of the cartridge ROM
 ///
 /// A cartridge can have any number of secondary banks and switch between them.
 pub const CARTRIDGE_ROM_N: AddressRange =
-    AddressRange::new("Cartridge ROM Bank N", 0x4000, 0x7FFF);
+    AddressRange::named("Cartridge ROM Bank N", 0x4000, 0x7FFF);
 /// All read-only cartridge memory
 pub const CARTRIDGE_ROM: AddressRange =
     CARTRIDGE_ROM_0.union("Cartridge ROM", CARTRIDGE_ROM_N);
 /// Video RAM containing tile pixel data
 pub const TILE_DATA: AddressRange =
-    AddressRange::new("Tile Data", 0x8000, 0x97FF);
+    AddressRange::named("Tile Data", 0x8000, 0x97FF);
 /// Video RAM containing both tile maps
 pub const TILE_MAPS: AddressRange =
-    AddressRange::new("Tile Maps", 0x9800, 0x9FFF);
+    AddressRange::named("Tile Maps", 0x9800, 0x9FFF);
 /// Switchable RAM bank provided by the cartridge
 pub const CARTRIDGE_RAM: AddressRange =
-    AddressRange::new("Cartridge RAM", 0xA000, 0xBFFF);
+    AddressRange::named("Cartridge RAM", 0xA000, 0xBFFF);
 /// Address range for general-purpose writable RAM
-pub const RAM: AddressRange = AddressRange::new("RAM", 0xC000, 0xDFFF);
+pub const RAM: AddressRange = AddressRange::named("RAM", 0xC000, 0xDFFF);
 /// A mirror of RAM that *should* not be used by games
 pub const ECHO_RAM: AddressRange =
-    AddressRange::new("Echo RAM", 0xE000, 0xFDFF);
+    AddressRange::named("Echo RAM", 0xE000, 0xFDFF);
 /// Object Attribute Memory (part of VRAM)
-pub const OAM: AddressRange = AddressRange::new("OAM", 0xFE00, 0xFE9F);
+pub const OAM: AddressRange = AddressRange::named("OAM", 0xFE00, 0xFE9F);
 /// Address range for additional general-purpose writable RAM
 pub const HIGH_RAM: AddressRange =
-    AddressRange::new("High RAM", 0xFF80, 0xFFFE);
+    AddressRange::named("High RAM", 0xFF80, 0xFFFE);
 // ===== Hardware Registers ====
 // https://gbdev.io/pandocs/Hardware_Reg_List.html
 pub const LCDC: u16 = 0xFF40;
@@ -373,9 +373,10 @@ impl MemoryBusReadOnly<'_> {
 pub struct Address(pub u16);
 
 impl Address {
-    /// Add `rhs` to `self`, capping at [u16::MAX] without overflowing
-    pub fn saturating_add(self, rhs: u16) -> Self {
-        Self(self.0.saturating_add(rhs))
+    /// Add an offset to this address, returning `None` if the sum would
+    /// overflow the `u16`
+    pub fn checked_add(self, offset: u16) -> Option<Self> {
+        self.0.checked_add(offset).map(Self)
     }
 }
 
@@ -419,18 +420,30 @@ impl FromStr for Address {
 /// A range of memory addresses
 #[derive(Clone, Copy, Debug)]
 pub struct AddressRange {
-    name: &'static str,
+    name: Option<&'static str>,
     range: RangeInclusive<Address>,
 }
 
 impl AddressRange {
     /// Define a range of memory
     ///
-    ///
-    /// The given bounds are **inclusive**: `[start, end]`.
-    pub const fn new(name: &'static str, start: u16, last: u16) -> Self {
+    /// The given bounds are **inclusive**: `[start, last]`.
+    pub const fn new(start: u16, last: u16) -> Self {
         Self {
-            name,
+            name: None,
+            range: RangeInclusive {
+                start: Address(start),
+                last: Address(last),
+            },
+        }
+    }
+
+    /// Define a range of memory with a descriptive name for debugging
+    ///
+    /// The given bounds are **inclusive**: `[start, last]`.
+    pub const fn named(name: &'static str, start: u16, last: u16) -> Self {
+        Self {
+            name: Some(name),
             range: RangeInclusive {
                 start: Address(start),
                 last: Address(last),
@@ -443,7 +456,7 @@ impl AddressRange {
     /// `self` must be the lower range and `other` is the upper range.
     const fn union(self, name: &'static str, other: AddressRange) -> Self {
         Self {
-            name,
+            name: Some(name),
             range: RangeInclusive {
                 start: self.start(),
                 last: other.last(),
@@ -488,7 +501,10 @@ impl AddressRange {
 impl Display for AddressRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let range = &self.range;
-        write!(f, "{} [{}, {}]", self.name, range.start, range.last)
+        if let Some(name) = self.name {
+            write!(f, "{name} ")?;
+        }
+        write!(f, "[{}, {}]", range.start, range.last)
     }
 }
 

@@ -8,7 +8,7 @@ use crate::{
     },
     debugger::Debugger,
     emu::{
-        Address, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
+        Address, AddressRange, Clock, Cpu, Cycles, GameBoy, InstructionInfo,
         MemoryBusReadOnly, instruction::Instruction,
     },
     util::IntDisplay,
@@ -94,14 +94,20 @@ impl Widget for TuiWidget<'_> {
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
         if self.debugger.paused() {
+            let cpu = self.emulator.cpu();
             CpuInfo {
                 clock: self.emulator.clock(),
-                cpu: self.emulator.cpu(),
+                cpu,
             }
             .render(cpu_area, buf);
+            let pc = cpu.registers().pc().0;
             MemoryInfo {
-                // TODO round down to nearest 8
-                offset: self.emulator.cpu().registers().pc(),
+                offset: Address(0x0000),
+                pc: AddressRange::new(
+                    pc,
+                    // Bound is INCLUSIVE
+                    pc + cpu.current_instruction().size - 1,
+                ),
                 memory_bus: self.emulator.memory(),
             }
             .render(memory_area, buf);
@@ -134,51 +140,32 @@ struct CpuInfo<'a> {
 
 impl Widget for CpuInfo<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // TODO replace Reg with just functions
-        /// Register display helper
-        struct Reg<T>(&'static str, T);
-
-        impl From<Reg<u8>> for Line<'static> {
-            fn from(reg: Reg<u8>) -> Self {
-                let Reg(name, value) = reg;
-                Line::from_iter([
-                    format!("{name}: ").into(),
-                    Span::styled(
-                        format!(
-                            "{value} ({hex}, {bin})",
-                            hex = IntDisplay::hex(value),
-                            bin = IntDisplay::binary(value),
-                        ),
-                        u8_style(value),
+        fn fmt_reg8(name: &'static str, value: u8) -> Line<'static> {
+            Line::from_iter([
+                format!("{name}: ").into(),
+                Span::styled(
+                    format!(
+                        "{value} ({hex}, {bin})",
+                        hex = IntDisplay::hex(value),
+                        bin = IntDisplay::binary(value),
                     ),
-                ])
-            }
+                    u8_style(value),
+                ),
+            ])
         }
 
-        impl From<Reg<u16>> for Line<'static> {
-            fn from(reg: Reg<u16>) -> Self {
-                let Reg(name, value) = reg;
-                Line::from_iter([
-                    format!("{name}: ").into(),
-                    Span::styled(
-                        format!(
-                            "{value} ({hex})",
-                            hex = IntDisplay::hex(value)
-                        ),
-                        u16_style(value),
-                    ),
-                ])
-            }
+        fn fmt_reg16(name: &'static str, value: u16) -> Line<'static> {
+            Line::from_iter([
+                format!("{name}: ").into(),
+                Span::styled(
+                    format!("{value} ({hex})", hex = IntDisplay::hex(value)),
+                    u16_style(value),
+                ),
+            ])
         }
 
-        impl From<Reg<Address>> for Line<'static> {
-            fn from(reg: Reg<Address>) -> Self {
-                let Reg(name, value) = reg;
-                Line::from_iter([
-                    format!("{name}: ").into(),
-                    Span::styled(value.to_string(), u16_style(value.0)),
-                ])
-            }
+        fn fmt_address(name: &'static str, value: Address) -> Line<'static> {
+            format!("{name}: {value}").into()
         }
 
         let area = panel("CPU", area, buf);
@@ -209,25 +196,25 @@ impl Widget for CpuInfo<'_> {
             )
             .into(),
             // Registers
-            Reg("pc", registers.pc()).into(),
-            Reg("sp", registers.sp()).into(),
-            Reg("a", registers.a()).into(),
+            fmt_address("pc", registers.pc()),
+            fmt_address("sp", registers.sp()),
+            fmt_reg8("a", registers.a()),
             format!(
                 "f: {} {}",
                 IntDisplay::hex(registers.f().as_u8()),
                 registers.f().unpack()
             )
             .into(),
-            Reg("af", registers.af()).into(),
-            Reg("b", registers.b()).into(),
-            Reg("c", registers.c()).into(),
-            Reg("bc", registers.bc()).into(),
-            Reg("d", registers.d()).into(),
-            Reg("e", registers.e()).into(),
-            Reg("de", registers.de()).into(),
-            Reg("h", registers.h()).into(),
-            Reg("l", registers.l()).into(),
-            Reg("hl", registers.hl()).into(),
+            fmt_reg16("af", registers.af()),
+            fmt_reg8("b", registers.b()),
+            fmt_reg8("c", registers.c()),
+            fmt_reg16("bc", registers.bc()),
+            fmt_reg8("d", registers.d()),
+            fmt_reg8("e", registers.e()),
+            fmt_reg16("de", registers.de()),
+            fmt_reg8("h", registers.h()),
+            fmt_reg8("l", registers.l()),
+            fmt_reg16("hl", registers.hl()),
             format!(
                 "INT: {}",
                 if self.cpu.interrupts_enabled() {
@@ -246,36 +233,48 @@ impl Widget for CpuInfo<'_> {
 struct MemoryInfo<'a> {
     /// First visible address
     offset: Address,
+    /// Range of bytes defining the next CPU instruction
+    pc: AddressRange,
     memory_bus: MemoryBusReadOnly<'a>,
 }
 
 impl Widget for MemoryInfo<'_> {
+    #[expect(unstable_name_collisions)] // From Itertools::intersperse
     fn render(self, area: Rect, buf: &mut Buffer) {
         const BYTES_PER_LINE: u16 = 8;
 
-        fn fmt_address(address: Address) -> Span<'static> {
+        // Format a memory address in the gutter
+        let fmt_address = |address: Address| -> Span {
             Span::styled(
                 IntDisplay::hex(address.0).without_prefix().to_string(),
                 Style::default().add_modifier(Modifier::BOLD),
             )
-        }
+        };
 
-        fn fmt_byte(value: u8) -> Span<'static> {
+        // Format a single byte to text
+        let fmt_byte = |address: Address, value: u8| -> Span {
+            let modifier = if self.pc.contains(address) {
+                Modifier::UNDERLINED
+            } else {
+                Modifier::empty()
+            };
             Span::styled(
                 IntDisplay::hex(value).without_prefix().to_string(),
-                u8_style(value),
+                u8_style(value).add_modifier(modifier),
             )
-        }
+        };
 
         let area = panel("Memory", area, buf);
-        // TODO cap at 0xffff - don't overflow
         let text: Text = (0..area.height)
-            .map(|line| {
-                let address = self.offset + line * BYTES_PER_LINE;
+            // Cap at 0xffff
+            .filter_map(|y| self.offset.checked_add(y * BYTES_PER_LINE))
+            .map(|address| {
+                // Address range size is divisible by BYTES_PER_LINE, so if
+                // the start of the line is valid, the entire line will be
                 let bytes = (0..BYTES_PER_LINE).map(|offset| {
                     let address = address + offset;
                     let value = self.memory_bus.get8(address);
-                    fmt_byte(value)
+                    fmt_byte(address, value)
                 });
 
                 [fmt_address(address)]
