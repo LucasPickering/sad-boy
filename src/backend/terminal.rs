@@ -37,10 +37,6 @@ use std::{
 };
 use tracing::{debug, error, info};
 
-/// Width of the screen in terminal columns
-const TERM_WIDTH: u16 = 60;
-/// Height of the screen in terminal rows
-const TERM_HEIGHT: u16 = 20;
 /// POSIX signals that tell the process to shut down
 const QUIT_SIGNALS: [i32; 4] = [
     signal::SIGINT,
@@ -216,8 +212,18 @@ impl Backend for TerminalBackend {
         // directly to the output
         let mut f = || {
             // Shitty try block
-            write!(self.terminal.backend_mut(), "{}", cursor::MoveTo(0, 0))?;
-            draw_frame(frame, false, self.terminal.backend_mut())
+            let area = self.tui.emulator_area();
+            write!(
+                self.terminal.backend_mut(),
+                "{}",
+                cursor::MoveTo(area.x, area.y)
+            )?;
+            draw_frame(
+                frame,
+                area.as_size(),
+                false,
+                self.terminal.backend_mut(),
+            )
         };
         if let Err(error) = f() {
             error!("Error drawing to terminal: {error}");

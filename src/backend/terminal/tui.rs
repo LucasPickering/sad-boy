@@ -8,7 +8,7 @@ mod style;
 
 use crate::{
     backend::terminal::{
-        RatatuiTerminal, TERM_HEIGHT, TERM_WIDTH,
+        RatatuiTerminal,
         input::{InputAction, InputEvent, TuiEvent},
         tui::style::STYLES,
     },
@@ -31,7 +31,6 @@ use ratatui::{
         ScrollbarState, StatefulWidget, Widget,
     },
 };
-use std::cell::RefCell;
 
 /// Terminal UI surrounding the emulator
 ///
@@ -42,9 +41,18 @@ use std::cell::RefCell;
 pub struct Tui {
     /// Vertical scroll state for the Memory panel
     memory_scroll: ScrollbarState,
+    areas: Option<TuiAreas>,
 }
 
 impl Tui {
+    /// Get the screen area that the emulator screen should be drawn to
+    ///
+    /// This area is expanded as much as possible, but will be shrunk as
+    /// necessary to fit the debugger around it.
+    pub fn emulator_area(&self) -> Rect {
+        self.areas.map(|areas| areas.emulator).unwrap_or_default()
+    }
+
     /// Draw the TUI to the terminal
     pub fn draw(
         &mut self,
@@ -54,8 +62,12 @@ impl Tui {
     ) {
         terminal
             .draw(|frame| {
+                let areas = *self
+                    .areas
+                    .get_or_insert_with(|| TuiAreas::split(frame.area()));
                 frame.render_widget(
                     TuiWidget {
+                        areas,
                         emulator,
                         debugger,
                         memory_scroll: &mut self.memory_scroll,
@@ -100,6 +112,7 @@ impl Default for Tui {
     fn default() -> Self {
         Self {
             memory_scroll: ScrollbarState::new(AddressRange::ALL.len()),
+            areas: None,
         }
     }
 }
@@ -110,14 +123,16 @@ struct TuiWidget<'a> {
     debugger: &'a Debugger,
     /// Vertical scroll state for the Memory panel
     memory_scroll: &'a mut ScrollbarState,
+    /// Pre-computed layout
+    ///
+    /// This is calculated and stored in the parent because it's expensive to
+    /// compute and only changes on resize, so caching is nice.
+    areas: TuiAreas,
 }
 
 impl Widget for TuiWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        // Show breakpoints always so we can set them while running
-        let areas = TuiAreas::get(area);
-
-        DebuggerInfo(self.debugger).render(areas.debug, buf);
+    fn render(self, _area: Rect, buf: &mut Buffer) {
+        DebuggerInfo(self.debugger).render(self.areas.debug, buf);
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
@@ -127,7 +142,7 @@ impl Widget for TuiWidget<'_> {
                 clock: self.emulator.clock(),
                 cpu,
             }
-            .render(areas.cpu, buf);
+            .render(self.areas.cpu, buf);
             let pc = cpu.registers().pc().0;
             MemoryInfo {
                 pc: AddressRange::new(
@@ -138,7 +153,7 @@ impl Widget for TuiWidget<'_> {
                 scroll: self.memory_scroll,
                 memory_bus: self.emulator.memory(),
             }
-            .render(areas.memory, buf);
+            .render(self.areas.memory, buf);
         }
     }
 }
@@ -146,53 +161,37 @@ impl Widget for TuiWidget<'_> {
 /// Split areas for the main TUI layout
 #[derive(Clone, Copy)]
 struct TuiAreas {
+    /// Area the emulator screen will draw to
+    emulator: Rect,
+    /// Debugger panel in the bottom-left
     debug: Rect,
+    /// CPU panel in the bottom-middle
     cpu: Rect,
+    /// Memory panel on the right
     memory: Rect,
 }
 
 impl TuiAreas {
     /// Split the given area for the TUI layout
-    fn get(area: Rect) -> Self {
-        // The area splitting is expensive (~40% of the frame time) but it
-        // only changes if the terminal is resized. Caching it speeds up rapid
-        // stepping by a lot.
-        thread_local! {
-            static CACHE: RefCell<Option<(Rect, TuiAreas)>> =
-                const { RefCell::new(None) };
-        }
-
-        // Check the cache
-        if let Some(cached) = CACHE.with(|cache| {
-            cache
-                .borrow()
-                .filter(|(key, _)| *key == area)
-                .map(|(_, value)| value)
-        }) {
-            return cached;
-        }
-
+    fn split(area: Rect) -> Self {
         // Show breakpoints always so we can set them while running
-        let [left, memory, _] = Layout::horizontal([
-            TERM_WIDTH.into(),
-            31.into(),
-            Constraint::Min(0),
-        ])
-        .areas(area);
+        let [left, memory] =
+            Layout::horizontal([Constraint::Min(0), 31.into()]).areas(area);
         // Leave space for the screen in the top-left
-        let [_, mut bottom_left] =
-            Layout::vertical([TERM_HEIGHT.into(), Constraint::Min(0)])
-                .areas(left);
+        let [emulator, mut bottom_left] =
+            Layout::vertical([Constraint::Min(0), 20.into()]).areas(left);
         bottom_left.width += 1; // Combine borders into the Memory panel
         // Move down below the screen area
         let [debug, cpu] = Layout::horizontal([Constraint::Min(0), 36.into()])
             .spacing(-1)
             .areas(bottom_left);
-        let areas = Self { debug, cpu, memory };
 
-        // Cache this layout
-        CACHE.with(|cache| *cache.borrow_mut() = Some((area, areas)));
-        areas
+        Self {
+            emulator,
+            debug,
+            cpu,
+            memory,
+        }
     }
 }
 

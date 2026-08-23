@@ -5,10 +5,7 @@
 //!
 //! https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
-use crate::backend::{
-    FrameBuffer,
-    terminal::{TERM_HEIGHT, TERM_WIDTH},
-};
+use crate::backend::FrameBuffer;
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
 use nix::{
     fcntl::OFlag,
@@ -18,6 +15,7 @@ use nix::{
         stat::Mode,
     },
 };
+use ratatui::layout::Size;
 use std::{
     ffi::c_void,
     io::{self, Write},
@@ -55,8 +53,15 @@ macro_rules! write_message {
 }
 
 /// Draw a frame to the terminal
+///
+/// ## Params
+/// - `frame`: Frame buffer holding the pixels to draw
+/// - `size`: Terminal size to draw to (location is the current cursor)
+/// - `move_cursor`: Should the cursor move to the end of the frame?
+/// - `out`: Output channel (probably stdout)
 pub fn draw_frame(
     frame: &FrameBuffer,
+    size: Size,
     move_cursor: bool,
     mut out: impl io::Write,
 ) -> io::Result<()> {
@@ -111,8 +116,8 @@ pub fn draw_frame(
         f = 24,                     // format = RGB
         s = frame.width(),          // pixel width
         v = frame.height(),         // pixel height
-        c = TERM_WIDTH,             // width in terminal columns
-        r = TERM_HEIGHT,            // height in terminal rows
+        c = size.width,             // width in terminal columns
+        r = size.height,            // height in terminal rows
         C = u8::from(!move_cursor), // enable/disable cursor movement
         t = 's',                    // transmit via shared memory
         S = len,                    // shared memory length

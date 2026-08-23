@@ -224,11 +224,13 @@ impl FrameBuffer {
 
     /// Print a screen to stderr for an assertion
     fn draw_pixels(&self, title: &str, frame: &FrameBuffer) {
+        use ratatui::layout::Size;
         use std::io::Write;
 
         let mut stderr = std::io::stderr();
         writeln!(stderr, "{title}:").unwrap();
-        terminal::draw_frame(frame, true, &mut stderr).unwrap();
+        terminal::draw_frame(frame, Size::new(60, 20), true, &mut stderr)
+            .unwrap();
         writeln!(stderr).unwrap();
     }
 }
