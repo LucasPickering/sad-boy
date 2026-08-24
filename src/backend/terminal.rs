@@ -4,7 +4,7 @@ mod draw;
 mod input;
 mod tui;
 
-pub use draw::draw_frame;
+pub use draw::{FrameLocation, draw_frame};
 
 use crate::{
     Debugger,
@@ -18,13 +18,13 @@ use crate::{
     emu::GameBoy,
 };
 use crossterm::{
-    cursor, event,
+    event,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{Terminal, prelude::CrosstermBackend};
 use signal_hook::consts::signal;
 use std::{
-    io::{self, Stdout, Write},
+    io::{self, Stdout},
     ops::ControlFlow,
     panic,
     sync::{
@@ -213,15 +213,9 @@ impl Backend for TerminalBackend {
         let mut f = || {
             // Shitty try block
             let area = self.tui.emulator_area();
-            write!(
-                self.terminal.backend_mut(),
-                "{}",
-                cursor::MoveTo(area.x, area.y)
-            )?;
             draw_frame(
                 frame,
-                area.as_size(),
-                false,
+                FrameLocation::Fixed(area),
                 self.terminal.backend_mut(),
             )
         };

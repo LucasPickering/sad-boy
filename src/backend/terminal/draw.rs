@@ -7,6 +7,7 @@
 
 use crate::backend::FrameBuffer;
 use base64::{engine::general_purpose::STANDARD, write::EncoderWriter};
+use crossterm::cursor;
 use nix::{
     fcntl::OFlag,
     libc,
@@ -15,7 +16,7 @@ use nix::{
         stat::Mode,
     },
 };
-use ratatui::layout::Size;
+use ratatui::layout::Rect;
 use std::{
     ffi::c_void,
     io::{self, Write},
@@ -61,8 +62,7 @@ macro_rules! write_message {
 /// - `out`: Output channel (probably stdout)
 pub fn draw_frame(
     frame: &FrameBuffer,
-    size: Size,
-    move_cursor: bool,
+    location: FrameLocation,
     mut out: impl io::Write,
 ) -> io::Result<()> {
     // Each frame needs a unique ID to prevent them from overwriting each other.
@@ -108,19 +108,44 @@ pub fn draw_frame(
         libc::memcpy(addr.as_ptr(), pixels.as_ptr().cast::<c_void>(), len);
     }
 
+    let (width, height, cursor_adv) = match location {
+        FrameLocation::Fixed(area) => {
+            write!(out, "{}", cursor::MoveTo(area.x, area.y))?;
+            (area.width, area.height, 1) // 1 = don't advance cursor
+        }
+        #[cfg(test)]
+        FrameLocation::Auto(size) => {
+            (size.width, size.height, 0) // 0 = advance cursor
+        }
+    };
     write_message!(
         out,
         shm_name.as_bytes(), // Payload = shared memory name
         // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
-        a = 'T',                    // action = Transmit + draw image
-        f = 24,                     // format = RGB
-        s = frame.width(),          // pixel width
-        v = frame.height(),         // pixel height
-        c = size.width,             // width in terminal columns
-        r = size.height,            // height in terminal rows
-        C = u8::from(!move_cursor), // enable/disable cursor movement
-        t = 's',                    // transmit via shared memory
-        S = len,                    // shared memory length
+        a = 'T',            // action = Transmit + draw image
+        f = 24,             // format = RGB
+        s = frame.width(),  // pixel width
+        v = frame.height(), // pixel height
+        c = width,          // width in terminal columns
+        r = height,         // height in terminal rows
+        C = cursor_adv,     // enable/disable cursor movement
+        t = 's',            // transmit via shared memory
+        S = len,            // shared memory length
     )?;
     out.flush()
+}
+
+/// Define where a frame should be drawn on the screen in [draw_frame]
+pub enum FrameLocation {
+    /// Draw the frame with a specific position and size
+    ///
+    /// The cursor will be moved to this location and will remain there
+    /// afterward (it will not be advanced to the end of the frame).
+    Fixed(Rect),
+    /// Draw the frame with a fixed size at the current cursor location
+    ///
+    /// The cursor will be advanced to the end of the frame. Use this for
+    /// inline printing (e.g. in assertion output).
+    #[cfg(test)]
+    Auto(ratatui::layout::Size),
 }

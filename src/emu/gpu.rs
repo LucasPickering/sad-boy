@@ -316,8 +316,6 @@ impl Vram {
 
         // First we need to find the tile INDEX in the tile MAP, then use THAT
         // index to find the underlying TILE
-        // TODO use a const for tile map width. Maybe TileMap should be a
-        // struct?
         let tile_x = x / Tile::WIDTH;
         let tile_y = y / Tile::HEIGHT;
         // TODO select tile map correctly
