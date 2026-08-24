@@ -33,6 +33,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, StatefulWidget, Widget},
 };
 use ratatui_textarea::TextArea;
+use std::iter;
 
 /// Terminal UI surrounding the emulator
 ///
@@ -197,19 +198,19 @@ impl StatefulWidget for TuiWidget<'_> {
     type State = MemoryInfoState;
 
     fn render(self, _area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        DebuggerInfo(self.debugger).render(self.areas.debug, buf);
+        DebuggerPanel(self.debugger).render(self.areas.debug, buf);
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
         if self.debugger.run_state().should_show_debugger() {
             let cpu = self.emulator.cpu();
-            CpuInfo {
+            CpuPanel {
                 clock: self.emulator.clock(),
                 cpu,
             }
             .render(self.areas.cpu, buf);
             let pc = cpu.registers().pc().0;
-            MemoryInfo {
+            MemoryPanel {
                 pc: AddressRange::new(
                     pc,
                     // Bound is INCLUSIVE
@@ -267,9 +268,9 @@ impl TuiAreas {
 }
 
 /// Widget for debugger info
-struct DebuggerInfo<'a>(&'a Debugger);
+struct DebuggerPanel<'a>(&'a Debugger);
 
-impl Widget for DebuggerInfo<'_> {
+impl Widget for DebuggerPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = panel("Debugger", area, buf);
         let mut text = Text::from_iter([
@@ -289,12 +290,12 @@ impl Widget for DebuggerInfo<'_> {
 }
 
 /// Widget for CPU info
-struct CpuInfo<'a> {
+struct CpuPanel<'a> {
     clock: &'a Clock,
     cpu: &'a Cpu,
 }
 
-impl Widget for CpuInfo<'_> {
+impl Widget for CpuPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         fn fmt_reg8(name: &'static str, value: u8) -> Line<'static> {
             Line::from_iter([
@@ -409,7 +410,7 @@ impl Widget for CpuInfo<'_> {
 }
 
 /// Widget to inspect memory
-struct MemoryInfo<'a> {
+struct MemoryPanel<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
     memory_bus: MemoryBusReadOnly<'a>,
@@ -417,74 +418,23 @@ struct MemoryInfo<'a> {
     go_to_address: Option<&'a TextArea<'static>>,
 }
 
-impl MemoryInfo<'_> {
+impl MemoryPanel<'_> {
     /// Bytes shown on each line of the view
     const BYTES_PER_LINE: u16 = 8;
 }
 
-impl StatefulWidget for MemoryInfo<'_> {
+impl StatefulWidget for MemoryPanel<'_> {
     type State = MemoryInfoState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        // Format a memory address in the gutter
-        fn fmt_address(address: Address) -> Span<'static> {
-            Span::styled(
-                IntDisplay::hex(address.0).without_prefix().to_string(),
-                STYLES.memory_gutter,
-            )
-        }
-
-        // Format a single byte to text
-        let fmt_byte = |address: Address, value: u8| -> Span {
-            let mut style = STYLES.u8(value);
-            // Apply extra styles
-            if self.pc.contains(address) {
-                style = style.patch(STYLES.memory_pc);
-            }
-            if address == state.selected {
-                style = style.patch(STYLES.memory_selected);
-            }
-            Span::styled(
-                IntDisplay::hex(value).without_prefix().to_string(),
-                style,
-            )
-        };
-
         let area = panel("Memory", area, buf);
 
-        // Build up the text until we fill the area. The while loop is easier
-        // than an iterator because the number of lines is dynamic based on
-        // what labels are visible
-        let mut text = Text::default();
-        let mut next_address =
-            Address(state.scroll.offset() as u16 * Self::BYTES_PER_LINE);
-        while text.height() < area.height.into() {
-            // Address range size is divisible by BYTES_PER_LINE, so if
-            // the start of the line is valid, the entire line will be
-            let bytes = (0..Self::BYTES_PER_LINE).map(|offset| {
-                let address = next_address + offset;
-                let value = self.memory_bus.get8(address);
-                fmt_byte(address, value)
-            });
-
-            let line = [fmt_address(next_address)]
-                .into_iter()
-                .chain(bytes)
-                .intersperse(" ".into())
-                .collect::<Line>();
-            text.push_line(line);
-
-            if let Some(next) = next_address.checked_add(Self::BYTES_PER_LINE) {
-                next_address = next;
-            } else {
-                // Hit the end of the address range
-                break;
-            }
+        // Main content - the bytes!!
+        MemoryBytes {
+            pc: self.pc,
+            memory_bus: self.memory_bus,
         }
-        text.render(area, buf);
-
-        // Draw scrollbar
-        Scrollbar::default().render(area, buf, &mut state.scroll);
+        .render(area, buf, state);
 
         // Go To textbox overlays on the bottom line
         let bottom_area = Rect {
@@ -505,7 +455,7 @@ impl StatefulWidget for MemoryInfo<'_> {
 /// Widget state for [MemoryInfo]
 ///
 /// This is the state that's retained across calls.
-pub struct MemoryInfoState {
+struct MemoryInfoState {
     /// Highlighted
     selected: Address,
     /// Vertical scroll state
@@ -522,14 +472,14 @@ impl MemoryInfoState {
         self.selected = address;
         // Make sure the selected byte stays in view
         self.scroll
-            .scroll_to((address.0 / MemoryInfo::BYTES_PER_LINE).into());
+            .scroll_to((address.0 / MemoryPanel::BYTES_PER_LINE).into());
     }
 
     /// Move the address selection one cell in the given direction
     fn move_address(&mut self, direction: Direction) {
         let offset = match direction {
-            Direction::Up => -(MemoryInfo::BYTES_PER_LINE as i16),
-            Direction::Down => MemoryInfo::BYTES_PER_LINE as i16,
+            Direction::Up => -(MemoryPanel::BYTES_PER_LINE as i16),
+            Direction::Down => MemoryPanel::BYTES_PER_LINE as i16,
             Direction::Left => -1,
             Direction::Right => 1,
         };
@@ -546,6 +496,94 @@ impl Default for MemoryInfoState {
             selected: Address::default(),
             scroll: ScrollbarState::new(AddressRange::ALL.len()),
         }
+    }
+}
+
+/// Widget for the byte rows of [MemoryInfo]
+struct MemoryBytes<'a> {
+    /// Range of bytes defining the next CPU instruction
+    pc: AddressRange,
+    memory_bus: MemoryBusReadOnly<'a>,
+}
+
+impl StatefulWidget for MemoryBytes<'_> {
+    type State = MemoryInfoState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // Split the area vertically once. We know the two will have the same
+        // amount of rows, so we can iterate over them together
+        let [gutter_area, bytes_area] =
+            Layout::horizontal([4.into(), Constraint::Min(0)])
+                .spacing(1)
+                .areas(area);
+
+        // Draw scrollbar
+        Scrollbar::default().render(area, buf, &mut state.scroll);
+
+        // Find the visible lines and iterate over them shits
+        let offset = state.scroll.offset() as u16;
+        for ((line, gutter_area), bytes_area) in (offset
+            ..(offset + area.height))
+            .zip(gutter_area.rows())
+            .zip(bytes_area.rows())
+        {
+            let address = Address(line * MemoryPanel::BYTES_PER_LINE);
+
+            // Draw address in gutter
+            Span::styled(
+                IntDisplay::hex(address.0).without_prefix().to_string(),
+                STYLES.memory_gutter,
+            )
+            .render(gutter_area, buf);
+
+            // Draw each byte as a separate widget. This makes it easy to define
+            // per-byte popups
+            let byte_areas: [Rect; MemoryPanel::BYTES_PER_LINE as usize] =
+                Layout::horizontal(iter::repeat_n(2, 8))
+                    .spacing(1)
+                    .areas(bytes_area);
+            for (address_offset, area) in
+                (0..MemoryPanel::BYTES_PER_LINE).zip(byte_areas)
+            {
+                // Address range size is divisible by BYTES_PER_LINE, so if
+                // the start of the line is valid, the entire line will be
+                let address = address + address_offset;
+                let value = self.memory_bus.get8(address);
+                MemoryByte {
+                    value,
+                    pc: self.pc.contains(address),
+                    selected: address == state.selected,
+                }
+                .render(area, buf);
+            }
+        }
+    }
+}
+
+/// Widget for a single byte in the memory view
+struct MemoryByte {
+    value: u8,
+    /// Is this byte part of the current instruction?
+    pc: bool,
+    /// Is this byte highlighted under the cursor?
+    selected: bool,
+}
+
+impl Widget for MemoryByte {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let mut style = STYLES.u8(self.value);
+        // Apply extra styles
+        if self.pc {
+            style = style.patch(STYLES.memory_pc);
+        }
+        if self.selected {
+            style = style.patch(STYLES.memory_selected);
+        }
+        Span::styled(
+            IntDisplay::hex(self.value).without_prefix().to_string(),
+            style,
+        )
+        .render(area, buf);
     }
 }
 
