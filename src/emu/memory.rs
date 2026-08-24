@@ -458,11 +458,6 @@ impl AddressRange {
         }
     }
 
-    /// Get the range's label, if created with [Self::named]
-    pub fn name(&self) -> Option<&'static str> {
-        self.name
-    }
-
     /// Join two contiguous ranges
     ///
     /// `self` must be the lower range and `other` is the upper range.

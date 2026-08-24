@@ -8,8 +8,6 @@ pub static STYLES: Styles = Styles::new();
 pub struct Styles {
     /// Subheader within a panel
     pub subheader: Style,
-    /// Label for a chunk of memory (e.g `ROM`)
-    pub memory_range_label: Style,
     /// Memory addresses in the gutter of the memory panel
     pub memory_gutter: Style,
     /// Additional styles for bytes part of the active instruction
@@ -22,7 +20,6 @@ impl Styles {
     const fn new() -> Self {
         Self {
             subheader: Style::new().add_modifier(Modifier::UNDERLINED),
-            memory_range_label: Style::new().fg(Color::Gray),
             memory_gutter: Style::new().add_modifier(Modifier::BOLD),
             memory_pc: Style::new().add_modifier(Modifier::UNDERLINED),
             memory_selected: Style::new().add_modifier(Modifier::REVERSED),

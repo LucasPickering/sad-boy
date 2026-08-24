@@ -19,7 +19,7 @@ use crate::{
     debugger::{Debugger, RunState},
     emu::{
         Address, AddressRange, BcdFlags, Clock, Cpu, Cycles, GameBoy,
-        InstructionInfo, MemoryBusReadOnly, instruction::Instruction, memory,
+        InstructionInfo, MemoryBusReadOnly, instruction::Instruction,
     },
     util::{IntDisplay, PackedBits},
 };
@@ -420,35 +420,6 @@ struct MemoryInfo<'a> {
 impl MemoryInfo<'_> {
     /// Bytes shown on each line of the view
     const BYTES_PER_LINE: u16 = 8;
-
-    /// Get all memory ranges that should be labelled
-    fn labelled_ranges(&self) -> impl Iterator<Item = AddressRange> {
-        const PRELUDE_BOOTSTRAP: &[AddressRange] = &[
-            memory::BOOTSTRAP,
-            AddressRange::named(
-                "Cartridge ROM",
-                memory::BOOTSTRAP.last().0 + 1,
-                memory::CARTRIDGE_ROM.last().0,
-            ),
-        ];
-        const PRELUDE_NORMAL: &[AddressRange] = &[memory::CARTRIDGE_ROM];
-        const REST: &[AddressRange] = &[
-            memory::TILE_DATA,
-            memory::TILE_MAPS,
-            memory::CARTRIDGE_RAM,
-            memory::RAM,
-            memory::ECHO_RAM,
-            memory::OAM,
-            memory::HIGH_RAM,
-        ];
-        // While the bootstrap ROM is mounted, it overlays the cartridge ROM
-        let prelude = if self.memory_bus.is_bootstrapping() {
-            PRELUDE_BOOTSTRAP
-        } else {
-            PRELUDE_NORMAL
-        };
-        prelude.iter().chain(REST.iter()).copied()
-    }
 }
 
 impl StatefulWidget for MemoryInfo<'_> {
@@ -488,17 +459,6 @@ impl StatefulWidget for MemoryInfo<'_> {
         let mut next_address =
             Address(state.scroll.offset() as u16 * Self::BYTES_PER_LINE);
         while text.height() < area.height.into() {
-            // Add a label at the start of each region
-            // if let Some(labelled_range) = self
-            //     .labelled_ranges()
-            //     .find(|range| range.start() == next_address)
-            // {
-            //     text.push_line(Span::styled(
-            //         labelled_range.name().unwrap(),
-            //         STYLES.memory_range_label,
-            //     ));
-            // }
-
             // Address range size is divisible by BYTES_PER_LINE, so if
             // the start of the line is valid, the entire line will be
             let bytes = (0..Self::BYTES_PER_LINE).map(|offset| {
