@@ -5,12 +5,16 @@
 #![expect(unstable_name_collisions)] // From Itertools::intersperse
 
 mod style;
+mod widgets;
 
 use crate::{
     backend::terminal::{
         RatatuiTerminal,
         input::{InputAction, InputEvent, TuiAction},
-        tui::style::STYLES,
+        tui::{
+            style::STYLES,
+            widgets::{Scrollbar, ScrollbarState},
+        },
     },
     debugger::{Debugger, RunState},
     emu::{
@@ -21,15 +25,12 @@ use crate::{
 };
 use itertools::Itertools;
 use ratatui::{
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Constraint, Layout, Rect},
     prelude::Buffer,
     style::Styled,
     symbols::merge::MergeStrategy,
     text::{Line, Span, Text},
-    widgets::{
-        Block, BorderType, Borders, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, StatefulWidget, Widget,
-    },
+    widgets::{Block, BorderType, Borders, StatefulWidget, Widget},
 };
 use ratatui_textarea::TextArea;
 
@@ -109,7 +110,7 @@ impl Tui {
                 Some(TuiAction::Submit) => {
                     if let Ok(address) = text_area.lines()[0].parse::<Address>()
                     {
-                        self.memory.scroll_to(address);
+                        self.memory.select_address(address);
                         self.unfocus();
                         true
                     } else {
@@ -126,8 +127,16 @@ impl Tui {
                 };
                 // If it has a bound TUI action, consume it
                 match action {
-                    TuiAction::Up => self.memory.scroll.prev(),
-                    TuiAction::Down => self.memory.scroll.next(),
+                    TuiAction::Up => self.memory.move_address(Direction::Up),
+                    TuiAction::Down => {
+                        self.memory.move_address(Direction::Down);
+                    }
+                    TuiAction::Left => {
+                        self.memory.move_address(Direction::Left);
+                    }
+                    TuiAction::Right => {
+                        self.memory.move_address(Direction::Right);
+                    }
                     TuiAction::DebugGoToAddress => {
                         self.focus(Focus::go_to_address());
                     }
@@ -137,10 +146,7 @@ impl Tui {
                     TuiAction::DebugStepInstruction => {
                         debugger.step_instruction(emulator);
                     }
-                    TuiAction::Left
-                    | TuiAction::Right
-                    | TuiAction::Cancel
-                    | TuiAction::Submit => {}
+                    TuiAction::Cancel | TuiAction::Submit => {}
                 }
                 true
             }
@@ -460,8 +466,12 @@ impl StatefulWidget for MemoryInfo<'_> {
         // Format a single byte to text
         let fmt_byte = |address: Address, value: u8| -> Span {
             let mut style = STYLES.u8(value);
+            // Apply extra styles
             if self.pc.contains(address) {
                 style = style.patch(STYLES.memory_pc);
+            }
+            if address == state.selected {
+                style = style.patch(STYLES.memory_selected);
             }
             Span::styled(
                 IntDisplay::hex(value).without_prefix().to_string(),
@@ -476,18 +486,18 @@ impl StatefulWidget for MemoryInfo<'_> {
         // what labels are visible
         let mut text = Text::default();
         let mut next_address =
-            Address(state.scroll.get_position() as u16 * Self::BYTES_PER_LINE);
+            Address(state.scroll.offset() as u16 * Self::BYTES_PER_LINE);
         while text.height() < area.height.into() {
             // Add a label at the start of each region
-            if let Some(labelled_range) = self
-                .labelled_ranges()
-                .find(|range| range.start() == next_address)
-            {
-                text.push_line(Span::styled(
-                    labelled_range.name().unwrap(),
-                    STYLES.memory_range_label,
-                ));
-            }
+            // if let Some(labelled_range) = self
+            //     .labelled_ranges()
+            //     .find(|range| range.start() == next_address)
+            // {
+            //     text.push_line(Span::styled(
+            //         labelled_range.name().unwrap(),
+            //         STYLES.memory_range_label,
+            //     ));
+            // }
 
             // Address range size is divisible by BYTES_PER_LINE, so if
             // the start of the line is valid, the entire line will be
@@ -514,11 +524,7 @@ impl StatefulWidget for MemoryInfo<'_> {
         text.render(area, buf);
 
         // Draw scrollbar
-        Scrollbar::new(ScrollbarOrientation::VerticalRight).render(
-            area.outer(Margin::new(1, 0)), // Overlay the panel border
-            buf,
-            &mut state.scroll,
-        );
+        Scrollbar::default().render(area, buf, &mut state.scroll);
 
         // Go To textbox overlays on the bottom line
         let bottom_area = Rect {
@@ -540,28 +546,55 @@ impl StatefulWidget for MemoryInfo<'_> {
 ///
 /// This is the state that's retained across calls.
 pub struct MemoryInfoState {
-    /// Vertical scroll
+    /// Highlighted
+    selected: Address,
+    /// Vertical scroll state
+    ///
+    /// This is related to, but not strictly attached to, the selected address.
+    /// The selection can move up and down without scrolling. Scrolling occurs
+    /// only when the selection would move out of view.
     scroll: ScrollbarState,
 }
 
 impl MemoryInfoState {
-    /// Update the scroll state to jump to a specific memory address
-    fn scroll_to(&mut self, address: Address) {
-        // This will automatically truncate to whatever address begins the line
-        let line = address.0 / MemoryInfo::BYTES_PER_LINE;
-        self.scroll = self.scroll.position(line.into());
+    /// Update the selection state to jump to a specific memory address
+    fn select_address(&mut self, address: Address) {
+        self.selected = address;
+        // Make sure the selected byte stays in view
+        self.scroll
+            .scroll_to((address.0 / MemoryInfo::BYTES_PER_LINE).into());
+    }
+
+    /// Move the address selection one cell in the given direction
+    fn move_address(&mut self, direction: Direction) {
+        let offset = match direction {
+            Direction::Up => -(MemoryInfo::BYTES_PER_LINE as i16),
+            Direction::Down => MemoryInfo::BYTES_PER_LINE as i16,
+            Direction::Left => -1,
+            Direction::Right => 1,
+        };
+        // Stop hard at the top/bottom
+        if let Some(address) = self.selected.0.checked_add_signed(offset) {
+            self.select_address(Address(address));
+        }
     }
 }
 
 impl Default for MemoryInfoState {
     fn default() -> Self {
         Self {
-            scroll: ScrollbarState::new(
-                AddressRange::ALL.len()
-                    / usize::from(MemoryInfo::BYTES_PER_LINE),
-            ),
+            selected: Address::default(),
+            scroll: ScrollbarState::new(AddressRange::ALL.len()),
         }
     }
+}
+
+/// Cardinal direction
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 /// Draw an outline for a panel, returning the inner area

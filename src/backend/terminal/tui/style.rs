@@ -14,6 +14,8 @@ pub struct Styles {
     pub memory_gutter: Style,
     /// Additional styles for bytes part of the active instruction
     pub memory_pc: Style,
+    /// Memory byte under the cursor
+    pub memory_selected: Style,
 }
 
 impl Styles {
@@ -23,6 +25,7 @@ impl Styles {
             memory_range_label: Style::new().fg(Color::Gray),
             memory_gutter: Style::new().add_modifier(Modifier::BOLD),
             memory_pc: Style::new().add_modifier(Modifier::UNDERLINED),
+            memory_selected: Style::new().add_modifier(Modifier::REVERSED),
         }
     }
 
