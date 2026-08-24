@@ -131,7 +131,7 @@ impl Debugger {
         emulator: &mut GameBoy,
         backend: &mut dyn Backend,
     ) {
-        while !self.paused {
+        while self.run_state().should_tick() {
             emulator.tick(backend);
             self.check_breakpoints(emulator);
         }
