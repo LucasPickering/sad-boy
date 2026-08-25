@@ -14,7 +14,7 @@ use crate::{
         },
         memory::RawBytes,
     },
-    util::{Bit, Mask, PackedBits, impl_bit_pack},
+    util::{Bit, Mask, PackedBits, assert_size, impl_bit_pack},
 };
 use std::{
     fmt::Debug,
@@ -155,7 +155,7 @@ impl Vram {
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, return
     /// `None`. The concrete return type is masked because this is only used for
     /// the memory bus.
-    pub fn oam(&self) -> Option<&[impl RawBytes]> {
+    pub fn oam(&self) -> Option<&impl RawBytes> {
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
                 Some(&self.oam)
@@ -169,7 +169,7 @@ impl Vram {
     /// OAM is only accessible in modes 0 and 1. In modes 2 and 3, return
     /// `None`. The concrete return type is masked because this is only used for
     /// the memory bus.
-    pub fn oam_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+    pub fn oam_mut(&mut self) -> Option<&mut impl RawBytes> {
         match self.mode() {
             PpuMode::HorizontalBlank | PpuMode::VerticalBlank => {
                 Some(&mut self.oam)
@@ -183,11 +183,11 @@ impl Vram {
     /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
     /// concrete return type is masked because this is only used for the
     /// memory bus.
-    pub fn tile_data(&self) -> Option<&[impl RawBytes]> {
+    pub fn tile_data(&self) -> Option<&impl RawBytes> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.tile_data.as_slice()),
+            | PpuMode::VerticalBlank => Some(&self.tile_data),
             PpuMode::Drawing => None,
         }
     }
@@ -197,11 +197,11 @@ impl Vram {
     /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
     /// concrete return type is masked because this is only used for the
     /// memory bus.
-    pub fn tile_data_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+    pub fn tile_data_mut(&mut self) -> Option<&mut impl RawBytes> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.tile_data.as_slice_mut()),
+            | PpuMode::VerticalBlank => Some(&mut self.tile_data),
             PpuMode::Drawing => None,
         }
     }
@@ -211,11 +211,11 @@ impl Vram {
     /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
     /// concrete return type is masked because this is only used for the
     /// memory bus.
-    pub fn tile_maps(&self) -> Option<&[impl RawBytes]> {
+    pub fn tile_maps(&self) -> Option<&impl RawBytes> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.tile_maps.as_slice()),
+            | PpuMode::VerticalBlank => Some(&self.tile_maps),
             PpuMode::Drawing => None,
         }
     }
@@ -225,11 +225,11 @@ impl Vram {
     /// VRAM is only accessible in modes 0-2. In mode 3, return `None`. The
     /// concrete return type is masked because this is only used for the
     /// memory bus.
-    pub fn tile_maps_mut(&mut self) -> Option<&mut [impl RawBytes]> {
+    pub fn tile_maps_mut(&mut self) -> Option<&mut impl RawBytes> {
         match self.mode() {
             PpuMode::OamScan
             | PpuMode::HorizontalBlank
-            | PpuMode::VerticalBlank => Some(self.tile_maps.as_slice_mut()),
+            | PpuMode::VerticalBlank => Some(&mut self.tile_maps),
             PpuMode::Drawing => None,
         }
     }
@@ -777,10 +777,10 @@ struct ObjectAttributes {
     /// Additional object metadata affecting its presentation
     flags: PackedBits<ObjectFlags>,
 }
-const _: () = assert!(mem::size_of::<ObjectAttributes>() == 4);
+assert_size!(ObjectAttributes, 4);
 
-// Memory bus accesses this as raw bytes
-impl RawBytes for ObjectAttributes {}
+// This representation matches what's used in memory
+impl RawBytes for [ObjectAttributes; 40] {}
 
 /// An x/y value increased by a static amount
 ///

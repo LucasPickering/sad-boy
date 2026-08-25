@@ -5,9 +5,8 @@
 
 use crate::{
     emu::{gpu::ColorIndex, memory::RawBytes},
-    util::{Bit, impl_bit_pack},
+    util::{Bit, assert_size, impl_bit_pack},
 };
-use std::mem;
 
 /// An 8x8 collection of pixels
 ///
@@ -22,7 +21,7 @@ use std::mem;
 pub struct Tile {
     lines: [TileLine; 8],
 }
-const _: () = assert!(mem::size_of::<Tile>() == 16);
+assert_size!(Tile, 16);
 
 impl Tile {
     /// Width of a tile, in pixels
@@ -59,9 +58,6 @@ impl Tile {
     }
 }
 
-// Memory bus accesses this as raw bytes
-impl RawBytes for Tile {}
-
 /// A single 8-pixel line in a tile
 ///
 /// A pixel is a color index 0-3 (2 bits). The actual color is defined in a
@@ -75,7 +71,7 @@ struct TileLine {
     low: u8,
     high: u8,
 }
-const _: () = assert!(mem::size_of::<TileLine>() == 2);
+assert_size!(TileLine, 2);
 
 impl TileLine {
     /// Create a tile line from 8 [ColorIndex]es
@@ -106,7 +102,7 @@ impl TileLine {
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct TileIndex(u8);
-const _: () = assert!(mem::size_of::<TileIndex>() == 1);
+assert_size!(TileIndex, 1);
 
 impl TileIndex {
     /// Get the index of the tile after this one
@@ -118,9 +114,6 @@ impl TileIndex {
         Self(self.0 + 1)
     }
 }
-
-// Memory bus accesses this as raw bytes
-impl RawBytes for TileIndex {}
 
 /// Selector for a block of tile *map* memory
 ///
@@ -173,6 +166,7 @@ impl_bit_pack! {
 ///
 /// https://gbdev.io/pandocs/Tile_Data.html
 #[derive(Debug)]
+#[repr(C)]
 pub struct TileData {
     /// Tile pixel data
     ///
@@ -183,24 +177,11 @@ pub struct TileData {
     /// https://gbdev.io/pandocs/Tile_Data.html
     data: [Tile; Self::BLOCK_LENGTH * 3],
 }
+assert_size!(TileData, 6144);
 
 impl TileData {
     /// Number of tiles in each block
     const BLOCK_LENGTH: usize = 128;
-
-    /// Get a slice of **all** tiles (not just the active blocks)
-    ///
-    /// Use this for the memory bus.
-    pub fn as_slice(&self) -> &[Tile] {
-        &self.data
-    }
-
-    /// Get a mutable slice of **all** tiles (not just the active blocks)
-    ///
-    /// Use this for the memory bus.
-    pub fn as_slice_mut(&mut self) -> &mut [Tile] {
-        &mut self.data
-    }
 
     /// Get a tile by index
     ///
@@ -240,6 +221,9 @@ impl Default for TileData {
     }
 }
 
+// This representation matches what's used in memory
+impl RawBytes for TileData {}
+
 /// Container for two tile maps (low and high)
 ///
 /// A tile map is a collection of tile *indexes*. Those indexes point to
@@ -248,10 +232,12 @@ impl Default for TileData {
 ///
 /// https://gbdev.io/pandocs/Tile_Maps.html
 #[derive(Debug)]
+#[repr(C)]
 pub struct TileMaps {
     /// `[lower, upper]` tile maps
     maps: [[TileIndex; Self::LENGTH]; 2],
 }
+assert_size!(TileMaps, 2048);
 
 impl TileMaps {
     /// Width of a single map, in tiles
@@ -260,20 +246,6 @@ impl TileMaps {
     const HEIGHT: usize = 32;
     /// Number of total tiles in a single map
     const LENGTH: usize = Self::WIDTH * Self::HEIGHT;
-
-    /// Get a slice of both tile maps
-    ///
-    /// Use this for the memory bus.
-    pub fn as_slice(&self) -> &[TileIndex] {
-        self.maps.as_flattened()
-    }
-
-    /// Get a mutable slice of both tile maps
-    ///
-    /// Use this for the memory bus.
-    pub fn as_slice_mut(&mut self) -> &mut [TileIndex] {
-        self.maps.as_flattened_mut()
-    }
 
     /// Get a tile by its coordinate
     ///
@@ -299,3 +271,6 @@ impl Default for TileMaps {
         }
     }
 }
+
+// This representation matches what's used in memory
+impl RawBytes for TileMaps {}

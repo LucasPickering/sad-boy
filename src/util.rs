@@ -8,6 +8,14 @@ use std::{
     str::FromStr,
 };
 
+/// Assert a type's size in memory matches a value
+macro_rules! assert_size {
+    ($type:ty, $expected:literal) => {
+        const _: () = assert!(std::mem::size_of::<$type>() == $expected);
+    };
+}
+pub(crate) use assert_size;
+
 /// Index of a single bit in a byte
 ///
 /// Value can be `0-7`.
@@ -225,6 +233,7 @@ pub struct PackedBits<T> {
     value: u8,
     ty: PhantomData<T>,
 }
+assert_size!(PackedBits<()>, 1);
 
 impl<T: BitPack> PackedBits<T> {
     /// Create a [PackedBits] value from a byte

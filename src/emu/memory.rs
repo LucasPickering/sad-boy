@@ -10,6 +10,7 @@ use std::{
     fmt::{self, Debug, Display},
     mem,
     ops::{Add, AddAssign},
+    ptr,
     range::RangeInclusive,
     slice,
     str::FromStr,
@@ -205,13 +206,18 @@ impl<'a> MemoryBus<'a> {
                 value,
             ),
             CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => set_slice_byte(
-                &mut self.ram.cartridge_ram,
+                self.ram.cartridge_ram.as_mut_slice(),
                 CARTRIDGE_RAM,
                 address,
                 value,
             ),
             RAM_START..=RAM_LAST => {
-                set_slice_byte(&mut self.ram.ram, RAM, address, value);
+                set_slice_byte(
+                    self.ram.ram.as_mut_slice(),
+                    RAM,
+                    address,
+                    value,
+                );
             }
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
@@ -236,14 +242,12 @@ impl<'a> MemoryBus<'a> {
             BANK => self.ram.bank = value,
             0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
 
-            HIGH_RAM_START..=HIGH_RAM_LAST => {
-                set_slice_byte(
-                    &mut self.ram.high_ram,
-                    HIGH_RAM,
-                    address,
-                    value,
-                );
-            }
+            HIGH_RAM_START..=HIGH_RAM_LAST => set_slice_byte(
+                self.ram.high_ram.as_mut_slice(),
+                HIGH_RAM,
+                address,
+                value,
+            ),
 
             0xFFFF => error!("TODO: Interrupt Enabled Register write"),
         }
@@ -317,10 +321,14 @@ impl MemoryBusReadOnly<'_> {
             TILE_MAPS_START..=TILE_MAPS_LAST => {
                 get_slice_byte_opt(self.vram.tile_maps(), TILE_MAPS, address)
             }
-            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => {
-                get_slice_byte(&self.ram.cartridge_ram, CARTRIDGE_RAM, address)
+            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => get_slice_byte(
+                self.ram.cartridge_ram.as_slice(),
+                CARTRIDGE_RAM,
+                address,
+            ),
+            RAM_START..=RAM_LAST => {
+                get_slice_byte(self.ram.ram.as_slice(), RAM, address)
             }
-            RAM_START..=RAM_LAST => get_slice_byte(&self.ram.ram, RAM, address),
             ECHO_RAM_START..=ECHO_RAM_LAST => {
                 // Make sure mirrored references can't go out of bounds
                 debug_assert!(ECHO_RAM.len() <= RAM.len());
@@ -348,7 +356,7 @@ impl MemoryBusReadOnly<'_> {
             }
 
             HIGH_RAM_START..=HIGH_RAM_LAST => {
-                get_slice_byte(&self.ram.high_ram, HIGH_RAM, address)
+                get_slice_byte(self.ram.high_ram.as_slice(), HIGH_RAM, address)
             }
             0xFFFF => {
                 error!("TODO: Interrupt Enabled Register read");
@@ -374,14 +382,6 @@ impl MemoryBusReadOnly<'_> {
 /// https://rylev.github.io/DMG-01/public/book/memory_map.html
 #[derive(Clone, Copy, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Address(pub u16);
-
-impl Address {
-    /// Add an offset to this address, returning `None` if the sum would
-    /// overflow the `u16`
-    pub fn checked_add(self, offset: u16) -> Option<Self> {
-        self.0.checked_add(offset).map(Self)
-    }
-}
 
 impl Add<u16> for Address {
     type Output = Self;
@@ -565,55 +565,53 @@ impl Default for RandomAccessMemory {
 /// This serves two purposes:
 /// - An added layer of safety to make sure types are opting in to providing a
 ///   stable memory layout
-/// - Accessors can return `&[impl RawBytes]` to mask their return type, for
-///   cases where the type is only needed for the memory bus
+/// - Accessors can return `&impl RawBytes` to mask their return type, for cases
+///   where the type is only needed for the memory bus
 pub trait RawBytes {}
 
-impl RawBytes for u8 {}
+impl RawBytes for [u8] {}
 
 /// Get a byte from a slice of arbitrary values
 ///
-/// This will reinterpret the slice as raw bytes. `T` should have a stable byte
+/// This will reinterpret the data as raw bytes. `T` should have a stable byte
 /// representation.
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn get_slice_byte<T: RawBytes>(
-    slice: &[T],
+fn get_slice_byte<T: RawBytes + ?Sized>(
+    data: &T,
     range: AddressRange,
     address: Address,
 ) -> u8 {
-    let byte_len = mem::size_of_val(slice);
-    // Make sure the length of the address range matches the byte length
-    // of the slice
-    debug_assert_eq!(
-        byte_len,
-        range.len(),
-        "Slice byte length must match address range length",
-    );
+    let byte_len = mem::size_of_val(data);
     // SAFETY:
     // - Pointer is valid because the corresponding slice is still alive
     // - Length is correct because it's calculated from the slice above
     // - range.offset() ensures the offset is in the address range, which is the
     //   same length as the slice
-    let bytes =
-        unsafe { slice::from_raw_parts(slice.as_ptr().cast::<u8>(), byte_len) };
+    debug_assert_eq!(
+        byte_len,
+        range.len(),
+        "Slice byte length must match address range length",
+    );
+    let ptr = ptr::from_ref(data).cast::<u8>();
+    let bytes = unsafe { slice::from_raw_parts(ptr, byte_len) };
     bytes[range.offset(address)]
 }
 
 /// Get a byte from an optional slice of arbitrary values
 ///
-/// If `slice` is `None`, return `0`. This will reinterpret the slice as raw
+/// If `slice` is `None`, return `0`. This will reinterpret the data as raw
 /// bytes. `T` should have a stable byte representation.
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn get_slice_byte_opt<T: RawBytes>(
-    slice: Option<&[T]>,
+fn get_slice_byte_opt<T: RawBytes + ?Sized>(
+    data: Option<&T>,
     range: AddressRange,
     address: Address,
 ) -> u8 {
-    match slice {
+    match data {
         Some(slice) => get_slice_byte(slice, range, address),
         None => 0,
     }
@@ -621,46 +619,43 @@ fn get_slice_byte_opt<T: RawBytes>(
 
 /// Set a byte in a slice of arbitrary values
 ///
-/// This will reinterpret the slice as raw bytes. `T` should have a stable byte
+/// This will reinterpret the data as raw bytes. `T` should have a stable byte
 /// representation.
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn set_slice_byte<T: RawBytes>(
-    slice: &mut [T],
+fn set_slice_byte<T: RawBytes + ?Sized>(
+    data: &mut T,
     range: AddressRange,
     address: Address,
     value: u8,
 ) {
-    let byte_len = mem::size_of_val(slice);
-    // Make sure the length of the address range matches the byte length
-    // of the slice
+    let byte_len = mem::size_of_val(data);
     debug_assert_eq!(
         byte_len,
         range.len(),
         "Slice byte length must match address range length",
     );
     // SAFETY: See get_slice_byte() (it's all the same logic)
-    let bytes = unsafe {
-        slice::from_raw_parts_mut(slice.as_mut_ptr().cast::<u8>(), byte_len)
-    };
+    let ptr = ptr::from_mut(data).cast::<u8>();
+    let bytes = unsafe { slice::from_raw_parts_mut(ptr, byte_len) };
     bytes[range.offset(address)] = value;
 }
 
 /// Set a byte in an optional slice of arbitrary values
 ///
-/// If `slice` is `None`, do nothing. This will reinterpret the slice as raw
+/// If `slice` is `None`, do nothing. This will reinterpret the data as raw
 /// bytes. `T` should have a stable byte representation.
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn set_slice_byte_opt<T: RawBytes>(
-    slice: Option<&mut [T]>,
+fn set_slice_byte_opt<T: RawBytes + ?Sized>(
+    data: Option<&mut T>,
     range: AddressRange,
     address: Address,
     value: u8,
 ) {
-    if let Some(slice) = slice {
+    if let Some(slice) = data {
         set_slice_byte(slice, range, address, value);
     }
 }
