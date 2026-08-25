@@ -69,14 +69,14 @@ pub const HIGH_RAM: AddressRange =
     AddressRange::named("High RAM", 0xFF80, 0xFFFE);
 // ===== Hardware Registers ====
 // https://gbdev.io/pandocs/Hardware_Reg_List.html
-pub const LCDC: u16 = 0xFF40;
-pub const STAT: u16 = 0xFF41;
-pub const SCY: u16 = 0xFF42;
-pub const SCX: u16 = 0xFF43;
-pub const LY: u16 = 0xFF44;
-pub const LYC: u16 = 0xFF45;
-pub const DMA: u16 = 0xFF46;
-pub const BANK: u16 = 0xFF50;
+pub const LCDC: Address = Address(0xFF40);
+pub const STAT: Address = Address(0xFF41);
+pub const SCY: Address = Address(0xFF42);
+pub const SCX: Address = Address(0xFF43);
+pub const LY: Address = Address(0xFF44);
+pub const LYC: Address = Address(0xFF45);
+pub const DMA: Address = Address(0xFF46);
+pub const BANK: Address = Address(0xFF50);
 
 /// An abstraction over the addessable range of memory
 ///
@@ -149,8 +149,8 @@ impl<'a> MemoryBus<'a> {
     ///
     /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
-        let range = self.read_only().get_block(address);
-        (range.set)(self, range.range, address, value);
+        let block = self.read_only().get_block(address);
+        block.set(self, address, value);
     }
 
     /// Get a 2-byte value from memory
@@ -189,17 +189,6 @@ impl<'a> MemoryBus<'a> {
     }
 }
 
-/// TODO
-macro_rules! gpu_reg {
-    ($name:ident, $field:ident) => {
-        MemoryBlock::rw(
-            AddressRange::value(stringify!($name), $name),
-            |bus, _, _| bus.vram.registers().$field.into(),
-            |bus, _, _, value| bus.vram.registers_mut().$field = value.into(),
-        )
-    };
-}
-
 /// A read-only version of [MemoryBus] for the debugger
 ///
 /// This has to be a separate type because the bus holds references, which can't
@@ -215,141 +204,17 @@ pub struct MemoryBusReadOnly<'a> {
 }
 
 impl MemoryBusReadOnly<'_> {
-    /// TODO
-    ///
-    /// TODO write a test that ensures each address is covered by exactly one
-    /// range.
-    ///
-    /// https://gbdev.io/pandocs/Memory_Map.html
-    const BLOCKS: &'static [MemoryBlock] = &[
-        #[expect(clippy::redundant_closure_for_method_calls)]
-        MemoryBlock::ro(BOOTSTRAP, |_, range, address| {
-            // SAFETY: BOOTSTRAP.len() == BOOTSTRAP_CODE.len()
-            BOOTSTRAP_CODE[range.offset(address)]
-        })
-        .with_enabled(|bus| bus.is_bootstrapping()),
-        MemoryBlock::ro(CARTRIDGE_ROM_0, |bus, range, address| {
-            // SAFETY: Cartridge ROM asserts its own length
-            bus.rom.bytes()[range.offset(address)]
-        }),
-        MemoryBlock::ro(CARTRIDGE_ROM_N, |_, _, _| {
-            error!("TODO: Game ROM bank N");
-            0
-        }),
-        MemoryBlock::rw(
-            TILE_DATA,
-            |bus, range, address| {
-                get_byte_opt(bus.vram.tile_data(), range, address)
-            },
-            |bus, range, address, value| {
-                set_byte_opt(bus.vram.tile_data_mut(), range, address, value);
-            },
-        ),
-        MemoryBlock::rw(
-            TILE_MAPS,
-            |bus, range, address| {
-                get_byte_opt(bus.vram.tile_maps(), range, address)
-            },
-            |bus, range, address, value| {
-                set_byte_opt(bus.vram.tile_maps_mut(), range, address, value);
-            },
-        ),
-        MemoryBlock::rw(
-            CARTRIDGE_RAM,
-            |bus, range, address| {
-                get_byte(bus.ram.cartridge_ram.as_slice(), range, address)
-            },
-            |bus, range, address, value| {
-                set_byte(
-                    bus.ram.cartridge_ram.as_mut_slice(),
-                    range,
-                    address,
-                    value,
-                );
-            },
-        ),
-        MemoryBlock::rw(
-            RAM,
-            |bus, range, address| {
-                get_byte(bus.ram.ram.as_slice(), range, address)
-            },
-            |bus, range, address, value| {
-                set_byte(bus.ram.ram.as_mut_slice(), range, address, value);
-            },
-        ),
-        MemoryBlock::rw(
-            ECHO_RAM,
-            // Echo RAM is *smaller* than the original RAM being overlayed, so
-            // we can just index into the normal RAM block
-            |bus, range, address| bus.ram.ram[range.offset(address)],
-            |bus, range, address, value| {
-                bus.ram.ram[range.offset(address)] = value;
-            },
-        ),
-        MemoryBlock::rw(
-            OAM,
-            |bus, range, address| get_byte_opt(bus.vram.oam(), range, address),
-            |bus, range, address, value| {
-                set_byte_opt(bus.vram.oam_mut(), range, address, value);
-            },
-        ),
-        MemoryBlock::ro(
-            AddressRange::named("Null", 0xFEA0, 0xFEFF),
-            |_, _, _| 0,
-        ),
-        // GPU registers
-        gpu_reg!(LCDC, lcdc),
-        gpu_reg!(STAT, stat),
-        gpu_reg!(SCY, scy),
-        gpu_reg!(SCX, scx),
-        gpu_reg!(LY, ly),
-        gpu_reg!(LYC, lyc),
-        gpu_reg!(DMA, dma),
-        //
-        MemoryBlock::rw(
-            AddressRange::value("BANK", BANK),
-            |bus, _, _| bus.ram.bank,
-            |bus, _, _, value| bus.ram.bank = value,
-        ),
-        MemoryBlock::ro(AddressRange::new(0xFF00, 0xFF7F), |_, _, address| {
-            error!("TODO: unmapped I/O register {address}");
-            0
-        }),
-        MemoryBlock::rw(
-            HIGH_RAM,
-            |bus, range, address| {
-                get_byte(bus.ram.high_ram.as_slice(), range, address)
-            },
-            |bus, range, address, value| {
-                set_byte(
-                    bus.ram.high_ram.as_mut_slice(),
-                    range,
-                    address,
-                    value,
-                );
-            },
-        ),
-        MemoryBlock::rw(
-            AddressRange::value("TODO int enable", 0xFFFF),
-            |_, _, _| {
-                error!("TODO: Interrupt Enabled Register read");
-                0
-            },
-            |_, _, _, _| error!("TODO: Interrupt Enabled Register write"),
-        ),
-    ];
-
     /// Get a 1-byte value from memory
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        let range = self.get_block(address);
-        (range.get)(self, range.range, address)
+        let block = self.get_block(address);
+        block.get(self, address)
     }
 
     /// Get the block of memory containing the given address
-    fn get_block(&self, address: Address) -> MemoryBlock {
-        *Self::BLOCKS
+    fn get_block(&self, address: Address) -> &'static dyn MemoryBlock {
+        *BLOCKS
             .iter()
             .find(|block| block.contains(self, address))
             .unwrap_or_else(|| panic!("Unmapped address: {address}"))
@@ -448,11 +313,6 @@ impl AddressRange {
         }
     }
 
-    /// TODO
-    pub const fn value(name: &'static str, value: u16) -> Self {
-        Self::named(name, value, value)
-    }
-
     /// Join two contiguous ranges
     ///
     /// `self` must be the lower range and `other` is the upper range.
@@ -511,60 +371,6 @@ impl Display for AddressRange {
     }
 }
 
-type MemoryGet = fn(&MemoryBusReadOnly<'_>, AddressRange, Address) -> u8;
-type MemorySet = fn(&mut MemoryBus<'_>, AddressRange, Address, u8);
-type MemoryEnabled = fn(&MemoryBusReadOnly<'_>) -> bool;
-
-/// TODO
-#[derive(Clone, Copy)]
-struct MemoryBlock {
-    /// Range of addresses covered by this block
-    range: AddressRange,
-    /// Getter to determine if this block is accessible
-    ///
-    /// Used to disable the bootstrap ROM after loading.
-    enabled: MemoryEnabled,
-    /// Get a byte for an address
-    get: MemoryGet,
-    /// Set a byte at an address
-    set: MemorySet,
-}
-
-impl MemoryBlock {
-    /// Create a read-only block of memory
-    const fn ro(range: AddressRange, get: MemoryGet) -> Self {
-        Self {
-            range,
-            enabled: |_| true,
-            get,
-            set: |_, _, _, _| {},
-        }
-    }
-
-    /// Create a read-write block of memory
-    const fn rw(range: AddressRange, get: MemoryGet, set: MemorySet) -> Self {
-        Self {
-            range,
-            enabled: |_| true,
-            get,
-            set,
-        }
-    }
-
-    /// TODO
-    const fn with_enabled(mut self, enabled: MemoryEnabled) -> Self {
-        self.enabled = enabled;
-        self
-    }
-
-    /// Is the given address in this block?
-    ///
-    /// Always returns `false` if the block is disabled.
-    fn contains(&self, bus: &MemoryBusReadOnly, address: Address) -> bool {
-        (self.enabled)(bus) && self.range.contains(address)
-    }
-}
-
 /// Container for RAM and memory-related registers
 #[derive(Debug)]
 pub struct RandomAccessMemory {
@@ -617,96 +423,362 @@ impl Default for RandomAccessMemory {
 ///   stable memory layout
 /// - Accessors can return `&impl RawBytes` to mask their return type, for cases
 ///   where the type is only needed for the memory bus
-pub trait RawBytes {}
+pub trait RawBytes {
+    /// Access the value as immutable bytes
+    fn as_bytes(&self) -> &[u8] {
+        let byte_len = mem::size_of_val(self);
+        // SAFETY:
+        // - Pointer is valid because the corresponding slice is still alive
+        // - Length is correct because it's calculated from the slice above
+        // - range.offset() ensures the offset is in the address range, which is
+        //   the same length as the slice
+        let ptr = ptr::from_ref(self).cast::<u8>();
+        unsafe { slice::from_raw_parts(ptr, byte_len) }
+    }
 
-impl RawBytes for [u8] {}
-
-/// Get a byte from a slice of arbitrary values
-///
-/// This will reinterpret the data as raw bytes. `T` should have a stable byte
-/// representation.
-///
-/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
-/// not equal to the length of `range`.
-fn get_byte<T: RawBytes + ?Sized>(
-    data: &T,
-    range: AddressRange,
-    address: Address,
-) -> u8 {
-    let byte_len = mem::size_of_val(data);
-    // SAFETY:
-    // - Pointer is valid because the corresponding slice is still alive
-    // - Length is correct because it's calculated from the slice above
-    // - range.offset() ensures the offset is in the address range, which is the
-    //   same length as the slice
-    debug_assert_eq!(
-        byte_len,
-        range.len(),
-        "Slice byte length must match address range length",
-    );
-    let ptr = ptr::from_ref(data).cast::<u8>();
-    let bytes = unsafe { slice::from_raw_parts(ptr, byte_len) };
-    bytes[range.offset(address)]
-}
-
-/// Get a byte from an optional slice of arbitrary values
-///
-/// If `slice` is `None`, return `0`. This will reinterpret the data as raw
-/// bytes. `T` should have a stable byte representation.
-///
-/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
-/// not equal to the length of `range`.
-fn get_byte_opt<T: RawBytes + ?Sized>(
-    data: Option<&T>,
-    range: AddressRange,
-    address: Address,
-) -> u8 {
-    match data {
-        Some(slice) => get_byte(slice, range, address),
-        None => 0,
+    /// Access the value as mutable bytes
+    fn as_bytes_mut(&mut self) -> &mut [u8] {
+        let byte_len = mem::size_of_val(self);
+        // SAFETY:
+        // - Pointer is valid because the corresponding slice is still alive
+        // - Length is correct because it's calculated from the slice above
+        // - range.offset() ensures the offset is in the address range, which is
+        //   the same length as the slice
+        let ptr = ptr::from_mut(self).cast::<u8>();
+        unsafe { slice::from_raw_parts_mut(ptr, byte_len) }
     }
 }
 
-/// Set a byte in a slice of arbitrary values
-///
-/// This will reinterpret the data as raw bytes. `T` should have a stable byte
-/// representation.
-///
-/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
-/// not equal to the length of `range`.
-fn set_byte<T: RawBytes + ?Sized>(
-    data: &mut T,
-    range: AddressRange,
-    address: Address,
-    value: u8,
-) {
-    let byte_len = mem::size_of_val(data);
-    debug_assert_eq!(
-        byte_len,
-        range.len(),
-        "Slice byte length must match address range length",
-    );
-    // SAFETY: See get_slice_byte() (it's all the same logic)
-    let ptr = ptr::from_mut(data).cast::<u8>();
-    let bytes = unsafe { slice::from_raw_parts_mut(ptr, byte_len) };
-    bytes[range.offset(address)] = value;
+impl RawBytes for [u8] {}
+
+/// Create a [Byte] for a register within VRAM
+macro_rules! gpu_reg {
+    ($name:ident, $field:ident) => {
+        Byte::new(
+            stringify!($name),
+            $name,
+            |bus| bus.vram.registers().$field.into(),
+            |bus| &mut bus.vram.registers_mut().$field,
+        )
+    };
 }
 
-/// Set a byte in an optional slice of arbitrary values
+/// All available memory blocks
 ///
-/// If `slice` is `None`, do nothing. This will reinterpret the data as raw
-/// bytes. `T` should have a stable byte representation.
+/// All memory lookups use this list to determine where each byte lives. It
+/// covers the entire range: every possible address 0-65535 is part of a block.
 ///
-/// Panics if `address` is not in `range` or if the *byte* length of `slice` is
-/// not equal to the length of `range`.
-fn set_byte_opt<T: RawBytes + ?Sized>(
-    data: Option<&mut T>,
+/// https://gbdev.io/pandocs/Memory_Map.html
+#[expect(clippy::redundant_closure_for_method_calls)]
+const BLOCKS: &[&'static dyn MemoryBlock] = &[
+    // SAFETY: BOOTSTRAP.len() == BOOTSTRAP_CODE.len()
+    &ReadOnlyBytes::new(BOOTSTRAP, |_| BOOTSTRAP_CODE)
+        // Unmap once the bootstrap is done
+        .with_enabled(|bus| bus.is_bootstrapping()),
+    // SAFETY: Cartridge ROM asserts its own length
+    &ReadOnlyBytes::new(CARTRIDGE_ROM_0, |bus| bus.rom.bytes()),
+    &PlaceholderBytes::new(CARTRIDGE_ROM_N),
+    &OptionalBytes::new(
+        TILE_DATA,
+        |bus| bus.vram.tile_data().map(RawBytes::as_bytes),
+        |bus| bus.vram.tile_data_mut().map(RawBytes::as_bytes_mut),
+    ),
+    &OptionalBytes::new(
+        TILE_MAPS,
+        |bus| bus.vram.tile_maps().map(RawBytes::as_bytes),
+        |bus| bus.vram.tile_maps_mut().map(RawBytes::as_bytes_mut),
+    ),
+    &Bytes::new(
+        CARTRIDGE_RAM,
+        |bus| &bus.ram.cartridge_ram,
+        |bus| &mut bus.ram.cartridge_ram,
+    ),
+    &Bytes::new(RAM, |bus| &bus.ram.ram, |bus| &mut bus.ram.ram),
+    // Echo RAM is *smaller* than the original RAM being overlayed, so we can
+    // just index into the normal RAM block
+    &Bytes::new(ECHO_RAM, |bus| &bus.ram.ram, |bus| &mut bus.ram.ram),
+    &OptionalBytes::new(
+        OAM,
+        |bus| bus.vram.oam().map(RawBytes::as_bytes),
+        |bus| bus.vram.oam_mut().map(RawBytes::as_bytes_mut),
+    ),
+    &Null::new(AddressRange::named("Null", 0xFEA0, 0xFEFF)),
+    &gpu_reg!(LCDC, lcdc),
+    &gpu_reg!(STAT, stat),
+    &gpu_reg!(SCY, scy),
+    &gpu_reg!(SCX, scx),
+    &gpu_reg!(LY, ly),
+    &gpu_reg!(LYC, lyc),
+    &gpu_reg!(DMA, dma),
+    &PlaceholderBytes::new(AddressRange::named(
+        "I/O registers",
+        0xFF00,
+        0xFF7F,
+    )),
+    &Byte::new("BANK", BANK, |bus| bus.ram.bank, |bus| &mut bus.ram.bank),
+    &Bytes::new(
+        HIGH_RAM,
+        |bus| &bus.ram.high_ram,
+        |bus| &mut bus.ram.high_ram,
+    ),
+    &PlaceholderBytes::new(AddressRange::named("INT enable", 0xFFFF, 0xFFFF)),
+];
+
+/// A trait for types that expose read/write functionality of a block of memory
+///
+/// There are a few different implementations depending on the layout/behavior
+/// of the underlying memory.
+trait MemoryBlock {
+    /// Is the memory block accessible?
+    ///
+    /// Used only for the bootstrap ROM, which is disabled after completion.
+    fn enabled(&self, _bus: &MemoryBusReadOnly) -> bool {
+        true
+    }
+
+    /// Get the range of addresses covered by this block
+    fn range(&self) -> AddressRange;
+
+    /// Does this block contain the given address?
+    ///
+    /// This also checks [Self::enabled]; disabled blocks contain no addresses.
+    fn contains(&self, bus: &MemoryBusReadOnly, address: Address) -> bool {
+        self.enabled(bus) && self.range().contains(address)
+    }
+
+    /// Get a byte of memory at the given address
+    ///
+    /// This may panic if the address is outside [Self::range].
+    fn get(&self, bus: &MemoryBusReadOnly, address: Address) -> u8;
+
+    /// Set a byte of memory at the given address
+    ///
+    /// This may panic if the address is outside [Self::range].
+    fn set(&self, bus: &mut MemoryBus, address: Address, value: u8);
+}
+
+/// [MemoryBlock] implementation for null bytes
+///
+/// Reads return 0, writes do nothing.
+struct Null {
     range: AddressRange,
-    address: Address,
-    value: u8,
-) {
-    if let Some(slice) = data {
-        set_byte(slice, range, address, value);
+}
+
+impl Null {
+    const fn new(range: AddressRange) -> Self {
+        Self { range }
+    }
+}
+
+impl MemoryBlock for Null {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, _bus: &MemoryBusReadOnly, _address: Address) -> u8 {
+        0
+    }
+
+    fn set(&self, _bus: &mut MemoryBus, _address: Address, _value: u8) {}
+}
+
+/// [MemoryBlock] implementation for single mutable byte (e.g. a register)
+struct Byte {
+    range: AddressRange,
+    get: fn(&MemoryBusReadOnly) -> u8,
+    get_mut: for<'a> fn(&'a mut MemoryBus) -> &'a mut u8,
+}
+
+impl Byte {
+    const fn new(
+        name: &'static str,
+        address: Address,
+        get: fn(&MemoryBusReadOnly) -> u8,
+        get_mut: for<'a> fn(&'a mut MemoryBus) -> &'a mut u8,
+    ) -> Self {
+        Self {
+            range: AddressRange::named(name, address.0, address.0),
+            get,
+            get_mut,
+        }
+    }
+}
+
+impl MemoryBlock for Byte {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, bus: &MemoryBusReadOnly, _address: Address) -> u8 {
+        (self.get)(bus)
+    }
+
+    fn set(&self, bus: &mut MemoryBus, _address: Address, value: u8) {
+        *(self.get_mut)(bus) = value;
+    }
+}
+
+/// [MemoryBlock] implementation for a read-only byte slice
+///
+/// The caller defines how to extract the byte slice from the bus, and this
+/// struct handles the rest.
+struct ReadOnlyBytes {
+    range: AddressRange,
+    get: for<'a> fn(&'a MemoryBusReadOnly) -> &'a [u8],
+    /// Used for the bootstrap ROM to unmap itself
+    enabled: fn(&MemoryBusReadOnly) -> bool,
+}
+
+impl ReadOnlyBytes {
+    const fn new(
+        range: AddressRange,
+        get: for<'a> fn(&'a MemoryBusReadOnly) -> &'a [u8],
+    ) -> Self {
+        Self {
+            range,
+            get,
+            enabled: |_| true,
+        }
+    }
+
+    /// Set the function used to enable/disable this block
+    const fn with_enabled(
+        mut self,
+        enabled: fn(&MemoryBusReadOnly) -> bool,
+    ) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+impl MemoryBlock for ReadOnlyBytes {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, bus: &MemoryBusReadOnly, address: Address) -> u8 {
+        let bytes = (self.get)(bus);
+        bytes[self.range.offset(address)]
+    }
+
+    fn set(&self, _bus: &mut MemoryBus, _address: Address, _value: u8) {}
+}
+
+/// [MemoryBlock] implementation for a mutable byte slice (e.g. RAM)
+///
+/// The caller defines how to extract the byte slice from the bus, and this
+/// struct handles the rest.
+struct Bytes {
+    range: AddressRange,
+    get: for<'a> fn(&'a MemoryBusReadOnly) -> &'a [u8],
+    get_mut: for<'a> fn(&'a mut MemoryBus) -> &'a mut [u8],
+}
+
+impl Bytes {
+    const fn new(
+        range: AddressRange,
+        get: for<'a> fn(&'a MemoryBusReadOnly) -> &'a [u8],
+        get_mut: for<'a> fn(&'a mut MemoryBus) -> &'a mut [u8],
+    ) -> Self {
+        Self {
+            range,
+            get,
+            get_mut,
+        }
+    }
+}
+
+impl MemoryBlock for Bytes {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, bus: &MemoryBusReadOnly, address: Address) -> u8 {
+        let bytes = (self.get)(bus);
+        bytes[self.range.offset(address)]
+    }
+
+    fn set(&self, bus: &mut MemoryBus, address: Address, value: u8) {
+        let bytes = (self.get_mut)(bus);
+        bytes[self.range.offset(address)] = value;
+    }
+}
+
+/// [MemoryBlock] implementation for a mutable byte slice that may not be
+/// present
+///
+/// The caller defines how to extract the byte slice from the bus, and this
+/// struct handles the rest. If the memory block is `None`, gets will return `0`
+/// and sets do nothing. The VRAM blocks use this to make themselves
+/// inaccessible during certain modes.
+struct OptionalBytes {
+    range: AddressRange,
+    get: for<'a> fn(&'a MemoryBusReadOnly) -> Option<&'a [u8]>,
+    get_mut: for<'a> fn(&'a mut MemoryBus) -> Option<&'a mut [u8]>,
+}
+
+impl OptionalBytes {
+    const fn new(
+        range: AddressRange,
+        get: for<'a> fn(&'a MemoryBusReadOnly) -> Option<&'a [u8]>,
+        get_mut: for<'a> fn(&'a mut MemoryBus) -> Option<&'a mut [u8]>,
+    ) -> Self {
+        Self {
+            range,
+            get,
+            get_mut,
+        }
+    }
+}
+
+impl MemoryBlock for OptionalBytes {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, bus: &MemoryBusReadOnly, address: Address) -> u8 {
+        match (self.get)(bus) {
+            Some(bytes) => bytes[self.range.offset(address)],
+            None => 0,
+        }
+    }
+
+    fn set(&self, bus: &mut MemoryBus, address: Address, value: u8) {
+        if let Some(bytes) = (self.get_mut)(bus) {
+            bytes[self.range.offset(address)] = value;
+        }
+    }
+}
+
+/// Placeholder for memory ranges I haven't implemented yet
+struct PlaceholderBytes {
+    range: AddressRange,
+}
+
+impl PlaceholderBytes {
+    const fn new(range: AddressRange) -> Self {
+        Self { range }
+    }
+}
+
+impl MemoryBlock for PlaceholderBytes {
+    fn range(&self) -> AddressRange {
+        self.range
+    }
+
+    fn get(&self, _bus: &MemoryBusReadOnly, address: Address) -> u8 {
+        error!(
+            "TODO: unmapped read in {name}: {address}",
+            name = self.range.name.unwrap_or("???")
+        );
+        0
+    }
+
+    fn set(&self, _bus: &mut MemoryBus, address: Address, _value: u8) {
+        error!(
+            "TODO: unmapped write in {name}: {address}",
+            name = self.range.name.unwrap_or("???")
+        );
     }
 }
 

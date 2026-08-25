@@ -19,7 +19,7 @@ use crate::{
 use std::{
     fmt::Debug,
     mem,
-    ops::{Add, Sub},
+    ops::{Add, Deref, DerefMut, Sub},
 };
 use tracing::info_span;
 
@@ -652,6 +652,20 @@ impl Scanline {
 
         // Cast is safe because of the assertions
         (Self(scanline as u8), dots)
+    }
+}
+
+impl Deref for Scanline {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Scanline {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
