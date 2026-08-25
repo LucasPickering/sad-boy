@@ -215,7 +215,9 @@ impl MemoryBusReadOnly<'_> {
     fn get_block(&self, address: Address) -> &'static dyn MemoryBlock {
         *BLOCKS
             .iter()
-            .find(|block| block.contains(self, address))
+            .find(|block| {
+                block.enabled(self) && block.range().contains(address)
+            })
             .unwrap_or_else(|| panic!("Unmapped address: {address}"))
     }
 
@@ -524,6 +526,9 @@ const BLOCKS: &[&'static dyn MemoryBlock] = &[
 ///
 /// There are a few different implementations depending on the layout/behavior
 /// of the underlying memory.
+///
+/// The implementor **does not** store the underlying bytes. This is an
+/// extractor that defines how that data can be accessed with in the memory bus.
 trait MemoryBlock {
     /// Is the memory block accessible?
     ///
@@ -534,13 +539,6 @@ trait MemoryBlock {
 
     /// Get the range of addresses covered by this block
     fn range(&self) -> AddressRange;
-
-    /// Does this block contain the given address?
-    ///
-    /// This also checks [Self::enabled]; disabled blocks contain no addresses.
-    fn contains(&self, bus: &MemoryBusReadOnly, address: Address) -> bool {
-        self.enabled(bus) && self.range().contains(address)
-    }
 
     /// Get a byte of memory at the given address
     ///
