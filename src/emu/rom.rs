@@ -69,12 +69,15 @@ impl Rom {
         Self { data }
     }
 
-    /// Create an empty ROM
+    /// Create a ROM with all zeroes
     ///
-    /// Useful for testing on the [GameBoy] when the ROM doesn't matter.
+    /// The length will be `CARTRIDGE_ROM.len()`. Useful for testing on the
+    /// [GameBoy] when the ROM doesn't matter.
     #[cfg(test)]
     pub fn empty() -> Rom {
-        Self { data: vec![] }
+        Self {
+            data: vec![0; CARTRIDGE_ROM.len()],
+        }
     }
 
     /// Get the raw ROM bytes

@@ -613,10 +613,10 @@ mod tests {
 
     /// Execute an instruction on the CPU
     fn execute(cpu: &mut Cpu, instruction: Instruction) {
-        let mut memory = RandomAccessMemory::default();
         let rom = Rom::empty();
+        let mut memory = RandomAccessMemory::default();
         let mut vram = Vram::default();
-        let mut memory = MemoryBus::new(&mut memory, &rom, &mut vram);
+        let mut memory = MemoryBus::new(&rom, &mut memory, &mut vram);
         let mut exe = cpu.exe(&mut memory);
         exe.execute(instruction);
     }

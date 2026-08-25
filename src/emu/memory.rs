@@ -78,36 +78,6 @@ pub const LYC: u16 = 0xFF45;
 pub const DMA: u16 = 0xFF46;
 pub const BANK: u16 = 0xFF50;
 
-/// Generate `x_START` and `x_END` consts for a set of memory ranges
-///
-/// These consts are needed to use the start/end in pattern matching, where
-/// complex expressions aren't allowed.
-macro_rules! bounds {
-    ($($range:expr),* $(,)?) => {
-        paste::paste! {
-            $(
-                const [<$range _START>]: u16 = $range.start().0;
-                const [<$range _LAST>]: u16 = $range.last().0;
-            )*
-        }
-    };
-}
-
-// Generate extra consts for pattern matching
-bounds!(
-    BOOTSTRAP,
-    CARTRIDGE_ROM_0,
-    CARTRIDGE_ROM_N,
-    CARTRIDGE_ROM,
-    TILE_DATA,
-    TILE_MAPS,
-    CARTRIDGE_RAM,
-    RAM,
-    ECHO_RAM,
-    OAM,
-    HIGH_RAM
-);
-
 /// An abstraction over the addessable range of memory
 ///
 /// All parts of accessible memory are held as references. This aliases each
@@ -119,10 +89,10 @@ bounds!(
 /// https://gbdev.io/pandocs/Memory_Map.html
 #[derive(Debug)]
 pub struct MemoryBus<'a> {
-    /// RAM and registers
-    ram: &'a mut RandomAccessMemory,
     /// Read-only memory from the cartridge
     rom: &'a Rom,
+    /// RAM and registers
+    ram: &'a mut RandomAccessMemory,
     /// VRAM and graphics-related IO registers
     vram: &'a mut Vram,
 }
@@ -130,15 +100,11 @@ pub struct MemoryBus<'a> {
 impl<'a> MemoryBus<'a> {
     /// Construct a memory bus from references to each addressable component
     pub fn new(
-        memory: &'a mut RandomAccessMemory,
         rom: &'a Rom,
+        ram: &'a mut RandomAccessMemory,
         vram: &'a mut Vram,
     ) -> Self {
-        Self {
-            ram: memory,
-            rom,
-            vram,
-        }
+        Self { rom, ram, vram }
     }
 
     /// Load the CPU instruction at the given address
@@ -176,81 +142,15 @@ impl<'a> MemoryBus<'a> {
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        MemoryBusReadOnly {
-            ram: self.ram,
-            rom: self.rom,
-            vram: self.vram,
-        }
-        .get8(address)
+        self.read_only().get8(address)
     }
 
     /// Set a 1-byte value in memory
     ///
     /// If the memory isn't writable, this does nothing.
     pub fn set8(&mut self, address: Address, value: u8) {
-        // https://gbdev.io/pandocs/Memory_Map.html
-        match address.0 {
-            // ROM is immutable (bootstrapp too, so it doesn't matter if it's
-            // mapped or not)
-            CARTRIDGE_ROM_START..=CARTRIDGE_ROM_LAST => {}
-            TILE_DATA_START..=TILE_DATA_LAST => set_slice_byte_opt(
-                self.vram.tile_data_mut(),
-                TILE_DATA,
-                address,
-                value,
-            ),
-            TILE_MAPS_START..=TILE_MAPS_LAST => set_slice_byte_opt(
-                self.vram.tile_maps_mut(),
-                TILE_MAPS,
-                address,
-                value,
-            ),
-            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => set_slice_byte(
-                self.ram.cartridge_ram.as_mut_slice(),
-                CARTRIDGE_RAM,
-                address,
-                value,
-            ),
-            RAM_START..=RAM_LAST => {
-                set_slice_byte(
-                    self.ram.ram.as_mut_slice(),
-                    RAM,
-                    address,
-                    value,
-                );
-            }
-            ECHO_RAM_START..=ECHO_RAM_LAST => {
-                // Make sure mirrored references can't go out of bounds
-                debug_assert!(ECHO_RAM.len() <= RAM.len());
-                // Shift to the main RAM section
-                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
-                self.set8(address, value);
-            }
-            OAM_START..=OAM_LAST => {
-                set_slice_byte_opt(self.vram.oam_mut(), OAM, address, value);
-            }
-            0xFEA0..=0xFEFF => {} // Null mem
-
-            // Hardware registers
-            LCDC => self.vram.registers_mut().lcdc = value.into(),
-            STAT => self.vram.registers_mut().stat = value.into(),
-            SCY => self.vram.registers_mut().scy = value,
-            SCX => self.vram.registers_mut().scx = value,
-            LY => self.vram.registers_mut().ly = value.into(),
-            LYC => self.vram.registers_mut().lyc = value.into(),
-            DMA => self.vram.registers_mut().dma = value,
-            BANK => self.ram.bank = value,
-            0xFF00..=0xFF7F => error!("TODO: unmapped I/O register {address}"),
-
-            HIGH_RAM_START..=HIGH_RAM_LAST => set_slice_byte(
-                self.ram.high_ram.as_mut_slice(),
-                HIGH_RAM,
-                address,
-                value,
-            ),
-
-            0xFFFF => error!("TODO: Interrupt Enabled Register write"),
-        }
+        let range = self.read_only().get_block(address);
+        (range.set)(self, range.range, address, value);
     }
 
     /// Get a 2-byte value from memory
@@ -276,8 +176,28 @@ impl<'a> MemoryBus<'a> {
     /// This is `true` only during initial boot. The bootstrap unmaps itself
     /// with its last instruction, at which point it should never be re-mapped.
     pub fn is_bootstrapping(&self) -> bool {
-        self.ram.bank == 0
+        self.read_only().is_bootstrapping()
     }
+
+    /// Get a read-only memory view
+    fn read_only(&self) -> MemoryBusReadOnly<'_> {
+        MemoryBusReadOnly {
+            ram: self.ram,
+            rom: self.rom,
+            vram: self.vram,
+        }
+    }
+}
+
+/// TODO
+macro_rules! gpu_reg {
+    ($name:ident, $field:ident) => {
+        MemoryBlock::rw(
+            AddressRange::value(stringify!($name), $name),
+            |bus, _, _| bus.vram.registers().$field.into(),
+            |bus, _, _, value| bus.vram.registers_mut().$field = value.into(),
+        )
+    };
 }
 
 /// A read-only version of [MemoryBus] for the debugger
@@ -295,74 +215,144 @@ pub struct MemoryBusReadOnly<'a> {
 }
 
 impl MemoryBusReadOnly<'_> {
+    /// TODO
+    ///
+    /// TODO write a test that ensures each address is covered by exactly one
+    /// range.
+    ///
+    /// https://gbdev.io/pandocs/Memory_Map.html
+    const BLOCKS: &'static [MemoryBlock] = &[
+        #[expect(clippy::redundant_closure_for_method_calls)]
+        MemoryBlock::ro(BOOTSTRAP, |_, range, address| {
+            // SAFETY: BOOTSTRAP.len() == BOOTSTRAP_CODE.len()
+            BOOTSTRAP_CODE[range.offset(address)]
+        })
+        .with_enabled(|bus| bus.is_bootstrapping()),
+        MemoryBlock::ro(CARTRIDGE_ROM_0, |bus, range, address| {
+            // SAFETY: Cartridge ROM asserts its own length
+            bus.rom.bytes()[range.offset(address)]
+        }),
+        MemoryBlock::ro(CARTRIDGE_ROM_N, |_, _, _| {
+            error!("TODO: Game ROM bank N");
+            0
+        }),
+        MemoryBlock::rw(
+            TILE_DATA,
+            |bus, range, address| {
+                get_byte_opt(bus.vram.tile_data(), range, address)
+            },
+            |bus, range, address, value| {
+                set_byte_opt(bus.vram.tile_data_mut(), range, address, value);
+            },
+        ),
+        MemoryBlock::rw(
+            TILE_MAPS,
+            |bus, range, address| {
+                get_byte_opt(bus.vram.tile_maps(), range, address)
+            },
+            |bus, range, address, value| {
+                set_byte_opt(bus.vram.tile_maps_mut(), range, address, value);
+            },
+        ),
+        MemoryBlock::rw(
+            CARTRIDGE_RAM,
+            |bus, range, address| {
+                get_byte(bus.ram.cartridge_ram.as_slice(), range, address)
+            },
+            |bus, range, address, value| {
+                set_byte(
+                    bus.ram.cartridge_ram.as_mut_slice(),
+                    range,
+                    address,
+                    value,
+                );
+            },
+        ),
+        MemoryBlock::rw(
+            RAM,
+            |bus, range, address| {
+                get_byte(bus.ram.ram.as_slice(), range, address)
+            },
+            |bus, range, address, value| {
+                set_byte(bus.ram.ram.as_mut_slice(), range, address, value);
+            },
+        ),
+        MemoryBlock::rw(
+            ECHO_RAM,
+            // Echo RAM is *smaller* than the original RAM being overlayed, so
+            // we can just index into the normal RAM block
+            |bus, range, address| bus.ram.ram[range.offset(address)],
+            |bus, range, address, value| {
+                bus.ram.ram[range.offset(address)] = value;
+            },
+        ),
+        MemoryBlock::rw(
+            OAM,
+            |bus, range, address| get_byte_opt(bus.vram.oam(), range, address),
+            |bus, range, address, value| {
+                set_byte_opt(bus.vram.oam_mut(), range, address, value);
+            },
+        ),
+        MemoryBlock::ro(
+            AddressRange::named("Null", 0xFEA0, 0xFEFF),
+            |_, _, _| 0,
+        ),
+        // GPU registers
+        gpu_reg!(LCDC, lcdc),
+        gpu_reg!(STAT, stat),
+        gpu_reg!(SCY, scy),
+        gpu_reg!(SCX, scx),
+        gpu_reg!(LY, ly),
+        gpu_reg!(LYC, lyc),
+        gpu_reg!(DMA, dma),
+        //
+        MemoryBlock::rw(
+            AddressRange::value("BANK", BANK),
+            |bus, _, _| bus.ram.bank,
+            |bus, _, _, value| bus.ram.bank = value,
+        ),
+        MemoryBlock::ro(AddressRange::new(0xFF00, 0xFF7F), |_, _, address| {
+            error!("TODO: unmapped I/O register {address}");
+            0
+        }),
+        MemoryBlock::rw(
+            HIGH_RAM,
+            |bus, range, address| {
+                get_byte(bus.ram.high_ram.as_slice(), range, address)
+            },
+            |bus, range, address, value| {
+                set_byte(
+                    bus.ram.high_ram.as_mut_slice(),
+                    range,
+                    address,
+                    value,
+                );
+            },
+        ),
+        MemoryBlock::rw(
+            AddressRange::value("TODO int enable", 0xFFFF),
+            |_, _, _| {
+                error!("TODO: Interrupt Enabled Register read");
+                0
+            },
+            |_, _, _, _| error!("TODO: Interrupt Enabled Register write"),
+        ),
+    ];
+
     /// Get a 1-byte value from memory
     ///
     /// All 16-bit addresses are valid, so this is infallible.
     pub fn get8(&self, address: Address) -> u8 {
-        // https://gbdev.io/pandocs/Memory_Map.html
-        match address.0 {
-            BOOTSTRAP_START..=BOOTSTRAP_LAST if self.is_bootstrapping() => {
-                let index: usize = address.0.into();
-                BOOTSTRAP_CODE[index]
-            }
-            // Cartridge ROM
-            CARTRIDGE_ROM_0_START..=CARTRIDGE_ROM_0_LAST => {
-                // SAFETY: Cartridge ROM asserts its own length
-                let index: usize = address.0.into();
-                self.rom.bytes()[index]
-            }
-            CARTRIDGE_ROM_N_START..=CARTRIDGE_ROM_N_LAST => {
-                error!("TODO: Game ROM bank N");
-                0
-            }
-            TILE_DATA_START..=TILE_DATA_LAST => {
-                get_slice_byte_opt(self.vram.tile_data(), TILE_DATA, address)
-            }
-            TILE_MAPS_START..=TILE_MAPS_LAST => {
-                get_slice_byte_opt(self.vram.tile_maps(), TILE_MAPS, address)
-            }
-            CARTRIDGE_RAM_START..=CARTRIDGE_RAM_LAST => get_slice_byte(
-                self.ram.cartridge_ram.as_slice(),
-                CARTRIDGE_RAM,
-                address,
-            ),
-            RAM_START..=RAM_LAST => {
-                get_slice_byte(self.ram.ram.as_slice(), RAM, address)
-            }
-            ECHO_RAM_START..=ECHO_RAM_LAST => {
-                // Make sure mirrored references can't go out of bounds
-                debug_assert!(ECHO_RAM.len() <= RAM.len());
-                // Shift to the main RAM section
-                let address = Address(address.0 - ECHO_RAM_START + RAM_START);
-                self.get8(address)
-            }
-            OAM_START..=OAM_LAST => {
-                get_slice_byte_opt(self.vram.oam(), OAM, address)
-            }
-            0xFEA0..=0xFEFF => 0, // Null mem
+        let range = self.get_block(address);
+        (range.get)(self, range.range, address)
+    }
 
-            // Hardware registers
-            LCDC => self.vram.registers().lcdc.into(),
-            STAT => self.vram.registers().stat.into(),
-            SCY => self.vram.registers().scy,
-            SCX => self.vram.registers().scx,
-            LY => self.vram.registers().ly.into(),
-            LYC => self.vram.registers().lyc.into(),
-            DMA => self.vram.registers().dma,
-            BANK => self.ram.bank,
-            0xFF00..=0xFF7F => {
-                error!("TODO: unmapped I/O register {address}");
-                0
-            }
-
-            HIGH_RAM_START..=HIGH_RAM_LAST => {
-                get_slice_byte(self.ram.high_ram.as_slice(), HIGH_RAM, address)
-            }
-            0xFFFF => {
-                error!("TODO: Interrupt Enabled Register read");
-                0
-            }
-        }
+    /// Get the block of memory containing the given address
+    fn get_block(&self, address: Address) -> MemoryBlock {
+        *Self::BLOCKS
+            .iter()
+            .find(|block| block.contains(self, address))
+            .unwrap_or_else(|| panic!("Unmapped address: {address}"))
     }
 
     /// Is the bootstrapp currently mapped?
@@ -458,6 +448,11 @@ impl AddressRange {
         }
     }
 
+    /// TODO
+    pub const fn value(name: &'static str, value: u16) -> Self {
+        Self::named(name, value, value)
+    }
+
     /// Join two contiguous ranges
     ///
     /// `self` must be the lower range and `other` is the upper range.
@@ -490,7 +485,8 @@ impl AddressRange {
     /// Get the offset between the given address and the start of this range
     ///
     /// Panics if the address is not in this range. Use this for pointer math on
-    /// addressed memory.
+    /// addressed memory. **The returned offset is always less than
+    /// `self.len()`.**
     pub fn offset(&self, address: Address) -> usize {
         assert!(
             self.contains(address),
@@ -512,6 +508,60 @@ impl Display for AddressRange {
             write!(f, "{name} ")?;
         }
         write!(f, "[{}, {}]", range.start, range.last)
+    }
+}
+
+type MemoryGet = fn(&MemoryBusReadOnly<'_>, AddressRange, Address) -> u8;
+type MemorySet = fn(&mut MemoryBus<'_>, AddressRange, Address, u8);
+type MemoryEnabled = fn(&MemoryBusReadOnly<'_>) -> bool;
+
+/// TODO
+#[derive(Clone, Copy)]
+struct MemoryBlock {
+    /// Range of addresses covered by this block
+    range: AddressRange,
+    /// Getter to determine if this block is accessible
+    ///
+    /// Used to disable the bootstrap ROM after loading.
+    enabled: MemoryEnabled,
+    /// Get a byte for an address
+    get: MemoryGet,
+    /// Set a byte at an address
+    set: MemorySet,
+}
+
+impl MemoryBlock {
+    /// Create a read-only block of memory
+    const fn ro(range: AddressRange, get: MemoryGet) -> Self {
+        Self {
+            range,
+            enabled: |_| true,
+            get,
+            set: |_, _, _, _| {},
+        }
+    }
+
+    /// Create a read-write block of memory
+    const fn rw(range: AddressRange, get: MemoryGet, set: MemorySet) -> Self {
+        Self {
+            range,
+            enabled: |_| true,
+            get,
+            set,
+        }
+    }
+
+    /// TODO
+    const fn with_enabled(mut self, enabled: MemoryEnabled) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Is the given address in this block?
+    ///
+    /// Always returns `false` if the block is disabled.
+    fn contains(&self, bus: &MemoryBusReadOnly, address: Address) -> bool {
+        (self.enabled)(bus) && self.range.contains(address)
     }
 }
 
@@ -578,7 +628,7 @@ impl RawBytes for [u8] {}
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn get_slice_byte<T: RawBytes + ?Sized>(
+fn get_byte<T: RawBytes + ?Sized>(
     data: &T,
     range: AddressRange,
     address: Address,
@@ -606,13 +656,13 @@ fn get_slice_byte<T: RawBytes + ?Sized>(
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn get_slice_byte_opt<T: RawBytes + ?Sized>(
+fn get_byte_opt<T: RawBytes + ?Sized>(
     data: Option<&T>,
     range: AddressRange,
     address: Address,
 ) -> u8 {
     match data {
-        Some(slice) => get_slice_byte(slice, range, address),
+        Some(slice) => get_byte(slice, range, address),
         None => 0,
     }
 }
@@ -624,7 +674,7 @@ fn get_slice_byte_opt<T: RawBytes + ?Sized>(
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn set_slice_byte<T: RawBytes + ?Sized>(
+fn set_byte<T: RawBytes + ?Sized>(
     data: &mut T,
     range: AddressRange,
     address: Address,
@@ -649,13 +699,33 @@ fn set_slice_byte<T: RawBytes + ?Sized>(
 ///
 /// Panics if `address` is not in `range` or if the *byte* length of `slice` is
 /// not equal to the length of `range`.
-fn set_slice_byte_opt<T: RawBytes + ?Sized>(
+fn set_byte_opt<T: RawBytes + ?Sized>(
     data: Option<&mut T>,
     range: AddressRange,
     address: Address,
     value: u8,
 ) {
     if let Some(slice) = data {
-        set_slice_byte(slice, range, address, value);
+        set_byte(slice, range, address, value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ensure that every address in the valid memory range (`[0, 65535]`) is
+    /// mapped to exactly one range
+    #[test]
+    fn range_coverage() {
+        let rom = Rom::empty();
+        let mut memory = RandomAccessMemory::default();
+        let mut vram = Vram::default();
+        let mut memory = MemoryBus::new(&rom, &mut memory, &mut vram);
+        for address in 0..=u16::MAX {
+            let address = Address(address);
+            memory.get8(address);
+            memory.set8(address, 0);
+        }
     }
 }

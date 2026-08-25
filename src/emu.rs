@@ -101,7 +101,7 @@ impl GameBoy {
 
         // Progress the CPU
         let mut memory_bus =
-            MemoryBus::new(&mut self.ram, &self.rom, self.gpu.vram_mut());
+            MemoryBus::new(&self.rom, &mut self.ram, self.gpu.vram_mut());
         self.cpu.tick(&self.clock, &mut memory_bus);
 
         // Progress the GPU
