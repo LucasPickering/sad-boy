@@ -208,6 +208,12 @@ impl MemoryBusReadOnly<'_> {
         block.get(self, address)
     }
 
+    /// TODO
+    pub fn get_metadata(&self, address: Address) -> MemoryMetadata {
+        let block = self.get_block(address);
+        block.metadata(address)
+    }
+
     /// Get the block of memory containing the given address
     fn get_block(&self, address: Address) -> &'static dyn MemoryBlock {
         *BLOCKS
@@ -223,6 +229,14 @@ impl MemoryBusReadOnly<'_> {
     pub fn is_bootstrapping(&self) -> bool {
         self.ram.bank == 0
     }
+}
+
+/// Information about a particular byte in memory
+pub struct MemoryMetadata {
+    /// Address of the described memory
+    pub address: Address,
+    /// Name of the block that this address points to
+    pub block_name: &'static str,
 }
 
 /// Address of a byte of memory
@@ -537,6 +551,9 @@ trait MemoryBlock {
     ///
     /// This may panic if the address is outside [Self::range].
     fn set(&self, bus: &mut MemoryBus, address: Address, value: u8);
+
+    /// TODO
+    fn metadata(&self, address: Address) -> MemoryMetadata;
 }
 
 /// [MemoryBlock] implementation for null bytes
@@ -562,6 +579,13 @@ impl MemoryBlock for Null {
     }
 
     fn set(&self, _bus: &mut MemoryBus, _address: Address, _value: u8) {}
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
+    }
 }
 
 /// [MemoryBlock] implementation for single mutable byte (e.g. a register)
@@ -597,6 +621,13 @@ impl MemoryBlock for Byte {
 
     fn set(&self, bus: &mut MemoryBus, _address: Address, value: u8) {
         *(self.get_mut)(bus) = value;
+    }
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
     }
 }
 
@@ -644,6 +675,13 @@ impl MemoryBlock for ReadOnlyBytes {
     }
 
     fn set(&self, _bus: &mut MemoryBus, _address: Address, _value: u8) {}
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
+    }
 }
 
 /// [MemoryBlock] implementation for a mutable byte slice (e.g. RAM)
@@ -683,6 +721,13 @@ impl MemoryBlock for Bytes {
     fn set(&self, bus: &mut MemoryBus, address: Address, value: u8) {
         let bytes = (self.get_mut)(bus);
         bytes[self.range.offset(address)] = value;
+    }
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
     }
 }
 
@@ -730,6 +775,13 @@ impl MemoryBlock for OptionalBytes {
             bytes[self.range.offset(address)] = value;
         }
     }
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
+    }
 }
 
 /// Placeholder for memory ranges I haven't implemented yet
@@ -761,6 +813,13 @@ impl MemoryBlock for PlaceholderBytes {
             "TODO: unmapped write in {name}: {address}",
             name = self.range.name.unwrap_or("???")
         );
+    }
+
+    fn metadata(&self, address: Address) -> MemoryMetadata {
+        MemoryMetadata {
+            address,
+            block_name: self.range.name.unwrap_or("???"),
+        }
     }
 }
 

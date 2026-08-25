@@ -216,7 +216,7 @@ impl StatefulWidget for TuiWidget<'_> {
                     // Bound is INCLUSIVE
                     pc + cpu.current_instruction().size - 1,
                 ),
-                memory_bus: self.emulator.memory(),
+                memory_bus: &self.emulator.memory(),
                 go_to_address: if let Some(Focus::GoToAddress { text_area }) =
                     &self.focus
                 {
@@ -413,7 +413,7 @@ impl Widget for CpuPanel<'_> {
 struct MemoryPanel<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
-    memory_bus: MemoryBusReadOnly<'a>,
+    memory_bus: &'a MemoryBusReadOnly<'a>,
     /// Text box for jumping to an address
     go_to_address: Option<&'a TextArea<'static>>,
 }
@@ -428,13 +428,21 @@ impl StatefulWidget for MemoryPanel<'_> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let area = panel("Memory", area, buf);
+        let [bytes_area, detail_area] =
+            Layout::vertical([Constraint::Min(0), 3.into()]).areas(area);
 
         // Main content - the bytes!!
         MemoryBytes {
             pc: self.pc,
             memory_bus: self.memory_bus,
         }
-        .render(area, buf, state);
+        .render(bytes_area, buf, state);
+
+        MemoryDetail {
+            address: state.selected,
+            memory_bus: self.memory_bus,
+        }
+        .render(detail_area, buf);
 
         // Go To textbox overlays on the bottom line
         let bottom_area = Rect {
@@ -449,6 +457,24 @@ impl StatefulWidget for MemoryPanel<'_> {
         } else {
             "[g] Go To Address".render(bottom_area, buf);
         }
+    }
+}
+
+/// Detailed metadata info about the selected byte
+struct MemoryDetail<'a> {
+    address: Address,
+    memory_bus: &'a MemoryBusReadOnly<'a>,
+}
+
+impl Widget for MemoryDetail<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let metadata = self.memory_bus.get_metadata(self.address);
+        format!(
+            "{address}: {block_name}",
+            address = metadata.address,
+            block_name = metadata.block_name
+        )
+        .render(area, buf);
     }
 }
 
@@ -503,7 +529,7 @@ impl Default for MemoryInfoState {
 struct MemoryBytes<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
-    memory_bus: MemoryBusReadOnly<'a>,
+    memory_bus: &'a MemoryBusReadOnly<'a>,
 }
 
 impl StatefulWidget for MemoryBytes<'_> {
