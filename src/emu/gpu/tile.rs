@@ -4,8 +4,11 @@
 //! containing [TileIndex]es. These indexes map to actual tiles.
 
 use crate::{
-    emu::{gpu::ColorIndex, memory::RawBytes},
-    util::{Bit, assert_size, impl_bit_pack},
+    emu::{
+        gpu::ColorIndex,
+        memory::{self, RawBytes},
+    },
+    util::{Bit, assert_size, assert_size_range, impl_bit_pack},
 };
 
 /// An 8x8 collection of pixels
@@ -177,7 +180,7 @@ pub struct TileData {
     /// https://gbdev.io/pandocs/Tile_Data.html
     data: [Tile; Self::BLOCK_LENGTH * 3],
 }
-assert_size!(TileData, 6144);
+assert_size_range!(TileData, memory::TILE_DATA);
 
 impl TileData {
     /// Number of tiles in each block
@@ -237,7 +240,7 @@ pub struct TileMaps {
     /// `[lower, upper]` tile maps
     maps: [[TileIndex; Self::LENGTH]; 2],
 }
-assert_size!(TileMaps, 2048);
+assert_size_range!(TileMaps, memory::TILE_MAPS);
 
 impl TileMaps {
     /// Width of a single map, in tiles

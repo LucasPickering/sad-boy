@@ -12,9 +12,11 @@ use crate::{
         gpu::tile::{
             Tile, TileData, TileDataArea, TileIndex, TileMapArea, TileMaps,
         },
-        memory::RawBytes,
+        memory::{self, RawBytes},
     },
-    util::{Bit, Mask, PackedBits, assert_size, impl_bit_pack},
+    util::{
+        Bit, Mask, PackedBits, assert_size, assert_size_range, impl_bit_pack,
+    },
 };
 use std::{
     fmt::Debug,
@@ -141,12 +143,12 @@ pub struct Vram {
 
 impl Vram {
     /// Get read-only access to the GPU I/O registers
-    pub fn registers(&self) -> &Registers {
+    pub fn registers(&self) -> &impl RawBytes {
         &self.registers
     }
 
     /// Get mutable access to the GPU I/O registers
-    pub fn registers_mut(&mut self) -> &mut Registers {
+    pub fn registers_mut(&mut self) -> &mut impl RawBytes {
         &mut self.registers
     }
 
@@ -369,31 +371,36 @@ impl Default for Vram {
 /// Registers in the GPU
 ///
 /// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
-/// These can be modified via the memory bus.
+/// These are accessed/modified by the memory bus based on their layout, so
+/// the field ordering is **very important**.
 #[derive(Debug, Default)]
-pub struct Registers {
-    /// OAM DMA control
+#[repr(C)]
+struct Registers {
+    /// `0xFF40`: LCD control
+    lcdc: PackedBits<LcdControl>,
+    /// `0xFF41`: LCD status
+    stat: PackedBits<LcdStatus>,
+    /// `0xFF42`: Background scroll Y
+    scy: u8,
+    /// `0xFF43`: Background scroll X
+    scx: u8,
+    /// `0xFF44`: Current horizontal line being drawn on the LCD (read-only)
+    ///
+    /// Range is `[0, 153]`. `[144, 153]` is the vblank period.
+    ly: Scanline,
+    /// `0xFF45`: A writable register compared to `LY` every cycle
+    ///
+    /// When `LY == LYC`, bit 2 of the `STAT` register is set. See [LcdStatus].
+    lyc: Scanline,
+    /// `0xFF46`:  OAM DMA control
     ///
     /// The written value is the **high** byte of the transfer source address.
     /// Only values `0x00` to `0xDF` are valid.
-    pub dma: u8,
-    /// LCD control
-    pub lcdc: PackedBits<LcdControl>,
-    /// LCD status
-    pub stat: PackedBits<LcdStatus>,
-    /// Background scroll X
-    pub scx: u8,
-    /// Background scroll Y
-    pub scy: u8,
-    /// Current horizontal line being drawn on the LCD (**read-only**)
-    ///
-    /// Range is `[0, 153]`. `[144, 153]` is the vblank period.
-    pub ly: Scanline,
-    /// A writable register compared to `LY` every cycle
-    ///
-    /// When `LY == LYC`, bit 2 of the `STAT` register is set. See [LcdStatus].
-    pub lyc: Scanline,
+    dma: u8,
 }
+assert_size_range!(Registers, memory::GPU_REGISTERS);
+
+impl RawBytes for Registers {}
 
 /// Bit-packed values in the `LCDC` register
 ///

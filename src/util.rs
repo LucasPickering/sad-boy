@@ -9,12 +9,28 @@ use std::{
 };
 
 /// Assert a type's size in memory matches a value
+///
+/// If the asserted type is mapped to a specific memory range, use
+/// [assert_size_range] instead.
 macro_rules! assert_size {
     ($type:ty, $expected:literal) => {
         const _: () = assert!(std::mem::size_of::<$type>() == $expected);
     };
 }
 pub(crate) use assert_size;
+
+/// Assert a type's size in memory matches the length of a memory range
+///
+/// Use this for types that are mapped to particular memory ranges to ensure the
+/// two lengths line up as expected.
+///
+/// **This should be used on any type that implements `RawBytes`.**
+macro_rules! assert_size_range {
+    ($type:ty, $expected:expr) => {
+        const _: () = assert!(std::mem::size_of::<$type>() == $expected.len());
+    };
+}
+pub(crate) use assert_size_range;
 
 /// Index of a single bit in a byte
 ///

@@ -64,19 +64,15 @@ pub const ECHO_RAM: AddressRange =
     AddressRange::named("Echo RAM", 0xE000, 0xFDFF);
 /// Object Attribute Memory (part of VRAM)
 pub const OAM: AddressRange = AddressRange::named("OAM", 0xFE00, 0xFE9F);
+/// A set of single-byte registers stored in VRAM
+pub const GPU_REGISTERS: AddressRange =
+    AddressRange::named("GPU Registers", 0xFF40, 0xFF46);
 /// Address range for additional general-purpose writable RAM
 pub const HIGH_RAM: AddressRange =
     AddressRange::named("High RAM", 0xFF80, 0xFFFE);
 // ===== Hardware Registers ====
 // https://gbdev.io/pandocs/Hardware_Reg_List.html
-pub const LCDC: Address = Address(0xFF40);
-pub const STAT: Address = Address(0xFF41);
-pub const SCY: Address = Address(0xFF42);
-pub const SCX: Address = Address(0xFF43);
-pub const LY: Address = Address(0xFF44);
-pub const LYC: Address = Address(0xFF45);
-pub const DMA: Address = Address(0xFF46);
-pub const BANK: Address = Address(0xFF50);
+const BANK: Address = Address(0xFF50);
 
 /// An abstraction over the addessable range of memory
 ///
@@ -451,18 +447,6 @@ pub trait RawBytes {
 
 impl RawBytes for [u8] {}
 
-/// Create a [Byte] for a register within VRAM
-macro_rules! gpu_reg {
-    ($name:ident, $field:ident) => {
-        Byte::new(
-            stringify!($name),
-            $name,
-            |bus| bus.vram.registers().$field.into(),
-            |bus| &mut bus.vram.registers_mut().$field,
-        )
-    };
-}
-
 /// All available memory blocks
 ///
 /// All memory lookups use this list to determine where each byte lives. It
@@ -503,13 +487,11 @@ const BLOCKS: &[&'static dyn MemoryBlock] = &[
         |bus| bus.vram.oam_mut().map(RawBytes::as_bytes_mut),
     ),
     &Null::new(AddressRange::named("Null", 0xFEA0, 0xFEFF)),
-    &gpu_reg!(LCDC, lcdc),
-    &gpu_reg!(STAT, stat),
-    &gpu_reg!(SCY, scy),
-    &gpu_reg!(SCX, scx),
-    &gpu_reg!(LY, ly),
-    &gpu_reg!(LYC, lyc),
-    &gpu_reg!(DMA, dma),
+    &Bytes::new(
+        GPU_REGISTERS,
+        |bus| bus.vram.registers().as_bytes(),
+        |bus| bus.vram.registers_mut().as_bytes_mut(),
+    ),
     &PlaceholderBytes::new(AddressRange::named(
         "I/O registers",
         0xFF00,
