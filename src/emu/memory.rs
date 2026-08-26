@@ -119,12 +119,9 @@ impl<'a> MemoryBus<'a> {
             "Requested instruction at {address} is out of range {CARTRIDGE_ROM}"
         );
 
-        // Cache instructions because parsing is expensive
-        let source = if self.is_bootstrapping() {
+        let source = if self.is_bootstrapping() && BOOTSTRAP.contains(address) {
             // If the bootstrap is enabled, then we should only be running
-            // bootstrap code. Out-of-bounds here implies the bootstrap exited
-            // without unmapping itself, or something else re-mapped the
-            // bootstrap.
+            // bootstrap code
             BOOTSTRAP_CODE
         } else {
             self.rom.bytes()
