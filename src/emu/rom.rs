@@ -29,7 +29,7 @@ use winnow::{
         StrContext,
     },
     stream::{Offset, Stream},
-    token::one_of,
+    token::{one_of, take},
 };
 
 /// A GameBoy ROM (cartridge)
@@ -102,23 +102,26 @@ impl Debug for Rom {
 /// Return the instruction as well as the number of bytes it consumed. This is
 /// (generally) the number of bytes that the PC should advance.
 pub fn parse_instruction(
-    input: &[u8],
+    mut input: &[u8],
     address: Address,
 ) -> Result<(Instruction, u16), InstructionParseError> {
-    let mut input = &input[(address.0 as usize)..];
-    let start = input.checkpoint();
+    let start = input.checkpoint(); // Should always be 0
     // Don't use Parser::parse() because its error type doesn't print well
     // for binary data
-    let (instruction, taken) = instruction
-        .with_taken()
-        .parse_next(&mut input)
-        .map_err(|error| {
-            let error = error
-                .into_inner()
-                .expect("Complete parser should not return Incomplete");
-            InstructionParseError::new(input, input.offset_from(&start), error)
-        })?;
-    let size = input.offset_from(&start) as u16;
+    let (instruction, taken) =
+        preceded(take(address.0), instruction.with_taken())
+            .parse_next(&mut input)
+            .map_err(|error| {
+                // Reset the input back to the start so we can grab backward
+                // and forward from where the error occurred
+                let offset = input.offset_from(&start);
+                input.reset(&start);
+                let error = error
+                    .into_inner()
+                    .expect("Complete parser should not return Incomplete");
+                InstructionParseError::new(input, offset, error)
+            })?;
+    let size = taken.len() as u16;
     trace!(
         %instruction,
         bytes = %BytesDisplay::binary(taken),
