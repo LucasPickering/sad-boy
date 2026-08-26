@@ -57,7 +57,7 @@ impl Tile {
         );
         let line = self.lines[y as usize];
         // Grab the bit corresponding to this pixel from each byte
-        let bit = Bit(x);
+        let bit = TileLine::bit(x);
         match (bit.get(line.low), bit.get(line.high)) {
             (false, false) => ColorIndex::Zero,
             (false, true) => ColorIndex::One,
@@ -91,7 +91,7 @@ impl TileLine {
         let mut low = 0;
         let mut high = 0;
         for x in 0..8u8 {
-            let bit = Bit(x);
+            let bit = Self::bit(x);
             let (low_bit, high_bit) = match pixels[x as usize] {
                 ColorIndex::Zero => (false, false),
                 ColorIndex::One => (false, true),
@@ -102,6 +102,11 @@ impl TileLine {
             high = bit.set(high, high_bit);
         }
         Self { low, high }
+    }
+
+    /// Get the bit corresponding to an x value `0-7`
+    fn bit(x: u8) -> Bit {
+        Bit(7 - x) // Bit 7 is x=0 (leftmost)
     }
 }
 
