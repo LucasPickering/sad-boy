@@ -297,7 +297,8 @@ impl Vram {
                 .iter()
                 .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
             {
-                let tile = self.tile_data.get(tile_index, TileDataArea::Low);
+                // Objects always use the low tile data
+                let tile = self.tile_data.get(TileDataArea::Low, tile_index);
                 return Some(tile.pixel(x, y));
             }
         }
@@ -325,7 +326,7 @@ impl Vram {
         let tile_index = self.tile_maps.get(tile_x, tile_y, TileMapArea::Low);
 
         // Now convert the index to an actual tile
-        let tile = self.tile_data.get(tile_index, self.lcdc().bg_window_tiles);
+        let tile = self.tile_data.get(self.lcdc().bg_window_tiles, tile_index);
         // Get the pixel coordinates within the tile
         tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)
 
@@ -970,8 +971,11 @@ mod tests {
             object_enable: true,
             ..lcdc
         });
-        vram.tile_data
-            .set(0, Tile::from_pixels([[ColorIndex::Two; 8]; 8]));
+        vram.tile_data.set(
+            TileDataArea::Low,
+            TileIndex::new(0),
+            Tile::from_pixels([[ColorIndex::Two; 8]; 8]),
+        );
 
         // Put an object in the top-left with that tile
         vram.oam[0] = ObjectAttributes {

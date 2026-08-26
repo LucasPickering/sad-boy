@@ -19,7 +19,7 @@ use crate::{
 /// - 8 lines => 16 bytes total
 ///
 /// https://gbdev.io/pandocs/Tile_Data.html
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)] // Memory layout matters here
 pub struct Tile {
     lines: [TileLine; 8],
@@ -38,6 +38,12 @@ impl Tile {
         Self {
             lines: pixels.map(TileLine::from_pixels),
         }
+    }
+
+    /// Create a tile with all pixels as a single color
+    #[cfg(test)]
+    pub fn from_color(color: ColorIndex) -> Self {
+        Self::from_pixels([[color; 8]; 8])
     }
 
     /// Get a color index for a single pixel in the tile
@@ -68,7 +74,7 @@ impl Tile {
 /// split across both bytes of that line. For a given line, bit 7 of each byte
 /// specifies the left-most pixel, bit 6 is the second pixel, etc. The first
 /// byte holds the lesser bit, second byte holds the greater bit.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 struct TileLine {
     low: u8,
@@ -108,6 +114,11 @@ pub struct TileIndex(u8);
 assert_size!(TileIndex, 1);
 
 impl TileIndex {
+    #[cfg(test)]
+    pub fn new(index: u8) -> Self {
+        Self(index)
+    }
+
     /// Get the index of the tile after this one
     ///
     /// This is used for 8x16 tiles. The bottom tile is always the one
@@ -142,7 +153,9 @@ impl_bit_pack! {
 /// - Block 1: `0x8800-0x8FFF`
 /// - Block 2: `0x9000-0x97FF`
 ///
-/// At any given time two blocks are accessible: 0-1 or 1-2.
+/// At any given time two blocks are accessible: 0-1 or 2-1. In [Self::High],
+/// indexes `0-127` map to the *upper* block.
+/// https://gbdev.io/pandocs/Tile_Data.html
 #[derive(Clone, Copy, Debug)]
 pub enum TileDataArea {
     /// `0x8000-0x8FFF` (blocks 0 and 1)
@@ -174,11 +187,12 @@ pub struct TileData {
     /// Tile pixel data
     ///
     /// This is split into 3 logical blocks, each 128 tiles (2048 bytes).
-    /// At any given time, two blocks are accessible (0-1 or 1-2) based on
-    /// bit 4 of the `LCDC` register. See [TileDataArea] for more.
+    /// At any given time, two blocks are accessible (0-1 or 2-1) based on
+    /// bit 4 of the `LCDC` register. In the latter mode, the lower indexes
+    /// map to the *higher* block. See [TileDataArea] for more.
     ///
     /// https://gbdev.io/pandocs/Tile_Data.html
-    data: [Tile; Self::BLOCK_LENGTH * 3],
+    data: [[Tile; Self::BLOCK_LENGTH]; 3],
 }
 assert_size_range!(TileData, memory::TILE_DATA);
 
@@ -191,17 +205,10 @@ impl TileData {
     /// `area` defines which tile blocks are active: low+middle or middle+high.
     /// Background and window use the `bg_window_area` flag in the `LCDC`
     /// register, but objects always use [TileDataArea::Low].
-    pub fn get(&self, index: TileIndex, area: TileDataArea) -> Tile {
-        // Select tile slice based on the area
-        let slice = match area {
-            // Tile memory is 3 blocks of 128 tiles
-            TileDataArea::Low => &self.data[..(Self::BLOCK_LENGTH * 2)],
-            TileDataArea::High => &self.data[Self::BLOCK_LENGTH..],
-        };
-        debug_assert_eq!(slice.len(), 256, "Tile data should be 256 tiles");
-
-        // SAFETY: Length is always 256, covered by assertion
-        slice[index.0 as usize]
+    pub fn get(&self, area: TileDataArea, index: TileIndex) -> Tile {
+        // SAFETY: Returned index is valid by the contract of index()
+        let index = Self::index(area, index);
+        self.data.as_flattened()[index]
     }
 
     /// Set a tile by index
@@ -209,17 +216,34 @@ impl TileData {
     /// This is for generating test data only. The Game Boy never needs to do
     /// this; mutations are made via the memory view.
     #[cfg(test)]
-    pub fn set(&mut self, index: u8, tile: Tile) {
-        // Right now only the lower 2 blocks are accessible because of the
-        // bounds of u8. I'll expand that if there's a need for it.
-        self.data[index as usize] = tile;
+    pub fn set(&mut self, area: TileDataArea, index: TileIndex, tile: Tile) {
+        // SAFETY: Returned index is valid by the contract of index()
+        let index = Self::index(area, index);
+        self.data.as_flattened_mut()[index] = tile;
+    }
+
+    /// Get an index into `self.data` for the given area/tile index
+    ///
+    /// The returned index will always be valid for `self.data.as_flattened()`
+    /// (`< 128*3`)
+    fn index(area: TileDataArea, index: TileIndex) -> usize {
+        const BL: usize = TileData::BLOCK_LENGTH;
+
+        // Block 1 is always the UPPER. Lower can be 0 or 2
+        // https://gbdev.io/pandocs/Tile_Data.html
+        match area {
+            TileDataArea::Low => index.0 as usize,
+            // 0-127 maps to 256-383; 128-255 stays the same. You could do this
+            // with a comparison, but this is BRANCHLESS!!
+            TileDataArea::High => (index.0 as usize + BL) % (BL * 2) + BL,
+        }
     }
 }
 
 impl Default for TileData {
     fn default() -> Self {
         Self {
-            data: [Tile::default(); Self::BLOCK_LENGTH * 3],
+            data: [[Tile::default(); Self::BLOCK_LENGTH]; 3],
         }
     }
 }
@@ -277,3 +301,48 @@ impl Default for TileMaps {
 
 // This representation matches what's used in memory
 impl RawBytes for TileMaps {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    /// Test getting tile data by index
+    ///
+    /// Most tiles will be initialized with default values, but one tile (#77)
+    /// in each area gets a unique layout.
+    #[rstest]
+    #[case::low_block_0(
+        TileDataArea::Low,
+        77,
+        Tile::from_color(ColorIndex::One)
+    )]
+    #[case::low_block_1(
+        TileDataArea::Low,
+        128 + 77,
+        Tile::from_color(ColorIndex::Two)
+    )]
+    #[case::high_block_1(
+        TileDataArea::High,
+        128 + 77,
+        Tile::from_color(ColorIndex::Two)
+    )]
+    // Low indexes are mapped to the highest block
+    #[case::high_block_2(
+        TileDataArea::High,
+        77,
+        Tile::from_color(ColorIndex::Three)
+    )]
+    fn tile_data_get(
+        #[case] area: TileDataArea,
+        #[case] index: u8,
+        #[case] expected: Tile,
+    ) {
+        let mut tile_data = TileData::default();
+        tile_data.data[0][77] = Tile::from_color(ColorIndex::One);
+        tile_data.data[1][77] = Tile::from_color(ColorIndex::Two);
+        tile_data.data[2][77] = Tile::from_color(ColorIndex::Three);
+        let tile = tile_data.get(area, TileIndex(index));
+        assert_eq!(tile, expected);
+    }
+}
