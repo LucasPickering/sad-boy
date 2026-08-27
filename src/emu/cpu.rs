@@ -25,7 +25,7 @@ use tracing::{error, info_span, trace};
 /// Central Processing Unit for a Game Boy
 ///
 /// This holds the CPU registers and executes instructions.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Cpu {
     /// Mutable values directly in the CPU
     registers: Registers,
@@ -636,7 +636,7 @@ const _: () = assert!(
 );
 
 /// Registers in a Game Boy CPU
-#[derive(Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 #[repr(C)] // Field ordering/alignment is important
 pub struct Registers {
     // Registers are ordered so pairs are kept together. This allows them to be
@@ -980,7 +980,7 @@ impl Instruction {
 /// This caches each loaded instruction from memory so they don't have to be
 /// repeatedly parsed. Instruction parsing is fairly expensive. This makes a
 /// pretty big difference in performance.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct InstructionCache {
     cache: HashMap<Address, (Instruction, u16)>,
     /// `true` while running the bootstrap, `false` once it's been unmapped

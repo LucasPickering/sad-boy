@@ -379,7 +379,7 @@ impl Display for AddressRange {
 }
 
 /// Container for RAM and memory-related registers
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RandomAccessMemory {
     // ===== RAM =====
     /// General-purpose writable memory

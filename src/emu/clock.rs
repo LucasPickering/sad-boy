@@ -12,7 +12,7 @@ use tracing::warn;
 ///
 /// The clock drives the CPU, GPU, and whatever other components run off the
 /// main clock.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Clock {
     /// Number of elapsed cycles (dots)
     ///

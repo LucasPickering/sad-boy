@@ -36,7 +36,7 @@ const SCANLINES_PER_FRAME: u8 = 154;
 const SCANLINES_PER_FRAME_DRAWN: u8 = 144;
 
 /// Graphics registers and processing
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Gpu {
     /// Memory specific to the GPU
     vram: Vram,
@@ -121,7 +121,7 @@ impl Gpu {
 ///
 /// This is separate from the [Gpu] struct because the render logic to VRAM and
 /// the state machine.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Vram {
     /// 1-byte control registers related to graphics processing
     registers: Registers,
@@ -374,7 +374,7 @@ impl Default for Vram {
 /// This is a subset of the [hardware register list](https://gbdev.io/pandocs/Hardware_Reg_List.html).
 /// These are accessed/modified by the memory bus based on their layout, so
 /// the field ordering is **very important**.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[repr(C)]
 struct Registers {
     /// `0xFF40`: LCD control
@@ -509,7 +509,7 @@ impl_bit_pack! {
 ///
 /// This is a state machine that progresses as the scanline is drawn. This is
 /// *not* used for vblank scanlines, since those are stateless. See [PpuMode].
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 enum ScanlineState {
     /// Initial state: no work has been done
     #[default]
@@ -701,7 +701,7 @@ enum ColorIndex {
 }
 
 /// An object that's been loaded in mode 2 and is ready to be drawn
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Object {
     /// Attributes loaded from OAM
     attributes: ObjectAttributes,

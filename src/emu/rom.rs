@@ -39,7 +39,7 @@ use winnow::{
 /// - [Instructions](https://gbdev.io/pandocs/CPU_Instruction_Set.html)
 ///
 /// The header begins at `0x100`; instructions begin at
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Rom {
     /// The entire ROM binary data
     data: Vec<u8>,

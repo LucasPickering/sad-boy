@@ -186,7 +186,7 @@ impl_bit_pack! {
 /// directly, but the window and background go through [TileMap].
 ///
 /// https://gbdev.io/pandocs/Tile_Data.html
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct TileData {
     /// Tile pixel data
@@ -263,7 +263,7 @@ impl RawBytes for TileData {}
 /// selects between the two maps.
 ///
 /// https://gbdev.io/pandocs/Tile_Maps.html
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct TileMaps {
     /// `[lower, upper]` tile maps

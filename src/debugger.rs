@@ -2,10 +2,13 @@
 use crate::backend::Backend;
 use crate::emu::{Address, Cycles, GameBoy};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     fmt::{self, Display},
 };
 use tracing::debug;
+
+/// Maximum number of snapshots to store in the queue
+const MAX_SNAPSHOTS: usize = 10;
 
 /// Debugger enables pausing, stepping, and inspection
 ///
@@ -27,6 +30,11 @@ pub struct Debugger {
     /// This uses a `HashSet` to prevent duplicate breakpoints and make each
     /// lookup `O(1)`.
     breakpoints: HashSet<Breakpoint>,
+    /// Ring buffer of recent snapshots
+    ///
+    /// The length of this is capped at [MAX_SNAPSHOTS]. Snapshots are only
+    /// taken while paused/stepping, for performancey speedy reasons.
+    snapshots: VecDeque<Snapshot>,
 }
 
 impl Debugger {
@@ -35,12 +43,8 @@ impl Debugger {
             paused: true, // Start paused
             step_until: None,
             breakpoints: HashSet::new(),
+            snapshots: VecDeque::with_capacity(MAX_SNAPSHOTS),
         }
-    }
-
-    /// Is the debugger currently paused?
-    pub fn paused(&self) -> bool {
-        self.paused
     }
 
     /// Get the current [RunState]
@@ -59,8 +63,76 @@ impl Debugger {
         }
     }
 
+    /// Get the queue of saved snapshots
+    pub fn snapshots(&self) -> &VecDeque<Snapshot> {
+        &self.snapshots
+    }
+
+    /// Capture a snapshot for the current emulator state *if* actively
+    /// debugging
+    pub fn snapshot(&mut self, emulator: &GameBoy) {
+        // Only store snapshots while paused/stepping. Way too god damned slow
+        // (I assume) for full speed
+        if self.run_state().is_debugging()
+            // Only snapshot if this isn't in the list already
+            && self.get_snapshot_index(emulator).is_none()
+        {
+            // If at capacity, pop the oldest first to prevent a grow
+            if self.snapshots.len() == self.snapshots.capacity() {
+                self.snapshots.pop_back();
+            }
+            self.snapshots.push_front(Snapshot(emulator.clone()));
+        }
+    }
+
+    /// Restore the snapshot before the given one in the history list
+    ///
+    /// If the snapshot isn't in the list, or it's the oldest available, do
+    /// nothing and return `false`. If the previous snapshot was found and
+    /// restored, return `true`.
+    pub fn previous_snapshot(&mut self, emulator: &mut GameBoy) -> bool {
+        // Front is the most recent; +1 goes toward the back
+        if let Some(previous) = self
+            .get_snapshot_index(emulator)
+            .and_then(|current| self.snapshots.get(current + 1))
+        {
+            *emulator = previous.0.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Restore the snapshot after the given one in the history list
+    ///
+    /// If the snapshot isn't in the list, or it's the most recent available,
+    /// do nothing and return `false`. If the next snapshot was found and
+    /// restored, return `true`.
+    pub fn next_snapshot(&mut self, emulator: &mut GameBoy) -> bool {
+        // Front is the most recent; -1 goes toward the front
+        if let Some(next) = self
+            .get_snapshot_index(emulator)
+            .and_then(|current| self.snapshots.get(current.checked_sub(1)?))
+        {
+            *emulator = next.0.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get the index of a snapshot matching the given emulator state
+    ///
+    /// This uses the clock cycle count as a unique identifier for each state.
+    /// Return `None` if this state hasn't been snapshotted
+    fn get_snapshot_index(&self, emulator: &GameBoy) -> Option<usize> {
+        self.snapshots
+            .iter()
+            .position(|snap| snap.matches(emulator))
+    }
+
     /// Get a list of currently set breakpoints
-    pub fn breakpoints(&self) -> impl Iterator<Item = Breakpoint> {
+    pub fn breakpoints(&self) -> impl ExactSizeIterator<Item = Breakpoint> {
         self.breakpoints.iter().copied()
     }
 
@@ -73,9 +145,38 @@ impl Debugger {
         self.breakpoints.insert(Breakpoint::new(address));
     }
 
+    /// Check all registered breakpoints and pause the debugger if any have
+    /// been triggered
+    ///
+    /// This should be called on each cycle. It the given emulator state to
+    /// check breakpoint statuses.
+    pub fn check_breakpoints(&mut self, emulator: &GameBoy) {
+        // Clear step_until once we hit it
+        if self
+            .step_until
+            .is_some_and(|cy| emulator.clock().cycles() >= cy)
+        {
+            self.step_until = None;
+        }
+
+        let pc = Breakpoint::new(emulator.cpu().registers().pc());
+        if self.breakpoints.contains(&pc) {
+            debug!(breakpoint = ?pc, "Hit breakpoint");
+            self.paused = true;
+        }
+    }
+
     /// Toggle pause state
     pub fn toggle_pause(&mut self) {
-        self.paused ^= true;
+        self.paused = match self.run_state() {
+            RunState::Paused => false,
+            RunState::Stepping => {
+                // While stepping, toggle should mean "stop stepping"
+                self.step_until = None;
+                true
+            }
+            RunState::Running => true,
+        };
     }
 
     /// Step forward one clock cycle
@@ -99,27 +200,6 @@ impl Debugger {
     fn step_until(&mut self, target: Cycles) {
         debug!("Stepping debugger until cycle {target}");
         self.step_until = Some(target);
-    }
-
-    /// Check all registered breakpoints and pause the debugger if any have
-    /// been triggered
-    ///
-    /// This should be called on each cycle. It the given emulator state to
-    /// check breakpoint statuses.
-    pub fn check_breakpoints(&mut self, emulator: &GameBoy) {
-        // Clear step_until once we hit it
-        if self
-            .step_until
-            .is_some_and(|cy| emulator.clock().cycles() >= cy)
-        {
-            self.step_until = None;
-        }
-
-        let pc = Breakpoint::new(emulator.cpu().registers().pc());
-        if self.breakpoints.contains(&pc) {
-            debug!(breakpoint = ?pc, "Hit breakpoint");
-            self.paused = true;
-        }
     }
 
     /// Run the emulator until the debugger pauses
@@ -167,18 +247,40 @@ impl RunState {
     pub fn should_tick(self) -> bool {
         match self {
             Self::Paused => false,
-            Self::Stepping | Self::Running => true,
+            Self::Stepping { .. } | Self::Running => true,
         }
     }
 
     /// Should the debugger be visible?
     ///
     /// `true` for [Self::Paused] and [Self::Stepping]
-    pub fn should_show_debugger(self) -> bool {
+    pub fn is_debugging(self) -> bool {
         match self {
             RunState::Paused | RunState::Stepping => true,
             RunState::Running => false,
         }
+    }
+}
+
+/// A snapshot of a past emulator state
+///
+/// Emulation is deterministic, so each snapshot can be identified by its clock
+/// cycle.
+///
+/// Currently, the snapshot does *not* include frame state. The frame is
+/// rendered independently from the debugger state, so stepping back to a
+/// previous frame will not re-render that frame.
+pub struct Snapshot(GameBoy);
+
+impl Snapshot {
+    /// Does this snapshot match the given emulator state?
+    pub fn matches(&self, other: &GameBoy) -> bool {
+        self.id() == other.clock().cycles()
+    }
+
+    /// Get the clock cycle identifying this snapshot
+    pub fn id(&self) -> Cycles {
+        self.0.clock().cycles()
     }
 }
 

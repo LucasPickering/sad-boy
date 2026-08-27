@@ -30,7 +30,9 @@ use ratatui::{
     style::Styled,
     symbols::merge::MergeStrategy,
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, StatefulWidget, Widget},
+    widgets::{
+        Block, BorderType, Borders, List, ListState, StatefulWidget, Widget,
+    },
 };
 use ratatui_textarea::TextArea;
 use std::iter;
@@ -91,7 +93,7 @@ impl Tui {
     /// propagated.
     pub fn update(
         &mut self,
-        emulator: &GameBoy,
+        emulator: &mut GameBoy,
         debugger: &mut Debugger,
         event: InputEvent,
     ) -> bool {
@@ -145,7 +147,14 @@ impl Tui {
                     TuiAction::DebugStepCycle => debugger.step_cycle(emulator),
                     TuiAction::DebugStepFrame => debugger.step_frame(emulator),
                     TuiAction::DebugStepInstruction => {
-                        debugger.step_instruction(emulator);
+                        // If we're on a past snapshot, this will go to the next
+                        // snapshot instead of advancing by instruction
+                        if !debugger.next_snapshot(emulator) {
+                            debugger.step_instruction(emulator);
+                        }
+                    }
+                    TuiAction::DebugStepBack => {
+                        debugger.previous_snapshot(emulator);
                     }
                     TuiAction::Cancel | TuiAction::Submit => {}
                 }
@@ -198,11 +207,15 @@ impl StatefulWidget for TuiWidget<'_> {
     type State = MemoryInfoState;
 
     fn render(self, _area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        DebuggerPanel(self.debugger).render(self.areas.debug, buf);
+        DebuggerPanel {
+            emulator: self.emulator,
+            debugger: self.debugger,
+        }
+        .render(self.areas.debug, buf);
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
-        if self.debugger.run_state().should_show_debugger() {
+        if self.debugger.run_state().is_debugging() {
             let cpu = self.emulator.cpu();
             CpuPanel {
                 clock: self.emulator.clock(),
@@ -268,24 +281,68 @@ impl TuiAreas {
 }
 
 /// Widget for debugger info
-struct DebuggerPanel<'a>(&'a Debugger);
+struct DebuggerPanel<'a> {
+    emulator: &'a GameBoy,
+    debugger: &'a Debugger,
+}
 
 impl Widget for DebuggerPanel<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let area = panel("Debugger", area, buf);
-        let mut text = Text::from_iter([
-            match self.0.run_state() {
-                RunState::Paused => "PAUSED",
-                RunState::Stepping => "STEPPING",
-                RunState::Running => "RUNNING",
-            }
-            .into(),
-            "Breakpoints".set_style(STYLES.subheader),
-        ]);
-        for breakpoint in self.0.breakpoints() {
-            text.push_line(breakpoint.to_string());
-        }
-        text.render(area, buf);
+
+        let snapshots = self.debugger.snapshots();
+        let breakpoints = self.debugger.breakpoints();
+        let [
+            state_area,
+            snapshots_header_area,
+            snapshots_list_area,
+            breakpoints_header_area,
+            breakpoints_list_area,
+        ] = Layout::vertical([
+            1,
+            1,
+            snapshots.len() as u16,
+            1,
+            breakpoints.len() as u16,
+        ])
+        .areas(area);
+
+        let state = match self.debugger.run_state() {
+            RunState::Paused => "PAUSED",
+            RunState::Stepping => "STEPPING",
+            RunState::Running => "RUNNING",
+        };
+        state.render(state_area, buf);
+
+        // Snapshots
+        "Snapshots"
+            .set_style(STYLES.subheader)
+            .render(snapshots_header_area, buf);
+        // We don't need an explicit select state. The current emulator *is*
+        // the select state. Whichever snapshot matches that is the selected
+        // snapshot.
+        let list =
+            List::new(snapshots.iter().map(|snap| snap.id().to_string()))
+                .highlight_symbol(">");
+        let selected_snapshot_index = snapshots
+            .iter()
+            .position(|snap| snap.matches(self.emulator));
+        StatefulWidget::render(
+            list,
+            snapshots_list_area,
+            buf,
+            &mut ListState::default().with_selected(selected_snapshot_index),
+        );
+
+        // Breakpoints
+        "Breakpoints"
+            .set_style(STYLES.subheader)
+            .render(breakpoints_header_area, buf);
+        Widget::render(
+            List::new(breakpoints.map(|bp| bp.to_string())),
+            breakpoints_list_area,
+            buf,
+        );
     }
 }
 

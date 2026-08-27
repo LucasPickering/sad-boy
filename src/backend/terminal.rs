@@ -122,10 +122,16 @@ impl TerminalBackend {
                     ControlFlow::Break(()) => break,
                     ControlFlow::Continue(handled) => handled,
                 };
+
+            // Check if a snapshot is needed. Always snapshot between
+            // input+drawing so the most recent debugger state is used and the
+            // snapshot is available for the draw
+            debugger.snapshot(emulator);
+
             // Only redraw the TUI if there was at least one input event.
             // Without input, the screen can't change. Drawing on every tick is
             // extraordinarily expensive.
-            if handled_event || debugger.paused() {
+            if handled_event || debugger.run_state().is_debugging() {
                 self.tui.draw(&mut self.terminal, emulator, &debugger);
             }
         }
@@ -140,7 +146,7 @@ impl TerminalBackend {
     /// - `ControlFlow::Break` if the loop should exit (quit event)
     fn handle_next_event(
         &mut self,
-        emulator: &GameBoy,
+        emulator: &mut GameBoy,
         debugger: &mut Debugger,
     ) -> ControlFlow<(), bool> {
         // While the debugger is paused, we have nothing to do but wait for

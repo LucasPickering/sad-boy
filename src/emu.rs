@@ -25,7 +25,7 @@ use color_eyre::eyre;
 use std::path::Path;
 
 /// Game Boy emulator
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GameBoy {
     clock: Clock,
     cpu: Cpu,

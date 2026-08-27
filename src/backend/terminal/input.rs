@@ -76,6 +76,7 @@ impl InputAction {
             KeyCode::Right if ctrl => TuiAction::DebugStepCycle.into(),
             KeyCode::Right if shift => TuiAction::DebugStepFrame.into(),
             KeyCode::Right => TuiAction::DebugStepInstruction.into(),
+            KeyCode::Left => TuiAction::DebugStepBack.into(),
             _ => return None,
         };
         Some(event)
@@ -113,6 +114,8 @@ pub enum TuiAction {
     DebugGoToAddress,
     /// Pause or unpause execution in the debugger
     DebugPauseToggle,
+    /// Step back to a previous emulator snapshot
+    DebugStepBack,
     /// Advance the debugger one clock cycle
     DebugStepCycle,
     /// Advance the debugger to the end of the current frame
