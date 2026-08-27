@@ -88,36 +88,28 @@ impl Debugger {
     /// Restore the snapshot before the given one in the history list
     ///
     /// If the snapshot isn't in the list, or it's the oldest available, do
-    /// nothing and return `false`. If the previous snapshot was found and
-    /// restored, return `true`.
-    pub fn previous_snapshot(&mut self, emulator: &mut GameBoy) -> bool {
+    /// nothing.
+    pub fn previous_snapshot(&mut self, emulator: &mut GameBoy) {
         // Front is the most recent; +1 goes toward the back
         if let Some(previous) = self
             .get_snapshot_index(emulator)
             .and_then(|current| self.snapshots.get(current + 1))
         {
             *emulator = previous.0.clone();
-            true
-        } else {
-            false
         }
     }
 
     /// Restore the snapshot after the given one in the history list
     ///
     /// If the snapshot isn't in the list, or it's the most recent available,
-    /// do nothing and return `false`. If the next snapshot was found and
-    /// restored, return `true`.
-    pub fn next_snapshot(&mut self, emulator: &mut GameBoy) -> bool {
+    /// do nothing.
+    pub fn next_snapshot(&mut self, emulator: &mut GameBoy) {
         // Front is the most recent; -1 goes toward the front
         if let Some(next) = self
             .get_snapshot_index(emulator)
             .and_then(|current| self.snapshots.get(current.checked_sub(1)?))
         {
             *emulator = next.0.clone();
-            true
-        } else {
-            false
         }
     }
 

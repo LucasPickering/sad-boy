@@ -146,14 +146,13 @@ impl Tui {
                     TuiAction::DebugStepCycle => debugger.step_cycle(emulator),
                     TuiAction::DebugStepFrame => debugger.step_frame(emulator),
                     TuiAction::DebugStepInstruction => {
-                        // If we're on a past snapshot, this will go to the next
-                        // snapshot instead of advancing by instruction
-                        if !debugger.next_snapshot(emulator) {
-                            debugger.step_instruction(emulator);
-                        }
+                        debugger.step_instruction(emulator);
                     }
-                    TuiAction::DebugStepBack => {
+                    TuiAction::DebugSnapshotPrevious => {
                         debugger.previous_snapshot(emulator);
+                    }
+                    TuiAction::DebugSnapshotNext => {
+                        debugger.next_snapshot(emulator);
                     }
                     TuiAction::Cancel | TuiAction::Submit => {}
                 }
