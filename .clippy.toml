@@ -1,0 +1,4 @@
+disallowed-methods = [
+  # Encourage caching in layout
+  {path = "ratatui_core::layout::Layout::areas", replacement = "areas_cached", reason = "prefer cached version"},
+]

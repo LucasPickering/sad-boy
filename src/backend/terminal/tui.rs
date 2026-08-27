@@ -4,6 +4,7 @@
 
 #![expect(unstable_name_collisions)] // From Itertools::intersperse
 
+mod layout;
 mod style;
 mod widgets;
 
@@ -12,6 +13,7 @@ use crate::{
         RatatuiTerminal,
         input::{InputAction, InputEvent, TuiAction},
         tui::{
+            layout::LayoutCached,
             style::STYLES,
             widgets::{Scrollbar, ScrollbarState},
         },
@@ -45,11 +47,10 @@ use std::iter;
 /// This struct stores the TUI state that's retained between frames.
 #[derive(Default)]
 pub struct Tui {
-    areas: Option<TuiAreas>,
     /// Active element in focus, or `None` for the "default" view
     focus: Option<Focus>,
-    /// State for the Memory panel
-    memory: MemoryInfoState,
+    /// Retained TUI state
+    state: TuiWidgetState,
 }
 
 impl Tui {
@@ -58,7 +59,7 @@ impl Tui {
     /// This area is expanded as much as possible, but will be shrunk as
     /// necessary to fit the debugger around it.
     pub fn emulator_area(&self) -> Rect {
-        self.areas.map(|areas| areas.emulator).unwrap_or_default()
+        self.state.emulator_area
     }
 
     /// Draw the TUI to the terminal
@@ -70,18 +71,14 @@ impl Tui {
     ) {
         terminal
             .draw(|frame| {
-                let areas = *self
-                    .areas
-                    .get_or_insert_with(|| TuiAreas::split(frame.area()));
                 frame.render_stateful_widget(
                     TuiWidget {
                         focus: self.focus.as_ref(),
-                        areas,
                         emulator,
                         debugger,
                     },
                     frame.area(),
-                    &mut self.memory,
+                    &mut self.state,
                 );
             })
             .unwrap();
@@ -113,7 +110,7 @@ impl Tui {
                 Some(TuiAction::Submit) => {
                     if let Ok(address) = text_area.lines()[0].parse::<Address>()
                     {
-                        self.memory.select_address(address);
+                        self.state.memory.select_address(address);
                         self.unfocus();
                         true
                     } else {
@@ -130,15 +127,17 @@ impl Tui {
                 };
                 // If it has a bound TUI action, consume it
                 match action {
-                    TuiAction::Up => self.memory.move_address(Direction::Up),
+                    TuiAction::Up => {
+                        self.state.memory.move_address(Direction::Up);
+                    }
                     TuiAction::Down => {
-                        self.memory.move_address(Direction::Down);
+                        self.state.memory.move_address(Direction::Down);
                     }
                     TuiAction::Left => {
-                        self.memory.move_address(Direction::Left);
+                        self.state.memory.move_address(Direction::Left);
                     }
                     TuiAction::Right => {
-                        self.memory.move_address(Direction::Right);
+                        self.state.memory.move_address(Direction::Right);
                     }
                     TuiAction::DebugGoToAddress => {
                         self.focus(Focus::go_to_address());
@@ -194,24 +193,32 @@ struct TuiWidget<'a> {
     focus: Option<&'a Focus>,
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
-    /// Pre-computed layout
-    ///
-    /// This is calculated and stored in the parent because it's expensive to
-    /// compute and only changes on resize, so caching is nice.
-    areas: TuiAreas,
 }
 
 impl StatefulWidget for TuiWidget<'_> {
-    // For now this is the only part of the state so I'm taking a shortcut.
-    // Eventually this will need its own TuiWidgetState
-    type State = MemoryInfoState;
+    type State = TuiWidgetState;
 
-    fn render(self, _area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // Show breakpoints always so we can set them while running
+        let [left_area, memory_area] =
+            Layout::horizontal([Constraint::Min(0), 31.into()])
+                .areas_cached(area);
+        // Leave space for the screen in the top-left
+        let [emulator_area, mut bottom_left_area] =
+            Layout::vertical([Constraint::Min(0), 20.into()])
+                .areas_cached(left_area);
+        state.emulator_area = emulator_area; // Store this for the parent
+        bottom_left_area.width += 1; // Combine borders into the Memory panel
+        // Move down below the screen area
+        let [debugger_area, cpu_area] =
+            Layout::horizontal([Constraint::Min(0), 36.into()])
+                .spacing(-1)
+                .areas_cached(bottom_left_area);
         DebuggerPanel {
             emulator: self.emulator,
             debugger: self.debugger,
         }
-        .render(self.areas.debug, buf);
+        .render(debugger_area, buf);
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
@@ -221,7 +228,7 @@ impl StatefulWidget for TuiWidget<'_> {
                 clock: self.emulator.clock(),
                 cpu,
             }
-            .render(self.areas.cpu, buf);
+            .render(cpu_area, buf);
             let pc = cpu.registers().pc().0;
             MemoryPanel {
                 pc: AddressRange::new(
@@ -238,46 +245,22 @@ impl StatefulWidget for TuiWidget<'_> {
                     None
                 },
             }
-            .render(self.areas.memory, buf, state);
+            .render(memory_area, buf, &mut state.memory);
         }
     }
 }
 
-/// Split areas for the main TUI layout
-#[derive(Clone, Copy)]
-struct TuiAreas {
-    /// Area the emulator screen will draw to
-    emulator: Rect,
-    /// Debugger panel in the bottom-left
-    debug: Rect,
-    /// CPU panel in the bottom-middle
-    cpu: Rect,
-    /// Memory panel on the right
-    memory: Rect,
-}
-
-impl TuiAreas {
-    /// Split the given area for the TUI layout
-    fn split(area: Rect) -> Self {
-        // Show breakpoints always so we can set them while running
-        let [left, memory] =
-            Layout::horizontal([Constraint::Min(0), 31.into()]).areas(area);
-        // Leave space for the screen in the top-left
-        let [emulator, mut bottom_left] =
-            Layout::vertical([Constraint::Min(0), 20.into()]).areas(left);
-        bottom_left.width += 1; // Combine borders into the Memory panel
-        // Move down below the screen area
-        let [debug, cpu] = Layout::horizontal([Constraint::Min(0), 36.into()])
-            .spacing(-1)
-            .areas(bottom_left);
-
-        Self {
-            emulator,
-            debug,
-            cpu,
-            memory,
-        }
-    }
+/// Widget state for [TuiWidget]
+///
+/// This is the state that's retained across calls.
+#[derive(Default)]
+struct TuiWidgetState {
+    /// Area that the emulator screen should be drawn to
+    ///
+    /// This is calculated dynamically based on the other screen content. It's
+    /// retained so it can be reported back up to where the screen is rendered.
+    emulator_area: Rect,
+    memory: MemoryDetailState,
 }
 
 /// Widget for debugger info
@@ -305,7 +288,7 @@ impl Widget for DebuggerPanel<'_> {
             1,
             breakpoints.len() as u16,
         ])
-        .areas(area);
+        .areas_cached(area);
 
         let state = match self.debugger.run_state() {
             RunState::Paused => "PAUSED",
@@ -481,12 +464,12 @@ impl MemoryPanel<'_> {
 }
 
 impl StatefulWidget for MemoryPanel<'_> {
-    type State = MemoryInfoState;
+    type State = MemoryDetailState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let area = panel("Memory", area, buf);
         let [bytes_area, detail_area] =
-            Layout::vertical([Constraint::Min(0), 3.into()]).areas(area);
+            Layout::vertical([Constraint::Min(0), 3.into()]).areas_cached(area);
 
         // Main content - the bytes!!
         MemoryBytes {
@@ -535,10 +518,10 @@ impl Widget for MemoryDetail<'_> {
     }
 }
 
-/// Widget state for [MemoryInfo]
+/// Widget state for [MemoryDetail]
 ///
 /// This is the state that's retained across calls.
-struct MemoryInfoState {
+struct MemoryDetailState {
     /// Highlighted
     selected: Address,
     /// Vertical scroll state
@@ -549,7 +532,7 @@ struct MemoryInfoState {
     scroll: ScrollbarState,
 }
 
-impl MemoryInfoState {
+impl MemoryDetailState {
     /// Update the selection state to jump to a specific memory address
     fn select_address(&mut self, address: Address) {
         self.selected = address;
@@ -573,7 +556,7 @@ impl MemoryInfoState {
     }
 }
 
-impl Default for MemoryInfoState {
+impl Default for MemoryDetailState {
     fn default() -> Self {
         Self {
             selected: Address::default(),
@@ -582,7 +565,7 @@ impl Default for MemoryInfoState {
     }
 }
 
-/// Widget for the byte rows of [MemoryInfo]
+/// Widget for the byte rows of [MemoryDetail]
 struct MemoryBytes<'a> {
     /// Range of bytes defining the next CPU instruction
     pc: AddressRange,
@@ -590,7 +573,7 @@ struct MemoryBytes<'a> {
 }
 
 impl StatefulWidget for MemoryBytes<'_> {
-    type State = MemoryInfoState;
+    type State = MemoryDetailState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         // Split the area vertically once. We know the two will have the same
@@ -598,7 +581,7 @@ impl StatefulWidget for MemoryBytes<'_> {
         let [gutter_area, bytes_area] =
             Layout::horizontal([4.into(), Constraint::Min(0)])
                 .spacing(1)
-                .areas(area);
+                .areas_cached(area);
 
         // Draw scrollbar
         Scrollbar::default().render(area, buf, &mut state.scroll);
@@ -624,7 +607,7 @@ impl StatefulWidget for MemoryBytes<'_> {
             let byte_areas: [Rect; MemoryPanel::BYTES_PER_LINE as usize] =
                 Layout::horizontal(iter::repeat_n(2, 8))
                     .spacing(1)
-                    .areas(bytes_area);
+                    .areas_cached(bytes_area);
             for (address_offset, area) in
                 (0..MemoryPanel::BYTES_PER_LINE).zip(byte_areas)
             {
