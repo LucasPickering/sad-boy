@@ -4,7 +4,7 @@ mod math;
 
 use crate::{
     emu::{
-        Clock, FaultResult, assert_fault,
+        AddressRange, Clock, FaultResult, assert_fault,
         clock::Cycles,
         instruction::{
             Add, ConditionCode, DecInc, Instruction, Jump, Load, LoadHigh,
@@ -89,6 +89,13 @@ impl Cpu {
     /// Get the currently execution instruction
     pub fn current_instruction(&self) -> InstructionInfo {
         self.current_instruction
+    }
+
+    /// Range of addresses comprising the current CPU instruction
+    pub fn pc_range(&self) -> AddressRange {
+        let pc = self.registers().pc();
+        // Upper bound is *inclusive*, hence the -1
+        AddressRange::new(pc, pc + (self.current_instruction().size - 1))
     }
 
     /// Advance the CPU one clock cycle

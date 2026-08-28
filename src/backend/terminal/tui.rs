@@ -10,7 +10,7 @@ mod widgets;
 
 use crate::{
     backend::terminal::{
-        RatatuiTerminal, draw,
+        RatatuiTerminal,
         input::{InputAction, InputEvent, TuiAction},
         tui::{
             layout::LayoutCached,
@@ -38,7 +38,7 @@ use ratatui::{
     },
 };
 use ratatui_textarea::TextArea;
-use std::{io, iter};
+use std::iter;
 
 /// Terminal UI surrounding the emulator
 ///
@@ -144,7 +144,7 @@ impl Tui {
                         self.focus(Focus::go_to_address());
                     }
                     TuiAction::DebugPauseToggle => {
-                        debugger.toggle_pause(emulator)
+                        debugger.toggle_pause(emulator);
                     }
                     TuiAction::DebugStepCycle => debugger.step_cycle(emulator),
                     TuiAction::DebugStepFrame => debugger.step_frame(emulator),
@@ -237,13 +237,8 @@ impl StatefulWidget for TuiWidget<'_> {
                 cpu,
             }
             .render(cpu_area, buf);
-            let pc = cpu.registers().pc().0;
             MemoryPanel {
-                pc: AddressRange::new(
-                    pc,
-                    // Bound is INCLUSIVE
-                    pc + cpu.current_instruction().size - 1,
-                ),
+                pc_range: cpu.pc_range(),
                 memory_bus: &self.emulator.memory(),
                 go_to_address: if let Some(Focus::GoToAddress { text_area }) =
                     &self.focus
@@ -461,7 +456,7 @@ impl Widget for CpuPanel<'_> {
 /// Widget to inspect memory
 struct MemoryPanel<'a> {
     /// Range of bytes defining the next CPU instruction
-    pc: AddressRange,
+    pc_range: AddressRange,
     memory_bus: &'a MemoryBusReadOnly<'a>,
     /// Text box for jumping to an address
     go_to_address: Option<&'a TextArea<'static>>,
@@ -482,7 +477,7 @@ impl StatefulWidget for MemoryPanel<'_> {
 
         // Main content - the bytes!!
         MemoryBytes {
-            pc: self.pc,
+            pc: self.pc_range,
             memory_bus: self.memory_bus,
         }
         .render(bytes_area, buf, state);

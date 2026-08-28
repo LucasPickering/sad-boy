@@ -189,9 +189,14 @@ impl Debugger {
             self.step_until = None;
         }
 
-        let pc = Breakpoint::new(emulator.cpu().registers().pc());
-        if self.breakpoints.contains(&pc) {
-            debug!(breakpoint = ?pc, "Hit breakpoint");
+        // Check each byte in the current instruction. Makes it possible to set
+        // breakpoints without knowing the byte it starts on
+        let pc_range = emulator.cpu().pc_range();
+        if let Some(bp) = pc_range
+            .iter()
+            .find_map(|addr| self.breakpoints.get(&Breakpoint::new(addr)))
+        {
+            debug!(breakpoint = ?bp, "Hit breakpoint");
             self.paused = true;
         }
     }
@@ -328,8 +333,8 @@ impl Snapshot {
 pub struct Breakpoint {
     /// Address to pause at
     ///
-    /// This will only trigger if the PC **equals** that address. If the
-    /// active instruction overlaps this
+    /// This will trigger if the address is part of the current CPU
+    /// instruction. It does not have to strictly equal the PC.
     address: Address,
 }
 

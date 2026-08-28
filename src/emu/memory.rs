@@ -297,13 +297,10 @@ impl AddressRange {
     /// Define a range of memory
     ///
     /// The given bounds are **inclusive**: `[start, last]`.
-    pub const fn new(start: u16, last: u16) -> Self {
+    pub fn new(start: Address, last: Address) -> Self {
         Self {
             name: None,
-            range: RangeInclusive {
-                start: Address(start),
-                last: Address(last),
-            },
+            range: RangeInclusive { start, last },
         }
     }
 
@@ -365,6 +362,12 @@ impl AddressRange {
     /// Is the address within this range?
     pub fn contains(&self, address: Address) -> bool {
         self.range.contains(&address)
+    }
+
+    /// Get an iterator over all addresses in this range
+    pub fn iter(&self) -> impl Iterator<Item = Address> {
+        // Address doesn't/can't impl Step, so it can't be a range iter directly
+        (self.range.start.0..self.range.last.0).map(Address)
     }
 }
 
