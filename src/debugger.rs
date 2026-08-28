@@ -1,6 +1,7 @@
-#[cfg(test)]
-use crate::backend::Backend;
-use crate::emu::{Address, Cycles, GameBoy};
+use crate::{
+    backend::Backend,
+    emu::{Address, Cycles, GameBoy},
+};
 use std::{
     collections::{HashSet, VecDeque},
     fmt::{self, Display},
@@ -49,10 +50,12 @@ impl Debugger {
 
     /// Get the current [RunState]
     ///
-    /// The ternary state determines whether the emulator should tick and the
-    /// debugger should be shown.
-    pub fn run_state(&self) -> RunState {
-        if self.paused {
+    /// The state determines whether the emulator should tick and the debugger
+    /// should be shown.
+    pub fn run_state(&self, emulator: &GameBoy) -> RunState {
+        if emulator.fault().is_some() {
+            RunState::Fault
+        } else if self.paused {
             if self.step_until.is_some() {
                 RunState::Stepping
             } else {
@@ -63,6 +66,29 @@ impl Debugger {
         }
     }
 
+    /// Progress the emulator one tick, if appropriate
+    ///
+    /// In [RunState]s that enable ticking, this will tick. It will also check
+    /// for breakpoints and take snapshots as needed. Call this in the main
+    /// loop to run the emulator with debuggery.
+    pub fn tick(&mut self, emulator: &mut GameBoy, backend: &mut dyn Backend) {
+        if self.run_state(emulator).should_tick() {
+            // If the tick fails, store the fault. We'll fall into fault state
+            // unless we roll back
+            if emulator.tick(backend).is_err() {
+                // When hitting a fault, pause so we can step back/forth
+                self.paused = true;
+            }
+            // After the tick, check breakpoints for pauses. Breakpoints only
+            // depend on emulator state, so we only need to check them after the
+            // state has changed.
+            self.check_breakpoints(emulator);
+        }
+        // Check on every tick to make sure we snapshot immediately after
+        // entering a pause
+        self.snapshot(emulator); // Check if a snapshot is needed
+    }
+
     /// Get the queue of saved snapshots
     pub fn snapshots(&self) -> &VecDeque<Snapshot> {
         &self.snapshots
@@ -71,9 +97,10 @@ impl Debugger {
     /// Capture a snapshot for the current emulator state *if* actively
     /// debugging
     pub fn snapshot(&mut self, emulator: &GameBoy) {
-        // Only store snapshots while paused/stepping. Way too god damned slow
-        // (I assume) for full speed
-        if self.run_state().is_debugging()
+        // While stepping/paused, snapshot on every cycle. While running, only
+        // grab once per frame. This allows us to recover from faults without
+        // having a significant impact on performance.
+        if (self.run_state(emulator).is_debugging() || emulator.clock().is_frame_end())
             // Only snapshot if this isn't in the list already
             && self.get_snapshot_index(emulator).is_none()
         {
@@ -159,15 +186,15 @@ impl Debugger {
     }
 
     /// Toggle pause state
-    pub fn toggle_pause(&mut self) {
-        self.paused = match self.run_state() {
+    pub fn toggle_pause(&mut self, emulator: &GameBoy) {
+        self.paused = match self.run_state(emulator) {
             RunState::Paused => false,
             RunState::Stepping => {
                 // While stepping, toggle should mean "stop stepping"
                 self.step_until = None;
                 true
             }
-            RunState::Running => true,
+            RunState::Running | RunState::Fault => true,
         };
     }
 
@@ -203,8 +230,8 @@ impl Debugger {
         emulator: &mut GameBoy,
         backend: &mut dyn Backend,
     ) {
-        while self.run_state().should_tick() {
-            emulator.tick(backend);
+        while self.run_state(emulator).should_tick() {
+            emulator.tick(backend).unwrap();
             self.check_breakpoints(emulator);
         }
     }
@@ -230,6 +257,11 @@ pub enum RunState {
     ///
     /// Debugger is effectively disabled.
     Running,
+    /// Emulator has encountered a [Fault] and cannot progress further
+    ///
+    /// While an individual emulator cannot recover from the fault, the
+    /// *debugger* can recover by rolling back to a previous [Snapshot].
+    Fault,
 }
 
 impl RunState {
@@ -238,7 +270,7 @@ impl RunState {
     /// `true` for [Self::Stepping] and [Self::Running]
     pub fn should_tick(self) -> bool {
         match self {
-            Self::Paused => false,
+            Self::Paused | Self::Fault => false,
             Self::Stepping { .. } | Self::Running => true,
         }
     }
@@ -248,7 +280,7 @@ impl RunState {
     /// `true` for [Self::Paused] and [Self::Stepping]
     pub fn is_debugging(self) -> bool {
         match self {
-            RunState::Paused | RunState::Stepping => true,
+            RunState::Paused | RunState::Stepping | RunState::Fault => true,
             RunState::Running => false,
         }
     }

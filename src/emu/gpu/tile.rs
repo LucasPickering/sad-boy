@@ -5,6 +5,7 @@
 
 use crate::{
     emu::{
+        FaultResult, assert_fault,
         gpu::ColorIndex,
         memory::{self, RawBytes},
     },
@@ -50,20 +51,21 @@ impl Tile {
     ///
     /// `x` and `y` must both be in the range `[0, 7]`. This will panic
     /// otherwise.
-    pub fn pixel(&self, x: u8, y: u8) -> ColorIndex {
-        debug_assert!(
+    pub fn pixel(&self, x: u8, y: u8) -> FaultResult<ColorIndex> {
+        assert_fault!(
             x < 8 && y < 8,
-            "Tile coordinates must be [0,7], but got ({x}, {y})"
+            "Tile coordinates must be [0,7], but got ({x}, {y})",
         );
         let line = self.lines[y as usize];
         // Grab the bit corresponding to this pixel from each byte
         let bit = TileLine::bit(x);
-        match (bit.get(line.low), bit.get(line.high)) {
+        let index = match (bit.get(line.low), bit.get(line.high)) {
             (false, false) => ColorIndex::Zero,
             (false, true) => ColorIndex::One,
             (true, false) => ColorIndex::Two,
             (true, true) => ColorIndex::Three,
-        }
+        };
+        Ok(index)
     }
 }
 
@@ -128,9 +130,9 @@ impl TileIndex {
     ///
     /// This is used for 8x16 tiles. The bottom tile is always the one
     /// immediately after the top tile.
-    pub fn next(self) -> Self {
-        debug_assert!(self.0 < 255, "Cannot get next tile for tile index 255");
-        Self(self.0 + 1)
+    pub fn next(self) -> FaultResult<Self> {
+        assert_fault!(self.0 < 255, "Cannot get next tile for tile index 255",);
+        Ok(Self(self.0 + 1))
     }
 }
 

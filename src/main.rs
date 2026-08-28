@@ -28,7 +28,7 @@ fn main() -> eyre::Result<()> {
     if args.headless {
         let mut backend = HeadlessBackend::new();
         loop {
-            game_boy.tick(&mut backend);
+            game_boy.tick(&mut backend).unwrap();
         }
     } else {
         let mut terminal = TerminalBackend::new()?;

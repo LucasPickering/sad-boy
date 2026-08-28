@@ -108,13 +108,8 @@ impl TerminalBackend {
         // - End-of-frame sleep in the emulator (while unpaused)
         // - Input read timeout (while paused)
         while !self.quit.load(Ordering::Relaxed) {
-            if debugger.run_state().should_tick() {
-                // After the tick, check breakpoints for pauses. Breakpoints
-                // only depend on emulator state, so we only need to check
-                // them after the state has changed.
-                emulator.tick(self);
-                debugger.check_breakpoints(emulator);
-            }
+            // Advance the emulator
+            debugger.tick(emulator, self);
 
             // Check for input
             let handled_event =
@@ -123,15 +118,10 @@ impl TerminalBackend {
                     ControlFlow::Continue(handled) => handled,
                 };
 
-            // Check if a snapshot is needed. Always snapshot between
-            // input+drawing so the most recent debugger state is used and the
-            // snapshot is available for the draw
-            debugger.snapshot(emulator);
-
             // Only redraw the TUI if there was at least one input event.
             // Without input, the screen can't change. Drawing on every tick is
             // extraordinarily expensive.
-            if handled_event || debugger.run_state().is_debugging() {
+            if handled_event || debugger.run_state(emulator).is_debugging() {
                 self.tui.draw(&mut self.terminal, emulator, &debugger);
             }
         }
@@ -153,7 +143,7 @@ impl TerminalBackend {
         // input. In that case, we'll use a timeout on the input queue so we
         // don't burn a lot of CPU. It still needs to be short though so we can
         // periodically check the `quit` flag.
-        let input_timeout = if debugger.run_state().should_tick() {
+        let input_timeout = if debugger.run_state(emulator).should_tick() {
             Duration::ZERO
         } else {
             Duration::from_millis(100)

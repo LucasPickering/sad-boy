@@ -4,7 +4,7 @@ mod math;
 
 use crate::{
     emu::{
-        Clock,
+        Clock, FaultResult, assert_fault,
         clock::Cycles,
         instruction::{
             Add, ConditionCode, DecInc, Instruction, Jump, Load, LoadHigh,
@@ -96,12 +96,12 @@ impl Cpu {
         &mut self,
         clock: &Clock,
         memory_bus: &mut MemoryBus<'_>,
-    ) {
+    ) -> FaultResult<()> {
         let _span = info_span!("CPU");
 
         // If this instruction is still ticking, do nothing
         if clock.cycles() < self.current_instruction.end {
-            return;
+            return Ok(());
         }
 
         // On the last cycle of the instruction, execute it
@@ -113,7 +113,7 @@ impl Cpu {
         let InstructionInfo {
             instruction, size, ..
         } = self.current_instruction;
-        self.exe(memory_bus).execute(instruction);
+        self.exe(memory_bus).execute(instruction)?;
 
         // If the instruction didn't modify the PC (e.g. jumps), then
         // advance it automatically
@@ -123,6 +123,7 @@ impl Cpu {
 
         // Now that this instruction is done, we need to load the next one
         self.load_next_instruction(clock, memory_bus);
+        Ok(())
     }
 
     fn exe<'cpu, 'mem>(
@@ -192,7 +193,7 @@ struct CpuExe<'cpu, 'mem> {
 
 impl CpuExe<'_, '_> {
     /// Execute a single CPU instruction
-    fn execute(&mut self, instruction: Instruction) {
+    fn execute(&mut self, instruction: Instruction) -> FaultResult<()> {
         let _span = info_span!("Instruction", %instruction).entered();
         trace!(registers = ?self.registers, "Executing instruction");
         match instruction {
@@ -202,7 +203,7 @@ impl CpuExe<'_, '_> {
             Instruction::Bit(bit, source) => self.bit_get(bit, source),
             Instruction::Call { address, condition } => {
                 // CALL instruction is 3 bytes
-                self.call(3, address, condition);
+                self.call(3, address, condition)?;
             }
             Instruction::Ccf => {
                 let flags = self.registers.flags();
@@ -239,15 +240,15 @@ impl CpuExe<'_, '_> {
             Instruction::Or(rhs) => self.bit_binary(u8::bitor, rhs, false),
             Instruction::Push(register) => {
                 let value = *self.register16_stack_mut(register);
-                self.push(value);
+                self.push(value)?;
             }
             Instruction::Pop(register) => {
-                *self.register16_stack_mut(register) = self.pop();
+                *self.register16_stack_mut(register) = self.pop()?;
             }
             Instruction::Res(bit, dest) => self.bit_set(bit, dest, false),
-            Instruction::Ret(condition) => self.ret(condition),
+            Instruction::Ret(condition) => self.ret(condition)?,
             Instruction::Reti => {
-                self.ret(None);
+                self.ret(None)?;
                 *self.interrupts_enabled = true;
             }
             Instruction::Rl(dest) => self.bit_unary(
@@ -315,7 +316,7 @@ impl CpuExe<'_, '_> {
                     carry: Bit(0).get(old),
                 });
             }
-            Instruction::Rst(address) => self.call(1, address, None),
+            Instruction::Rst(address) => self.call(1, address, None)?,
             Instruction::Sbc(rhs) => self.subtract_carry(rhs),
             Instruction::Scf => {
                 let flags = self.registers.flags();
@@ -359,6 +360,7 @@ impl CpuExe<'_, '_> {
             Instruction::Xor(rhs) => self.bit_binary(u8::bitxor, rhs, false),
             Instruction::Invalid => error!("Invalid instruction"),
         }
+        Ok(())
     }
 
     /// Execute a function call
@@ -367,13 +369,14 @@ impl CpuExe<'_, '_> {
         instruction_size: u16,
         target: Address,
         condition: Option<ConditionCode>,
-    ) {
+    ) -> FaultResult<()> {
         if condition.is_none_or(|cond| self.condition(cond)) {
             // Push the return address, which is the instruction *after* the
             // CALL/RST
-            self.push(self.registers.pc.0 + instruction_size);
+            self.push(self.registers.pc.0 + instruction_size)?;
             self.registers.pc = target;
         }
+        Ok(())
     }
 
     /// Execute a `JP` instruction
@@ -490,46 +493,48 @@ impl CpuExe<'_, '_> {
     }
 
     /// Push a 16-bit value onto the stack
-    fn push(&mut self, value: u16) {
+    fn push(&mut self, value: u16) -> FaultResult<()> {
         // SP points to the LAST OCCUPIED slot, so we have to move it back
         // BEFORE writing
         self.registers.sp.0 -= 2;
-        debug_assert!(
+        assert_fault!(
             memory::HIGH_RAM.contains(self.registers.sp),
             "Stack pointer {} is outside range {}",
             self.registers.sp,
             memory::HIGH_RAM
         );
         self.memory.set16(self.registers.sp, value);
+        Ok(())
     }
 
     /// Pop a 16-bit value from the top of the stack
-    fn pop(&mut self) -> u16 {
+    fn pop(&mut self) -> FaultResult<u16> {
         let value = self.memory.get16(self.registers.sp);
         // SP points to the LAST OCCUPIED slot, so we need to increment it to
         // "deallocate" the value we just popped.
         self.registers.sp.0 += 2;
-        debug_assert!(
+        assert_fault!(
             memory::HIGH_RAM.contains(self.registers.sp),
             "Stack pointer {} is outside range {}",
             self.registers.sp,
             memory::HIGH_RAM
         );
 
-        value
+        Ok(value)
     }
 
     /// Return from the current function
-    fn ret(&mut self, condition: Option<ConditionCode>) {
+    fn ret(&mut self, condition: Option<ConditionCode>) -> FaultResult<()> {
         match condition {
             Some(cond) if self.condition(cond) => {
-                self.registers.pc = Address(self.pop());
+                self.registers.pc = Address(self.pop()?);
             }
             Some(_) => {} // Condition false
             None => {
-                self.registers.pc = Address(self.pop());
+                self.registers.pc = Address(self.pop()?);
             }
         }
+        Ok(())
     }
 
     /// Evaluate a [ConditionCode]
@@ -763,11 +768,6 @@ macro_rules! register_pair {
         /// Get the value of the `$pair` register pair
         pub fn $pair(&self) -> u16 {
             let ptr8 = std::ptr::from_ref(&self.$r_low);
-            debug_assert_eq!(
-                ptr8.align_offset(2),
-                0,
-                "Register pointer must be 2-byte aligned"
-            );
             #[expect(clippy::cast_ptr_alignment)]
             let ptr16 = ptr8.cast::<u16>();
             // SAFETY: Safety is predicated on the macro being called with
@@ -778,17 +778,13 @@ macro_rules! register_pair {
             //   will be 2-byte aligned
             // - This will not read/write out of bounds because the first
             //   register must have a second register after it.
+            // Unit tests cover the compile-time invariants
             unsafe { *ptr16 }
         }
 
         /// Get a mutable reference to the `$pair` register pair
         fn $pair_mut(&mut self) -> &mut u16 {
             let ptr8 = std::ptr::from_mut(&mut self.$r_low);
-            debug_assert_eq!(
-                ptr8.align_offset(2),
-                0,
-                "Register pointer must be 2-byte aligned"
-            );
             #[expect(clippy::cast_ptr_alignment)]
             let ptr16 = ptr8.cast::<u16>();
             // SAFETY: see above fn

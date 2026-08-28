@@ -618,6 +618,6 @@ mod tests {
         let mut vram = Vram::default();
         let mut memory = MemoryBus::new(&rom, &mut memory, &mut vram);
         let mut exe = cpu.exe(&mut memory);
-        exe.execute(instruction);
+        exe.execute(instruction).unwrap();
     }
 }

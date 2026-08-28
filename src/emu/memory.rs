@@ -205,7 +205,7 @@ impl MemoryBusReadOnly<'_> {
         block.get(self, address)
     }
 
-    /// TODO
+    /// Get information about the given location in memory
     pub fn get_metadata(&self, address: Address) -> MemoryMetadata {
         let block = self.get_block(address);
         block.metadata(address)
@@ -549,7 +549,7 @@ trait MemoryBlock {
     /// This may panic if the address is outside [Self::range].
     fn set(&self, bus: &mut MemoryBus, address: Address, value: u8);
 
-    /// TODO
+    /// Get information about a particular byte within this block
     fn metadata(&self, address: Address) -> MemoryMetadata;
 }
 

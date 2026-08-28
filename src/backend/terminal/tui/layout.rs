@@ -31,7 +31,7 @@ impl LayoutCached for Layout {
             match cache.entry((area, self.clone())) {
                 Entry::Occupied(entry) => {
                     // Copy the slice out and force it to length N
-                    *<&[Rect; N]>::try_from(&**entry.get()).expect("TODO")
+                    *<&[Rect; N]>::try_from(&**entry.get()).unwrap()
                 }
                 Entry::Vacant(entry) => {
                     let layout = &entry.key().1;

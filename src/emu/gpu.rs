@@ -8,6 +8,7 @@ mod tile;
 use crate::{
     backend::{Color, FrameBuffer},
     emu::{
+        FaultResult, assert_fault,
         clock::{Clock, Cycles},
         gpu::tile::{
             Tile, TileData, TileDataArea, TileIndex, TileMapArea, TileMaps,
@@ -53,12 +54,12 @@ impl Gpu {
         &mut self,
         clock: &Clock,
         frame: &mut FrameBuffer,
-    ) -> bool {
+    ) -> FaultResult<bool> {
         let _span = info_span!("GPU");
 
         // Each scanline is a fixed number of dots, so we can calculate the
         // scanline from the current clock cycle
-        let (scanline, scanline_dots) = Scanline::from_clock(clock);
+        let (scanline, scanline_dots) = Scanline::from_clock(clock)?;
         let ppu_mode = match scanline.0 {
             0..SCANLINES_PER_FRAME_DRAWN => {
                 // Each state is calculated from the previous and may need to
@@ -70,7 +71,7 @@ impl Gpu {
                     scanline_dots,
                     &self.vram,
                     frame,
-                );
+                )?;
                 // TODO should we grab mode before or after transition?
                 self.current_scanline.mode()
             }
@@ -91,7 +92,7 @@ impl Gpu {
             ..stat
         });
 
-        clock.is_frame_end()
+        Ok(clock.is_frame_end())
     }
 
     pub fn vram(&self) -> &Vram {
@@ -110,7 +111,7 @@ impl Gpu {
         loop {
             // Clock has to tick first
             clock.tick();
-            if self.tick(clock, frame) {
+            if self.tick(clock, frame).unwrap() {
                 break;
             }
         }
@@ -273,12 +274,20 @@ impl Vram {
     ///
     /// This is the main rendering logic that walks through
     /// objects/window/background.
-    fn get_pixel(&self, objects: &[Object], x: u8, y: u8) -> ColorIndex {
+    fn get_pixel(
+        &self,
+        objects: &[Object],
+        x: u8,
+        y: u8,
+    ) -> FaultResult<ColorIndex> {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
 
-        self.get_object_pixel(objects, x, y)
+        if let Some(pixel) = self.get_object_pixel(objects, x, y)? {
+            Ok(pixel)
+        } else {
             // TODO check window
-            .unwrap_or_else(|| self.get_background_pixel(x, y))
+            self.get_background_pixel(x, y)
+        }
     }
 
     /// Calculate a pixel from visible objects
@@ -289,27 +298,29 @@ impl Vram {
         objects: &[Object],
         x: u8,
         y: u8,
-    ) -> Option<ColorIndex> {
+    ) -> FaultResult<Option<ColorIndex>> {
         let lcdc = self.lcdc();
         if lcdc.object_enable {
             // These are pre-sorted by x
-            if let Some((tile_index, x, y)) = objects
-                .iter()
-                .find_map(|object| object.get_pixel(x, y, lcdc.object_size))
-            {
-                // Objects always use the low tile data
-                let tile = self.tile_data.get(TileDataArea::Low, tile_index);
-                return Some(tile.pixel(x, y));
+            for object in objects {
+                if let Some((tile_index, x, y)) =
+                    object.get_pixel(x, y, lcdc.object_size)?
+                {
+                    // Objects always use the low tile data
+                    let tile =
+                        self.tile_data.get(TileDataArea::Low, tile_index);
+                    return Ok(Some(tile.pixel(x, y)?));
+                }
             }
         }
-        None
+        Ok(None)
     }
 
     /// Calculate a pixel from the background map
     ///
     /// The background covers the entire screen and wraps at the edge, so every
     /// pixel will have a background color.
-    fn get_background_pixel(&self, x: u8, y: u8) -> ColorIndex {
+    fn get_background_pixel(&self, x: u8, y: u8) -> FaultResult<ColorIndex> {
         // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
         // Map the x/y coordinate within the tile map. This will scroll and
         // intentionally wraps at the end of the map boundary. The map is 32x32
@@ -544,7 +555,7 @@ impl ScanlineState {
         dots: Cycles,
         vram: &Vram,
         frame: &mut FrameBuffer,
-    ) -> Self {
+    ) -> FaultResult<Self> {
         const SCREEN_WIDTH: u8 = FrameBuffer::WIDTH as u8;
         /// Length of mode 2 (OAM scan)
         const OAM_DURATION: Cycles = Cycles(80);
@@ -555,7 +566,7 @@ impl ScanlineState {
 
         // Mode numbers are not sequential by the order they occur. They're
         // numbered based on how they're represented in the STAT register
-        match self {
+        let next_state = match self {
             // Mode 2 - OAM scan
             Self::Start => {
                 // I didn't find anything in the docs about the actual rate
@@ -565,9 +576,9 @@ impl ScanlineState {
                 // Render order relies on the objects being sorted
                 // NOTE: This is only for non-CGB mode. In CGB mode this
                 // will have to change
-                debug_assert!(
+                assert_fault!(
                     objects.is_sorted_by_key(|object| object.attributes.x),
-                    "Objects must be sorted ascending by x coordinate"
+                    "Objects must be sorted ascending by x coordinate",
                 );
                 Self::OamScan { objects }
             }
@@ -592,7 +603,7 @@ impl ScanlineState {
                     let y = scanline.0;
                     // TODO simulate pixel FIFO
                     // https://gbdev.io/pandocs/pixel_fifo.html
-                    let color_index = vram.get_pixel(&objects, x, y);
+                    let color_index = vram.get_pixel(&objects, x, y)?;
                     frame.set(x.into(), y.into(), vram.get_color(color_index));
                     Self::Drawing { objects, x: x + 1 }
                 }
@@ -608,7 +619,8 @@ impl ScanlineState {
             }
             // Reset for the next line
             Self::HorizontalBlank => ScanlineState::Start,
-        }
+        };
+        Ok(next_state)
     }
 }
 
@@ -651,15 +663,21 @@ pub struct Scanline(u8);
 impl Scanline {
     /// Based on the current clock tick, get the current scanline and dot within
     /// that scanline
-    fn from_clock(clock: &Clock) -> (Self, Cycles) {
+    fn from_clock(clock: &Clock) -> FaultResult<(Self, Cycles)> {
         let frame_dots = clock.cycles().0 % Clock::CYCLES_PER_FRAME.0;
         let scanline = frame_dots / SCANLINE_DOTS.0;
-        debug_assert!(scanline <= SCANLINES_PER_FRAME.into());
+        assert_fault!(
+            scanline < SCANLINES_PER_FRAME.into(),
+            "Scanline {scanline} must be < {SCANLINES_PER_FRAME}",
+        );
         let dots = Cycles(frame_dots % SCANLINE_DOTS.0);
-        debug_assert!(dots < SCANLINE_DOTS);
+        assert_fault!(
+            dots < SCANLINE_DOTS,
+            "Scanline dots {dots} must be < {SCANLINE_DOTS}",
+        );
 
         // Cast is safe because of the assertions
-        (Self(scanline as u8), dots)
+        Ok((Self(scanline as u8), dots))
     }
 }
 
@@ -740,7 +758,7 @@ impl Object {
         x: u8,
         y: u8,
         size: ObjectSize,
-    ) -> Option<(TileIndex, u8, u8)> {
+    ) -> FaultResult<Option<(TileIndex, u8, u8)>> {
         // attributes.x/y are shifted; shift the input coordinates to match
         let x = Shifted::shift(x);
         let y = Shifted::shift(y);
@@ -756,19 +774,19 @@ impl Object {
             let y = y - self.attributes.y;
 
             // Bounds checking enforces these
-            debug_assert!(x < 8);
-            debug_assert!(y < 16);
+            assert_fault!(x < 8, "x {x} must be <8",);
+            assert_fault!(y < 16, "y {y} must be <16",);
 
             // For large objects, check if this is the upper or lower tile
             let tile_index = if size == ObjectSize::Large && y >= 8 {
-                self.attributes.tile_index.next()
+                self.attributes.tile_index.next()?
             } else {
                 self.attributes.tile_index
             };
 
-            Some((tile_index, x, y))
+            Ok(Some((tile_index, x, y)))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -1013,7 +1031,7 @@ mod tests {
         for x in 0..8u8 {
             for y in 0..8u8 {
                 let expected = lines[y as usize][x as usize];
-                let actual = tile.pixel(x, y);
+                let actual = tile.pixel(x, y).unwrap();
                 assert_eq!(actual, expected, "Mismatch at ({x}, {y})");
             }
         }

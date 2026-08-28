@@ -142,7 +142,9 @@ impl Tui {
                     TuiAction::DebugGoToAddress => {
                         self.focus(Focus::go_to_address());
                     }
-                    TuiAction::DebugPauseToggle => debugger.toggle_pause(),
+                    TuiAction::DebugPauseToggle => {
+                        debugger.toggle_pause(emulator)
+                    }
                     TuiAction::DebugStepCycle => debugger.step_cycle(emulator),
                     TuiAction::DebugStepFrame => debugger.step_frame(emulator),
                     TuiAction::DebugStepInstruction => {
@@ -207,6 +209,9 @@ impl StatefulWidget for TuiWidget<'_> {
             Layout::vertical([Constraint::Min(0), 20.into()])
                 .areas_cached(left_area);
         state.emulator_area = emulator_area; // Store this for the parent
+
+        // TODO show fault in place of emulator screen
+
         bottom_left_area.width += 1; // Combine borders into the Memory panel
         // Move down below the screen area
         let [debugger_area, cpu_area] =
@@ -221,7 +226,7 @@ impl StatefulWidget for TuiWidget<'_> {
 
         // Only show emulator state info if the debugger is paused. The state
         // changes too quickly while running to be useful.
-        if self.debugger.run_state().is_debugging() {
+        if self.debugger.run_state(self.emulator).is_debugging() {
             let cpu = self.emulator.cpu();
             CpuPanel {
                 clock: self.emulator.clock(),
@@ -289,10 +294,11 @@ impl Widget for DebuggerPanel<'_> {
         ])
         .areas_cached(area);
 
-        let state = match self.debugger.run_state() {
+        let state = match self.debugger.run_state(self.emulator) {
             RunState::Paused => "PAUSED",
             RunState::Stepping => "STEPPING",
             RunState::Running => "RUNNING",
+            RunState::Fault => "FAULT",
         };
         state.render(state_area, buf);
 
