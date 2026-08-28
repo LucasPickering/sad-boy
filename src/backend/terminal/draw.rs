@@ -135,6 +135,13 @@ pub fn draw_frame(
     out.flush()
 }
 
+/// TODO
+pub fn clear(mut out: impl io::Write) -> io::Result<()> {
+    // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
+    write_message!(out, &[], a = 'd')?;
+    out.flush()
+}
+
 /// Define where a frame should be drawn on the screen in [draw_frame]
 pub enum FrameLocation {
     /// Draw the frame with a specific position and size

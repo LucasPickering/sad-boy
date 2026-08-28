@@ -109,7 +109,11 @@ impl TerminalBackend {
         // - Input read timeout (while paused)
         while !self.quit.load(Ordering::Relaxed) {
             // Advance the emulator
-            debugger.tick(emulator, self);
+            if debugger.tick(emulator, self) && emulator.fault().is_some() {
+                // If a fault occurs, clear the screen so we can display the
+                // fault in its place
+                let _ = draw::clear(self.terminal.backend_mut());
+            }
 
             // Check for input
             let handled_event =

@@ -10,7 +10,7 @@ mod widgets;
 
 use crate::{
     backend::terminal::{
-        RatatuiTerminal,
+        RatatuiTerminal, draw,
         input::{InputAction, InputEvent, TuiAction},
         tui::{
             layout::LayoutCached,
@@ -33,11 +33,12 @@ use ratatui::{
     symbols::merge::MergeStrategy,
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, List, ListState, StatefulWidget, Widget,
+        Block, BorderType, Borders, List, ListState, Paragraph, StatefulWidget,
+        Widget,
     },
 };
 use ratatui_textarea::TextArea;
-use std::iter;
+use std::{io, iter};
 
 /// Terminal UI surrounding the emulator
 ///
@@ -211,6 +212,9 @@ impl StatefulWidget for TuiWidget<'_> {
         state.emulator_area = emulator_area; // Store this for the parent
 
         // TODO show fault in place of emulator screen
+        if let Some(fault) = self.emulator.fault() {
+            Paragraph::new(format!("{fault:#}")).render(emulator_area, buf);
+        }
 
         bottom_left_area.width += 1; // Combine borders into the Memory panel
         // Move down below the screen area

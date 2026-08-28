@@ -71,8 +71,14 @@ impl Debugger {
     /// In [RunState]s that enable ticking, this will tick. It will also check
     /// for breakpoints and take snapshots as needed. Call this in the main
     /// loop to run the emulator with debuggery.
-    pub fn tick(&mut self, emulator: &mut GameBoy, backend: &mut dyn Backend) {
-        if self.run_state(emulator).should_tick() {
+    ///
+    /// Return `true` if [GameBoy::tick] was called, `false` if not.
+    pub fn tick(
+        &mut self,
+        emulator: &mut GameBoy,
+        backend: &mut dyn Backend,
+    ) -> bool {
+        let called = if self.run_state(emulator).should_tick() {
             // If the tick fails, store the fault. We'll fall into fault state
             // unless we roll back
             if emulator.tick(backend).is_err() {
@@ -83,10 +89,15 @@ impl Debugger {
             // depend on emulator state, so we only need to check them after the
             // state has changed.
             self.check_breakpoints(emulator);
-        }
+            true
+        } else {
+            false
+        };
+
         // Check on every tick to make sure we snapshot immediately after
         // entering a pause
         self.snapshot(emulator); // Check if a snapshot is needed
+        called
     }
 
     /// Get the queue of saved snapshots
