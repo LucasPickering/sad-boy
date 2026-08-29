@@ -263,7 +263,7 @@ struct TuiWidgetState {
     /// This is calculated dynamically based on the other screen content. It's
     /// retained so it can be reported back up to where the screen is rendered.
     emulator_area: Rect,
-    memory: MemoryDetailState,
+    memory: MemoryPanelState,
 }
 
 /// Widget for debugger info
@@ -468,7 +468,7 @@ impl MemoryPanel<'_> {
 }
 
 impl StatefulWidget for MemoryPanel<'_> {
-    type State = MemoryDetailState;
+    type State = MemoryPanelState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let area = panel("Memory", area, buf);
@@ -525,7 +525,7 @@ impl Widget for MemoryDetail<'_> {
 /// Widget state for [MemoryDetail]
 ///
 /// This is the state that's retained across calls.
-struct MemoryDetailState {
+struct MemoryPanelState {
     /// Highlighted
     selected: Address,
     /// Vertical scroll state
@@ -536,7 +536,7 @@ struct MemoryDetailState {
     scroll: ScrollbarState,
 }
 
-impl MemoryDetailState {
+impl MemoryPanelState {
     /// Update the selection state to jump to a specific memory address
     fn select_address(&mut self, address: Address) {
         self.selected = address;
@@ -560,11 +560,13 @@ impl MemoryDetailState {
     }
 }
 
-impl Default for MemoryDetailState {
+impl Default for MemoryPanelState {
     fn default() -> Self {
         Self {
             selected: Address::default(),
-            scroll: ScrollbarState::new(AddressRange::ALL.len()),
+            scroll: ScrollbarState::new(
+                AddressRange::ALL.len() / MemoryPanel::BYTES_PER_LINE as usize,
+            ),
         }
     }
 }
@@ -577,7 +579,7 @@ struct MemoryBytes<'a> {
 }
 
 impl StatefulWidget for MemoryBytes<'_> {
-    type State = MemoryDetailState;
+    type State = MemoryPanelState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         // Split the area vertically once. We know the two will have the same
