@@ -38,7 +38,7 @@ use ratatui::{
     },
 };
 use ratatui_textarea::TextArea;
-use std::iter;
+use std::{iter, str::FromStr};
 
 /// Terminal UI surrounding the emulator
 ///
@@ -109,8 +109,19 @@ impl Tui {
                     true
                 }
                 Some(TuiAction::Submit) => {
-                    if let Ok(address) = text_area.lines()[0].parse::<Address>()
+                    if let Ok(target) =
+                        text_area.lines()[0].parse::<MemoryTarget>()
                     {
+                        // If the input is a register, get the address
+                        let registers = emulator.cpu().registers();
+                        let address = match target {
+                            MemoryTarget::Address(address) => address,
+                            MemoryTarget::Pc => registers.pc(),
+                            MemoryTarget::Sp => registers.sp(),
+                            MemoryTarget::Bc => Address(registers.bc()),
+                            MemoryTarget::De => Address(registers.de()),
+                            MemoryTarget::Hl => Address(registers.hl()),
+                        };
                         self.state.memory.select_address(address);
                         self.unfocus();
                         true
@@ -129,16 +140,16 @@ impl Tui {
                 // If it has a bound TUI action, consume it
                 match action {
                     TuiAction::Up => {
-                        self.state.memory.move_address(Direction::Up);
+                        self.state.memory.move_selection(Direction::Up);
                     }
                     TuiAction::Down => {
-                        self.state.memory.move_address(Direction::Down);
+                        self.state.memory.move_selection(Direction::Down);
                     }
                     TuiAction::Left => {
-                        self.state.memory.move_address(Direction::Left);
+                        self.state.memory.move_selection(Direction::Left);
                     }
                     TuiAction::Right => {
-                        self.state.memory.move_address(Direction::Right);
+                        self.state.memory.move_selection(Direction::Right);
                     }
                     TuiAction::DebugGoToAddress => {
                         self.focus(Focus::go_to_address());
@@ -499,7 +510,7 @@ impl StatefulWidget for MemoryPanel<'_> {
         if let Some(go_to_address) = self.go_to_address {
             go_to_address.render(bottom_area, buf);
         } else {
-            "[g] Go To Address".render(bottom_area, buf);
+            "[g] Go To Address/Register".render(bottom_area, buf);
         }
     }
 }
@@ -537,7 +548,7 @@ struct MemoryPanelState {
 }
 
 impl MemoryPanelState {
-    /// Update the selection state to jump to a specific memory address
+    /// Update the selection state to jump to a specific address
     fn select_address(&mut self, address: Address) {
         self.selected = address;
         // Make sure the selected byte stays in view
@@ -546,7 +557,7 @@ impl MemoryPanelState {
     }
 
     /// Move the address selection one cell in the given direction
-    fn move_address(&mut self, direction: Direction) {
+    fn move_selection(&mut self, direction: Direction) {
         let offset = match direction {
             Direction::Up => -(MemoryPanel::BYTES_PER_LINE as i16),
             Direction::Down => MemoryPanel::BYTES_PER_LINE as i16,
@@ -665,6 +676,42 @@ enum Direction {
     Down,
     Left,
     Right,
+}
+
+/// A target memory address to jump to
+enum MemoryTarget {
+    /// Go to a specific address
+    Address(Address),
+    /// Go to the address in the `pc` register
+    Pc,
+    /// Go to the address in the `sp` register
+    Sp,
+    /// Go to the address in the `bc` register
+    Bc,
+    /// Go to the address in the `de` register
+    De,
+    /// Go to the address in the `hl` register
+    Hl,
+}
+
+impl FromStr for MemoryTarget {
+    /// This error never gets shown, so there's no need for a message
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(address) = s.parse::<Address>() {
+            Ok(Self::Address(address))
+        } else {
+            match s.to_lowercase().trim() {
+                "pc" => Ok(Self::Pc),
+                "sp" => Ok(Self::Sp),
+                "bc" => Ok(Self::Bc),
+                "de" => Ok(Self::De),
+                "hl" => Ok(Self::Hl),
+                _ => Err(()),
+            }
+        }
+    }
 }
 
 /// Draw an outline for a panel, returning the inner area
