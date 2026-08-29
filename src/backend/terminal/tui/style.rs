@@ -14,6 +14,12 @@ pub struct Styles {
     pub memory_pc: Style,
     /// Memory byte under the cursor
     pub memory_selected: Style,
+    /// TODO
+    pub text_box_invalid: Style,
+    /// TODO
+    pub text_box_placeholder: Style,
+    /// TODO
+    pub text_box_text: Style,
 }
 
 impl Styles {
@@ -23,6 +29,9 @@ impl Styles {
             memory_gutter: Style::new().add_modifier(Modifier::BOLD),
             memory_pc: Style::new().add_modifier(Modifier::UNDERLINED),
             memory_selected: Style::new().add_modifier(Modifier::REVERSED),
+            text_box_invalid: Style::new().fg(Color::Red),
+            text_box_placeholder: Style::new().fg(Color::DarkGray),
+            text_box_text: Style::new(),
         }
     }
 

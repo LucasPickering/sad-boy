@@ -15,7 +15,7 @@ use crate::{
         tui::{
             layout::LayoutCached,
             style::STYLES,
-            widgets::{Scrollbar, ScrollbarState},
+            widgets::{Scrollbar, ScrollbarState, TextBox},
         },
     },
     debugger::{Debugger, RunState},
@@ -37,7 +37,6 @@ use ratatui::{
         Widget,
     },
 };
-use ratatui_textarea::TextArea;
 use std::{iter, str::FromStr};
 
 /// Terminal UI surrounding the emulator
@@ -74,7 +73,7 @@ impl Tui {
             .draw(|frame| {
                 frame.render_stateful_widget(
                     TuiWidget {
-                        focus: self.focus.as_ref(),
+                        focus: self.focus,
                         emulator,
                         debugger,
                     },
@@ -102,7 +101,7 @@ impl Tui {
             None
         };
         match &mut self.focus {
-            Some(Focus::GoToAddress { text_area }) => match action {
+            Some(Focus::GoToAddress) => match action {
                 // Esc/Enter get out of the dialog
                 Some(TuiAction::Cancel) => {
                     self.unfocus();
@@ -110,7 +109,7 @@ impl Tui {
                 }
                 Some(TuiAction::Submit) => {
                     if let Ok(target) =
-                        text_area.lines()[0].parse::<MemoryTarget>()
+                        self.state.go_to_address_text_box.value()
                     {
                         // If the input is a register, get the address
                         let registers = emulator.cpu().registers();
@@ -130,7 +129,7 @@ impl Tui {
                     }
                 }
                 // Pass everything else to the text box
-                _ => text_area.input(event.event),
+                _ => self.state.go_to_address_text_box.input(event.event),
             },
 
             None => {
@@ -152,7 +151,7 @@ impl Tui {
                         self.state.memory.move_selection(Direction::Right);
                     }
                     TuiAction::DebugGoToAddress => {
-                        self.focus(Focus::go_to_address());
+                        self.focus(Focus::GoToAddress);
                     }
                     TuiAction::DebugPauseToggle => {
                         debugger.toggle_pause(emulator);
@@ -182,28 +181,28 @@ impl Tui {
 
     /// Return to unfocused mode
     fn unfocus(&mut self) {
+        match self.focus {
+            // Clear the text box when leaving it
+            Some(Focus::GoToAddress) => {
+                self.state.go_to_address_text_box.clear();
+            }
+            None => {}
+        }
         self.focus = None;
     }
 }
 
 /// Active element in focus
+#[derive(Clone, Copy, PartialEq)]
 enum Focus {
     /// Go To Address text box is focused
-    GoToAddress { text_area: TextArea<'static> },
-}
-
-impl Focus {
-    /// Enter [Self::GoToAddress]
-    fn go_to_address() -> Self {
-        Self::GoToAddress {
-            text_area: TextArea::default(),
-        }
-    }
+    GoToAddress,
 }
 
 /// Widget for all interactive elements
 struct TuiWidget<'a> {
-    focus: Option<&'a Focus>,
+    /// TODO
+    focus: Option<Focus>,
     emulator: &'a GameBoy,
     debugger: &'a Debugger,
 }
@@ -249,15 +248,10 @@ impl StatefulWidget for TuiWidget<'_> {
             }
             .render(cpu_area, buf);
             MemoryPanel {
+                focus: self.focus,
                 pc_range: cpu.pc_range(),
                 memory_bus: &self.emulator.memory(),
-                go_to_address: if let Some(Focus::GoToAddress { text_area }) =
-                    &self.focus
-                {
-                    Some(text_area)
-                } else {
-                    None
-                },
+                go_to_address: &state.go_to_address_text_box,
             }
             .render(memory_area, buf, &mut state.memory);
         }
@@ -267,7 +261,6 @@ impl StatefulWidget for TuiWidget<'_> {
 /// Widget state for [TuiWidget]
 ///
 /// This is the state that's retained across calls.
-#[derive(Default)]
 struct TuiWidgetState {
     /// Area that the emulator screen should be drawn to
     ///
@@ -275,6 +268,19 @@ struct TuiWidgetState {
     /// retained so it can be reported back up to where the screen is rendered.
     emulator_area: Rect,
     memory: MemoryPanelState,
+    /// TODO
+    go_to_address_text_box: TextBox<MemoryTarget>,
+}
+
+impl Default for TuiWidgetState {
+    fn default() -> Self {
+        Self {
+            emulator_area: Rect::default(),
+            memory: MemoryPanelState::default(),
+            go_to_address_text_box: TextBox::new()
+                .with_placeholder_text("[g] Go to address/register"),
+        }
+    }
 }
 
 /// Widget for debugger info
@@ -466,11 +472,13 @@ impl Widget for CpuPanel<'_> {
 
 /// Widget to inspect memory
 struct MemoryPanel<'a> {
+    /// TODO
+    focus: Option<Focus>,
     /// Range of bytes defining the next CPU instruction
     pc_range: AddressRange,
     memory_bus: &'a MemoryBusReadOnly<'a>,
     /// Text box for jumping to an address
-    go_to_address: Option<&'a TextArea<'static>>,
+    go_to_address: &'a TextBox<MemoryTarget>,
 }
 
 impl MemoryPanel<'_> {
@@ -507,11 +515,11 @@ impl StatefulWidget for MemoryPanel<'_> {
             height: 1,
         };
         // Render the Go To box at the bottom
-        if let Some(go_to_address) = self.go_to_address {
-            go_to_address.render(bottom_area, buf);
-        } else {
-            "[g] Go To Address/Register".render(bottom_area, buf);
-        }
+        self.go_to_address.render(
+            bottom_area,
+            buf,
+            &mut (self.focus == Some(Focus::GoToAddress)),
+        );
     }
 }
 
@@ -699,17 +707,16 @@ impl FromStr for MemoryTarget {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(address) = s.parse::<Address>() {
-            Ok(Self::Address(address))
-        } else {
-            match s.to_lowercase().trim() {
-                "pc" => Ok(Self::Pc),
-                "sp" => Ok(Self::Sp),
-                "bc" => Ok(Self::Bc),
-                "de" => Ok(Self::De),
-                "hl" => Ok(Self::Hl),
-                _ => Err(()),
-            }
+        // Some register names also look like hexadecimal, so check the
+        // registers first
+
+        match s.to_lowercase().trim() {
+            "pc" => Ok(Self::Pc),
+            "sp" => Ok(Self::Sp),
+            "bc" => Ok(Self::Bc),
+            "de" => Ok(Self::De),
+            "hl" => Ok(Self::Hl),
+            _ => s.parse::<Address>().map(Self::Address).map_err(|_| ()),
         }
     }
 }
