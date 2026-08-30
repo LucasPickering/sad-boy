@@ -66,7 +66,7 @@ pub const ECHO_RAM: AddressRange =
 pub const OAM: AddressRange = AddressRange::named("OAM", 0xFE00, 0xFE9F);
 /// A set of single-byte registers stored in VRAM
 pub const GPU_REGISTERS: AddressRange =
-    AddressRange::named("GPU Registers", 0xFF40, 0xFF49);
+    AddressRange::named("GPU Registers", 0xFF40, 0xFF4B);
 /// Address range for additional general-purpose writable RAM
 pub const HIGH_RAM: AddressRange =
     AddressRange::named("High RAM", 0xFF80, 0xFFFE);

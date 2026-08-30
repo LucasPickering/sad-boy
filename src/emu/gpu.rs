@@ -285,11 +285,11 @@ impl Vram {
         y: u8,
     ) -> FaultResult<GrayColor> {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
-
         if let Some(pixel) = self.get_object_pixel(objects, x, y)? {
             Ok(pixel)
+        } else if let Some(pixel) = self.get_window_pixel(x, y)? {
+            Ok(pixel)
         } else {
-            // TODO check window
             self.get_background_pixel(x, y)
         }
     }
@@ -340,6 +340,36 @@ impl Vram {
         Ok(None)
     }
 
+    /// Calculate a pixel from the window
+    ///
+    /// The window overlays the active tile map onto the screen. Unlike the
+    /// background, the window is not scrollable; it always starts at the
+    /// top-left of the tile map.
+    ///
+    /// https://gbdev.io/pandocs/Window.html
+    fn get_window_pixel(&self, x: u8, y: u8) -> FaultResult<Option<GrayColor>> {
+        // *Both* flags have to be enabled
+        let lcdc = self.lcdc();
+        if !(lcdc.bg_window_enable && lcdc.window_enable) {
+            return Ok(None);
+        }
+
+        // If x/y are both within the bounds of the window,
+        let x = Shifted::<7>::shift(x); // Shift to match the wx register
+        let reg = &self.registers;
+        let wx = reg.wx;
+        let wy = reg.wy;
+        // The window is larger than the screen, so if the current pixel is
+        // right of+below the start of the window, then it's in the window.
+        if wx <= x && wy <= y {
+            // SAFETY: Subtraction can't underflow because of the bounds check
+            // For x, the shift cancels out in subtraction
+            self.get_bg_window_tile_pixel(x - wx, y - wy).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Calculate a pixel from the background map
     ///
     /// The background covers the entire screen and wraps at the edge, so every
@@ -354,26 +384,14 @@ impl Vram {
         // Map the x/y coordinate within the tile map. This will scroll and
         // intentionally wraps at the end of the map boundary. The map is 32x32
         // tiles and each tile is 8x8, so it's 256x256 pixels.
-        let x = self.registers.scx.wrapping_add(x);
-        let y = self.registers.scy.wrapping_add(y);
-
-        // First we need to find the tile INDEX in the tile MAP, then use THAT
-        // index to find the underlying TILE
-        let tile_x = x / Tile::WIDTH;
-        let tile_y = y / Tile::HEIGHT;
-        // TODO select tile map correctly
-        // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
-        let tile_index = self.tile_maps.get(tile_x, tile_y, TileMapArea::Low);
-
-        // Now convert the index to an actual tile
-        let tile = self.tile_data.get(self.lcdc().bg_window_tiles, tile_index);
-        // Get the pixel coordinates within the tile
-        let index = tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)?;
-        Ok(self.registers.bgp.unpack().get(index))
-
+        //
         // TODO the scroll registers should only be changeable on each tile
         // fetch (or at the beginning of the scanline), not on each pixel. The
         // entire rendering pipeline needs a rewrite to model the FIFO.
+        let x = self.registers.scx.wrapping_add(x);
+        let y = self.registers.scy.wrapping_add(y);
+
+        self.get_bg_window_tile_pixel(x, y)
     }
 
     /// Get the unpacked value of the `LCDC` register
@@ -383,6 +401,28 @@ impl Vram {
         // will be necessary. Would probably be better to optimize the unpack()
         // impl in that case.
         self.registers.lcdc.unpack()
+    }
+
+    /// Get the pixel color for a coordinate in the *tile map*
+    ///
+    /// `x` and `y` are relative to the top-left corner of the active tile map.
+    /// The window and background use the same tile lookup logic, including the
+    /// active area and palette register.
+    fn get_bg_window_tile_pixel(&self, x: u8, y: u8) -> FaultResult<GrayColor> {
+        // First we need to find the tile INDEX in the tile MAP, then use THAT
+        // index to find the underlying TILE
+        let tile_x = x / Tile::WIDTH;
+        let tile_y = y / Tile::HEIGHT;
+        // TODO select tile map correctly
+        // https://gbdev.io/pandocs/pixel_fifo.html#get-tile
+        let tile_map = TileMapArea::Low;
+        let tile_index = self.tile_maps.get(tile_x, tile_y, tile_map);
+
+        // Now convert the index to an actual tile
+        let tile = self.tile_data.get(self.lcdc().bg_window_tiles, tile_index);
+        // Get the pixel coordinates within the tile
+        let index = tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)?;
+        Ok(self.registers.bgp.unpack().get(index))
     }
 }
 
@@ -440,6 +480,18 @@ struct Registers {
     ///
     /// See [Self::obp0]
     obp1: PackedBits<GrayPalette>,
+    /// `$FF4A`: Window Y position
+    ///
+    /// Values in the range `[0, 143]` make the window visible.
+    ///
+    /// https://gbdev.io/pandocs/Window.html
+    wy: u8,
+    /// `$FF4B`: Window X position + 7
+    ///
+    /// Values in the range `[0, 166]` make the window visible.
+    ///
+    /// https://gbdev.io/pandocs/Window.html
+    wx: Shifted<7>,
 }
 assert_size_range!(Registers, memory::GPU_REGISTERS);
 
