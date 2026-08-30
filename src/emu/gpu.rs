@@ -329,6 +329,11 @@ impl Vram {
     /// The background covers the entire screen and wraps at the edge, so every
     /// pixel will have a background color.
     fn get_background_pixel(&self, x: u8, y: u8) -> FaultResult<GrayColor> {
+        // If disabled, always return white
+        if !self.lcdc().bg_window_enable {
+            return Ok(GrayColor::White);
+        }
+
         // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
         // Map the x/y coordinate within the tile map. This will scroll and
         // intentionally wraps at the end of the map boundary. The map is 32x32
@@ -353,14 +358,14 @@ impl Vram {
         // TODO the scroll registers should only be changeable on each tile
         // fetch (or at the beginning of the scanline), not on each pixel. The
         // entire rendering pipeline needs a rewrite to model the FIFO.
-        // TODO how do we return WHITE if disabled in LCDC? it may not be in the
-        // palette
     }
 
     /// Get the unpacked value of the `LCDC` register
     fn lcdc(&self) -> LcdControl {
-        // It may be slow to repeatedly unpack this all the time. Maybe we could
-        // cache it? Or provide some way to decode a single bit a time?
+        // It's possible this is a bottleneck to unpack it repeatedly on each
+        // tick, but I doubt it. Could cache it if so, but I don't think it
+        // will be necessary. Would probably be better to optimize the unpack()
+        // impl in that case.
         self.registers.lcdc.unpack()
     }
 }

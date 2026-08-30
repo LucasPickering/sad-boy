@@ -7,6 +7,11 @@ use std::{
     ops::{BitAnd, BitOr, Deref, DerefMut, Not},
     str::FromStr,
 };
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::{
+    Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
 /// Assert a type's size in memory matches a value
 ///
@@ -238,11 +243,6 @@ macro_rules! impl_bit_pack {
     };
 }
 pub(crate) use impl_bit_pack;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{
-    Layer, filter::Targets, fmt::format::FmtSpan, layer::SubscriberExt,
-    util::SubscriberInitExt,
-};
 
 /// A byte associated with a [BitPack]-implementing type
 ///
