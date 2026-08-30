@@ -296,7 +296,8 @@ impl Vram {
 
     /// Calculate a pixel from visible objects
     ///
-    /// Return `None` if no objects intersect the pixel.
+    /// Return `None` if no objects intersect the pixel, or if the intersecting
+    /// pixel is transparent.
     fn get_object_pixel(
         &self,
         objects: &[Object],
@@ -318,10 +319,15 @@ impl Vram {
                         self.tile_data.get(TileDataArea::Low, tile_index);
                     let index = tile.pixel(x, y)?;
 
+                    // For objects, index 0 is transparent, which is effectively
+                    // the same as the object not being there
+                    if index == ColorIndex::Zero {
+                        return Ok(None);
+                    }
+
                     // Use the palette to map the index to color
                     // https://gbdev.io/pandocs/Palettes.html
                     // CGB: Load from the CGB palette instead
-                    // TODO index=0 should be transparent instead of color0
                     let palette = match flags.dmg_palette {
                         DmgPalette::Obp0 => self.registers.obp0,
                         DmgPalette::Obp1 => self.registers.obp1,
