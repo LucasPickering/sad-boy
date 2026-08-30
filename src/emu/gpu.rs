@@ -310,14 +310,24 @@ impl Vram {
                 if let Some((tile_index, x, y)) =
                     object.get_pixel(x, y, lcdc.object_size)?
                 {
+                    // TODO check the flip flags
+                    let flags = object.attributes.flags.unpack();
+
                     // Objects always use the low tile data
                     let tile =
                         self.tile_data.get(TileDataArea::Low, tile_index);
                     let index = tile.pixel(x, y)?;
-                    // TODO look up index in OBP palettes instead of BGP
+
+                    // Use the palette to map the index to color
                     // https://gbdev.io/pandocs/Palettes.html
-                    let color = self.registers.bgp.unpack().get(index);
-                    return Ok(Some(color));
+                    // CGB: Load from the CGB palette instead
+                    // TODO index=0 should be transparent instead of color0
+                    let palette = match flags.dmg_palette {
+                        DmgPalette::Obp0 => self.registers.obp0,
+                        DmgPalette::Obp1 => self.registers.obp1,
+                    }
+                    .unpack();
+                    return Ok(Some(palette.get(index)));
                 }
             }
         }
@@ -413,7 +423,17 @@ struct Registers {
     /// `$FF47`: Background palette data
     ///
     /// This maps color indexes to actual colors. For non-CGB mode only.
-    bgp: PackedBits<BackgroundColorPalette>,
+    bgp: PackedBits<GrayPalette>,
+    /// `$FF48`: Object palette data #0
+    ///
+    /// This maps color indexes to actual colors. The
+    /// [ObjectFlags::dmg_palette] field of [ObjectAttributes] selects between
+    /// `obp0` and `obp1`. For non-CGB mode only.
+    obp0: PackedBits<GrayPalette>,
+    /// `$FF49`: Object palette data #1
+    ///
+    /// See [Self::obp0]
+    obp1: PackedBits<GrayPalette>,
 }
 assert_size_range!(Registers, memory::GPU_REGISTERS);
 
@@ -712,10 +732,14 @@ impl From<Scanline> for u8 {
     }
 }
 
-/// TODO
+/// Mapping of [ColorIndex] to [GrayColor]
+///
+/// This specifies how each 2-bit (4-value) index is mapped to a 2-bit color.
+/// It's bit-packed as 8 bits, with color0 being the lowest bits and color3
+/// being the highest.
 ///
 /// https://gbdev.io/pandocs/Palettes.html
-struct BackgroundColorPalette {
+struct GrayPalette {
     /// Color for [ColorIndex::Zero]
     color0: GrayColor,
     /// Color for [ColorIndex::One]
@@ -726,7 +750,7 @@ struct BackgroundColorPalette {
     color3: GrayColor,
 }
 
-impl BackgroundColorPalette {
+impl GrayPalette {
     /// Get the [GrayColor] corresponding to a [ColorIndex]
     pub fn get(&self, index: ColorIndex) -> GrayColor {
         match index {
@@ -739,7 +763,7 @@ impl BackgroundColorPalette {
 }
 
 impl_bit_pack! {
-    struct BackgroundColorPalette;
+    struct GrayPalette;
     Mask::M10 => color0,
     Mask::M32 => color1,
     Mask::M54 => color2,
@@ -996,8 +1020,10 @@ impl_bit_pack! {
 /// Color palette selection in OAM flags for DMG (original Game Boy) mode
 #[derive(Default)]
 enum DmgPalette {
+    /// Load colors from [Registers::obp0]
     #[default]
     Obp0,
+    /// Load colors from [Registers::obp1]
     Obp1,
 }
 
