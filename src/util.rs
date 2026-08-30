@@ -81,12 +81,16 @@ impl Mask {
     pub const M10: Self = Self(0b0000_0011);
     /// Mask for bits 2-0
     pub const M210: Self = Self(0b0000_0111);
+    /// Mask for bits 3-2
+    pub const M32: Self = Self(0b0000_0011);
     /// Mask for bits 4-3
     pub const M43: Self = Self(0b0001_1000);
     /// Mask for bits 5-4
     pub const M54: Self = Self(0b0011_0000);
     /// Mask for bits 5-3
     pub const M543: Self = Self(0b0011_1000);
+    /// Mask for bits 7-6
+    pub const M76: Self = Self(0b0011_0000);
 
     pub fn new(mask: u8) -> Self {
         Self(mask)

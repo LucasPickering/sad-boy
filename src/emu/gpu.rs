@@ -283,7 +283,7 @@ impl Vram {
         objects: &[Object],
         x: u8,
         y: u8,
-    ) -> FaultResult<ColorIndex> {
+    ) -> FaultResult<GrayColor> {
         // https://gbdev.io/pandocs/OAM.html#drawing-priority
 
         if let Some(pixel) = self.get_object_pixel(objects, x, y)? {
@@ -302,7 +302,7 @@ impl Vram {
         objects: &[Object],
         x: u8,
         y: u8,
-    ) -> FaultResult<Option<ColorIndex>> {
+    ) -> FaultResult<Option<GrayColor>> {
         let lcdc = self.lcdc();
         if lcdc.object_enable {
             // These are pre-sorted by x
@@ -313,7 +313,11 @@ impl Vram {
                     // Objects always use the low tile data
                     let tile =
                         self.tile_data.get(TileDataArea::Low, tile_index);
-                    return Ok(Some(tile.pixel(x, y)?));
+                    let index = tile.pixel(x, y)?;
+                    // TODO look up index in OBP palettes instead of BGP
+                    // https://gbdev.io/pandocs/Palettes.html
+                    let color = self.registers.bgp.unpack().get(index);
+                    return Ok(Some(color));
                 }
             }
         }
@@ -324,7 +328,7 @@ impl Vram {
     ///
     /// The background covers the entire screen and wraps at the edge, so every
     /// pixel will have a background color.
-    fn get_background_pixel(&self, x: u8, y: u8) -> FaultResult<ColorIndex> {
+    fn get_background_pixel(&self, x: u8, y: u8) -> FaultResult<GrayColor> {
         // https://gbdev.io/pandocs/Scrolling.html#ff42ff43--scy-scx-background-viewport-y-position-x-position
         // Map the x/y coordinate within the tile map. This will scroll and
         // intentionally wraps at the end of the map boundary. The map is 32x32
@@ -343,26 +347,14 @@ impl Vram {
         // Now convert the index to an actual tile
         let tile = self.tile_data.get(self.lcdc().bg_window_tiles, tile_index);
         // Get the pixel coordinates within the tile
-        tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)
+        let index = tile.pixel(x % Tile::WIDTH, y % Tile::HEIGHT)?;
+        Ok(self.registers.bgp.unpack().get(index))
 
         // TODO the scroll registers should only be changeable on each tile
         // fetch (or at the beginning of the scanline), not on each pixel. The
         // entire rendering pipeline needs a rewrite to model the FIFO.
         // TODO how do we return WHITE if disabled in LCDC? it may not be in the
         // palette
-    }
-
-    /// Look up a color from the active color palette
-    ///
-    /// https://gbdev.io/pandocs/Palettes.html
-    fn get_color(&self, index: ColorIndex) -> Color {
-        // TODO look this up in the BGP register
-        match index {
-            ColorIndex::Zero => Color::BLACK,
-            ColorIndex::One => Color::DARK_GRAY,
-            ColorIndex::Two => Color::LIGHT_GRAY,
-            ColorIndex::Three => Color::WHITE,
-        }
     }
 
     /// Get the unpacked value of the `LCDC` register
@@ -392,27 +384,31 @@ impl Default for Vram {
 #[derive(Clone, Debug, Default)]
 #[repr(C)]
 struct Registers {
-    /// `0xFF40`: LCD control
+    /// `$FF40`: LCD control
     lcdc: PackedBits<LcdControl>,
-    /// `0xFF41`: LCD status
+    /// `$FF41`: LCD status
     stat: PackedBits<LcdStatus>,
-    /// `0xFF42`: Background scroll Y
+    /// `$FF42`: Background scroll Y
     scy: u8,
-    /// `0xFF43`: Background scroll X
+    /// `$FF43`: Background scroll X
     scx: u8,
-    /// `0xFF44`: Current horizontal line being drawn on the LCD (read-only)
+    /// `$FF44`: Current horizontal line being drawn on the LCD (read-only)
     ///
     /// Range is `[0, 153]`. `[144, 153]` is the vblank period.
     ly: Scanline,
-    /// `0xFF45`: A writable register compared to `LY` every cycle
+    /// `$FF45`: A writable register compared to `LY` every cycle
     ///
     /// When `LY == LYC`, bit 2 of the `STAT` register is set. See [LcdStatus].
     lyc: Scanline,
-    /// `0xFF46`:  OAM DMA control
+    /// `$FF46`:  OAM DMA control
     ///
     /// The written value is the **high** byte of the transfer source address.
     /// Only values `0x00` to `0xDF` are valid.
     dma: u8,
+    /// `$FF47`: Background palette data
+    ///
+    /// This maps color indexes to actual colors. For non-CGB mode only.
+    bgp: PackedBits<BackgroundColorPalette>,
 }
 assert_size_range!(Registers, memory::GPU_REGISTERS);
 
@@ -422,7 +418,7 @@ impl RawBytes for Registers {}
 ///
 /// https://gbdev.io/pandocs/LCDC.html
 #[derive(Debug)]
-pub struct LcdControl {
+struct LcdControl {
     /// Are the LCD and PPU enabled?
     lcd_enable: bool,
     /// Tile map in use for the window
@@ -492,7 +488,7 @@ impl_bit_pack! {
 ///
 /// https://gbdev.io/pandocs/Interrupt_Sources.html#int-48--stat-interrupt
 #[derive(Debug)]
-pub struct LcdStatus {
+struct LcdStatus {
     /// Enable the `LY == LYC` condition for the `STAT` interrupt
     lyc_interrupt: bool,
     /// Enable the Mode 2 condition for the `STAT` interrupt
@@ -607,8 +603,8 @@ impl ScanlineState {
                     let y = scanline.0;
                     // TODO simulate pixel FIFO
                     // https://gbdev.io/pandocs/pixel_fifo.html
-                    let color_index = vram.get_pixel(&objects, x, y)?;
-                    frame.set(x.into(), y.into(), vram.get_color(color_index));
+                    let color = vram.get_pixel(&objects, x, y)?;
+                    frame.set(x.into(), y.into(), color.into());
                     Self::Drawing { objects, x: x + 1 }
                 }
             }
@@ -662,7 +658,7 @@ impl_bit_pack! {
 /// Range is `[0, 153]`. `[144, 153]` is the vblank period. Any value `>=154` is
 /// invalid.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct Scanline(u8);
+struct Scanline(u8);
 
 impl Scanline {
     /// Based on the current clock tick, get the current scanline and dot within
@@ -711,7 +707,44 @@ impl From<Scanline> for u8 {
     }
 }
 
+/// TODO
+///
+/// https://gbdev.io/pandocs/Palettes.html
+struct BackgroundColorPalette {
+    /// Color for [ColorIndex::Zero]
+    color0: GrayColor,
+    /// Color for [ColorIndex::One]
+    color1: GrayColor,
+    /// Color for [ColorIndex::Two]
+    color2: GrayColor,
+    /// Color for [ColorIndex::Three]
+    color3: GrayColor,
+}
+
+impl BackgroundColorPalette {
+    /// Get the [GrayColor] corresponding to a [ColorIndex]
+    pub fn get(&self, index: ColorIndex) -> GrayColor {
+        match index {
+            ColorIndex::Zero => self.color0,
+            ColorIndex::One => self.color1,
+            ColorIndex::Two => self.color2,
+            ColorIndex::Three => self.color3,
+        }
+    }
+}
+
+impl_bit_pack! {
+    struct BackgroundColorPalette;
+    Mask::M10 => color0,
+    Mask::M32 => color1,
+    Mask::M54 => color2,
+    Mask::M76 => color3,
+}
+
 /// Index of a color within the active palette
+///
+/// [ColorIndex] is mapped to [GrayColor] by the `BGP` register (in non-CGB
+/// mode).
 ///
 /// https://gbdev.io/pandocs/Palettes.html
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -720,6 +753,40 @@ enum ColorIndex {
     One,
     Two,
     Three,
+}
+
+/// The four representable colors on a
+///
+/// [ColorIndex] is mapped to [GrayColor] by the `BGP` register. For non-CGB
+/// mode only.
+///
+/// https://gbdev.io/pandocs/Palettes.html
+#[derive(Clone, Copy)]
+enum GrayColor {
+    White,
+    LightGray,
+    DarkGray,
+    Black,
+}
+
+/// Convert from a grayscale index into an RGB color for rendering
+impl From<GrayColor> for Color {
+    fn from(value: GrayColor) -> Self {
+        match value {
+            GrayColor::White => Color::WHITE,
+            GrayColor::LightGray => Color::LIGHT_GRAY,
+            GrayColor::DarkGray => Color::DARK_GRAY,
+            GrayColor::Black => Color::BLACK,
+        }
+    }
+}
+
+impl_bit_pack! {
+    enum GrayColor;
+    0b00 => White,
+    0b01 => LightGray,
+    0b10 => DarkGray,
+    0b11 => Black,
 }
 
 /// An object that's been loaded in mode 2 and is ready to be drawn
