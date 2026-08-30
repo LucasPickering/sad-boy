@@ -60,6 +60,15 @@ impl Gpu {
         // Each scanline is a fixed number of dots, so we can calculate the
         // scanline from the current clock cycle
         let (scanline, scanline_dots) = Scanline::from_clock(clock)?;
+
+        // Update LY at the start of the scanline
+        let reg = &mut self.vram.registers;
+        reg.ly = scanline; // Update LY register
+        reg.stat.update(|stat| LcdStatus {
+            lyc_equal_ly: reg.ly == reg.lyc,
+            ..stat
+        });
+
         let ppu_mode = match scanline.0 {
             0..SCANLINES_PER_FRAME_DRAWN => {
                 // Each state is calculated from the previous and may need to
@@ -72,7 +81,6 @@ impl Gpu {
                     &self.vram,
                     frame,
                 )?;
-                // TODO should we grab mode before or after transition?
                 self.current_scanline.mode()
             }
             SCANLINES_PER_FRAME_DRAWN..SCANLINES_PER_FRAME => {
@@ -82,15 +90,11 @@ impl Gpu {
             _ => unreachable!("Invalid scanline: {scanline:?}"),
         };
 
-        // Update registers
-        // TODO does this need to be done before the calculation? probably!!
-        let reg = &mut self.vram.registers;
-        reg.ly = scanline; // Update LY register
-        reg.stat.update(|stat| LcdStatus {
-            ppu_mode,
-            lyc_equal_ly: reg.ly == reg.lyc,
-            ..stat
-        });
+        // Update the PPU setting *after*, because it may have changed
+        self.vram
+            .registers
+            .stat
+            .update(|stat| LcdStatus { ppu_mode, ..stat });
 
         Ok(clock.is_frame_end())
     }
